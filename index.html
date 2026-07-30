@@ -164,7 +164,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
         <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 5</span></div><div class="bar"><span id="barFill"></span></div><div class="form-save" id="saveStatus">Answers save on this device.</div></div>
         <form action="/thank-you/" data-netlify="true" enctype="multipart/form-data" id="projectForm" method="POST" name="arc-preview" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="arc-preview">
-          <input type="hidden" name="intake_version" value="arc-intake-v3">
+          <input type="hidden" name="intake_version" value="arc-intake-v4">
           <input type="hidden" name="submission_timestamp" id="submissionTimestamp" value="">
           <p class="bot"><label>Don’t fill this out: <input name="bot-field"></label></p>
 
@@ -257,10 +257,10 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
 
           <fieldset class="form-step" data-name="Assets & launch">
             <legend>Finish the build brief.</legend>
-            <p class="step-copy">Real logos and photos make the preview stronger. Skip them if you do not have permission to use them.</p>
+            <p class="step-copy">Real logos and project photos create the strongest preview. Upload your best two here, then link a folder with 5–10 more if available.</p>
             <p class="group-title">Available assets <span class="optional">(optional)</span></p>
             <div class="choices" data-exclusive-group="assets" id="assetChoices">
-              <label><input type="checkbox" name="assets" value="Logo"> Logo</label><label><input type="checkbox" name="assets" value="Photos"> Photos</label>
+              <label><input type="checkbox" name="assets" value="Logo"> Logo</label><label><input type="checkbox" name="assets" value="Photos"> Project photos</label>
               <label><input type="checkbox" name="assets" value="Reviews"> Reviews</label><label><input type="checkbox" name="assets" value="Brand guide"> Brand guide</label>
               <label><input type="checkbox" name="assets" value="Social links"> Social links</label><label><input type="checkbox" name="assets" value="None yet" data-none> None yet</label>
             </div>
@@ -269,10 +269,10 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
               <div class="field"><label for="logoFile">Logo file</label><input id="logoFile" name="logo_file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" data-max-mb="2.5"><p class="hint">PNG, JPG, WEBP, or SVG. Transparent PNG or SVG preferred.</p></div>
             </div>
             <div class="conditional-panel" id="photoUploadPanel" hidden>
-              <div class="upload-grid"><div class="field"><label for="heroFile">Best hero photo</label><input id="heroFile" name="hero_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"></div><div class="field"><label for="supportFile">Supporting photo</label><input id="supportFile" name="supporting_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"></div></div>
+              <div class="upload-grid"><div class="field"><label for="heroFile">Best hero photo</label><input id="heroFile" name="hero_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"><p class="hint">Choose a wide, sharp photo that instantly shows your best work.</p></div><div class="field"><label for="supportFile">Best supporting photo</label><input id="supportFile" name="supporting_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"><p class="hint">A team, process, location, or second project photo works well.</p></div></div>
             </div>
             <div class="conditional-panel" id="assetLinkPanel" hidden>
-              <div class="field"><label for="assetLink">Asset folder link</label><input id="assetLink" name="asset_folder_link" type="url" inputmode="url" placeholder="Drive, Dropbox, or OneDrive link"></div>
+              <div class="field"><label for="assetLink">Full asset folder link</label><input id="assetLink" name="asset_folder_link" type="url" inputmode="url" placeholder="Public Drive, Dropbox, or OneDrive folder"><p class="hint">Add 5–10 project, team, or location photos plus any brand guide. Make the link viewable by anyone with the link.</p></div>
             </div>
             <div class="conditional-panel" id="socialLinksPanel" hidden>
               <div class="field"><label for="socialLinks">Social links</label><textarea id="socialLinks" name="social_links" placeholder="Instagram, Facebook, LinkedIn, TikTok..."></textarea></div>
