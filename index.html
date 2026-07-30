@@ -1,12 +1,16 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ARC</title>
-<meta name="description" content="ARC creates premium business websites built for trust, clarity, and action. Request a free custom preview." />
-<meta name="robots" content="index,follow" />
-<meta name="theme-color" content="#f3efe6" />
+<meta name="description" content="ARC creates premium business websites built for trust, clarity, and action. Request a free custom preview.">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f3efe6">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="ARC — Custom websites built before you pay">
+<meta property="og:description" content="Request a private website preview built around your business. Pay only if you approve it.">
+<meta property="og:type" content="website">
 <link rel="icon" href="/favicon.svg?v=8" type="image/svg+xml">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -24,8 +28,10 @@
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;background:var(--paper);overflow-x:hidden}
-body{margin:0;overflow-x:hidden;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--paper)}
+body{margin:0;overflow-x:hidden;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--paper);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 a{color:inherit;text-decoration:none} button,input,textarea,select{font:inherit} img,svg{max-width:100%;display:block} [hidden]{display:none!important}
+button,a,input,textarea,select{touch-action:manipulation}
+:focus-visible{outline:3px solid #87c9ff;outline-offset:4px}
 .wrap{width:min(var(--max),calc(100% - 36px));margin:0 auto}.page{position:relative;isolation:isolate}
 .noise{position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.035;background-image:linear-gradient(90deg,rgba(0,0,0,.45) 1px,transparent 1px),linear-gradient(rgba(0,0,0,.45) 1px,transparent 1px);background-size:72px 72px;mask-image:linear-gradient(to bottom,black,transparent 80%)}
 .arc-logo{width:50px;height:36px;overflow:visible}.arc-logo path{fill:none;stroke:currentColor;stroke-width:18;stroke-linecap:round;stroke-linejoin:round}
@@ -33,12 +39,12 @@ a{color:inherit;text-decoration:none} button,input,textarea,select{font:inherit}
 .brand{display:flex;align-items:center;gap:12px;font-weight:980;letter-spacing:.2em}.brand span{font-size:14px}.nav-links{display:flex;align-items:center;gap:6px}.nav-links a{padding:12px 14px;border-radius:999px;font-size:14px;font-weight:760;color:#4b4740}.nav-links a:hover{background:rgba(0,0,0,.06);color:#000}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 22px;border-radius:999px;border:1px solid var(--ink);font-weight:900;letter-spacing:-.025em;cursor:pointer;transition:transform .28s var(--ease),box-shadow .28s var(--ease),background .28s var(--ease);white-space:nowrap}.btn:hover{transform:translateY(-3px)}.btn.black{background:var(--ink);color:var(--paper);box-shadow:0 18px 40px rgba(0,0,0,.20)}.btn.ghost{background:transparent;color:var(--ink)}
 .hero{min-height:100svh;display:grid;align-items:end;padding:145px 0 70px;position:relative;overflow:hidden}.hero:before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 80% 18%,rgba(255,255,255,.70),transparent 26%),radial-gradient(circle at 18% 78%,rgba(0,0,0,.08),transparent 28%);z-index:-1}.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:56px;align-items:end}.kicker{display:inline-flex;align-items:center;gap:10px;margin-bottom:24px;font-size:13px;font-weight:920;text-transform:uppercase;letter-spacing:.16em;color:#4d473e}.kicker:before{content:"";width:9px;height:9px;border-radius:999px;background:#111;box-shadow:0 0 0 7px rgba(0,0,0,.07)}
-h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.065em;font-weight:1000;max-width:900px}.hero-copy{margin:20px 0 0;max-width:560px;font-size:clamp(18px,1.8vw,23px);line-height:1.15;letter-spacing:-.04em;font-weight:760;color:#2d2a26}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:34px}
+h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.065em;font-weight:1000;max-width:900px}.hero-copy{margin:24px 0 0;max-width:610px;font-size:clamp(18px,1.7vw,22px);line-height:1.25;letter-spacing:-.035em;font-weight:760;color:#2d2a26}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}.trust-points{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.trust-points span{display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 12px;border:1px solid rgba(0,0,0,.12);border-radius:999px;color:#4e4941;background:rgba(255,255,255,.24);font-size:12px;font-weight:850}.trust-points span:before{content:"✓";font-weight:1000;color:#111}
 .canvas{position:relative;height:min(70vh,620px);min-height:490px}.layer{position:absolute;border:1px solid rgba(0,0,0,.16);box-shadow:0 32px 90px rgba(0,0,0,.18);overflow:hidden;transition:transform .3s var(--ease)}.hero-window{inset:0 0 74px 58px;border-radius:42px;background:#090909;color:#fffaf1;padding:26px}.hero-window-top{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.14);padding-bottom:20px}.dots{display:flex;gap:8px}.dots i{width:9px;height:9px;border-radius:50%;background:#fff;opacity:.32}.mini-nav{display:flex;gap:10px}.mini-nav i{width:54px;height:8px;border-radius:999px;background:#fff;opacity:.23}.hero-window h2{font-size:clamp(46px,5.25vw,76px);line-height:.88;letter-spacing:-.058em;margin:54px 0 0;max-width:500px}.hero-window .stripe{position:absolute;left:26px;right:26px;bottom:26px;height:92px;border-radius:30px;background:linear-gradient(90deg,#e8d2ff,#e9ff8f,#b5e7ff)}.phone-card{right:-48px;bottom:-82px;width:218px;height:354px;border-radius:38px;background:#fffaf1;color:#080808;padding:22px;transform:rotate(4deg)}.phone-card h3{font-size:38px;line-height:.9;letter-spacing:-.052em;margin:38px 0 0}.phone-card .small-lines{position:absolute;left:22px;right:22px;bottom:24px;display:grid;gap:10px}.small-lines i{height:12px;border-radius:999px;background:#161616;opacity:.15}.shape{position:absolute;display:grid;place-items:center;border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(0,0,0,.16)}.diamond{width:116px;height:116px;left:0;top:110px;background:#caff5e;transform:rotate(45deg)}.diamond span{transform:rotate(-45deg);font-weight:1000;font-size:22px}.circle{width:124px;height:124px;right:40px;top:46px;border-radius:999px;background:#97dcff}.rect{left:18px;bottom:60px;width:190px;height:88px;border-radius:22px;background:#f2c078;transform:rotate(-5deg)}
 .section{padding:110px 0}.dark{background:var(--dark);color:var(--white);border-radius:48px 48px 0 0}.dark + .section{padding-top:130px}.section-title{font-size:clamp(44px,6.35vw,100px);line-height:.88;letter-spacing:-.062em;margin:0 0 30px;font-weight:1000}.section-title.small{max-width:930px}.section-lead{font-size:clamp(22px,3.6vw,46px);line-height:.93;letter-spacing:-.07em;font-weight:950;margin:0;color:inherit;max-width:860px}.muted{color:var(--muted)}.dark .muted{color:#aaa39a}
 .work-stack{display:grid;gap:26px;margin-top:40px}.work-item{position:relative;display:grid;grid-template-columns:.92fr 1.08fr;gap:26px;min-height:500px;border-radius:46px;overflow:hidden;padding:28px;border:1px solid rgba(255,255,255,.12);background:#111;box-shadow:0 40px 110px rgba(0,0,0,.22)}.work-item:nth-child(2){background:#f4efe4;color:#070707;border-color:rgba(0,0,0,.12)}.work-item:nth-child(3){background:#11172a}.work-copy{align-self:end;padding:20px}.work-copy h3{font-size:clamp(38px,4.05vw,68px);line-height:.9;letter-spacing:-.056em;margin:0 0 18px}.tags{display:flex;flex-wrap:wrap;gap:8px}.tags span{display:inline-flex;min-height:36px;align-items:center;padding:0 13px;border:1px solid currentColor;border-radius:999px;font-weight:850;font-size:13px;opacity:.85}.mockup-big{position:relative;min-height:470px;border-radius:36px;overflow:hidden;border:1px solid rgba(255,255,255,.16);background:#050505}.work-item:nth-child(2) .mockup-big{background:#ffffff;border-color:rgba(0,0,0,.10)}.screen-nav{height:62px;border-bottom:1px solid rgba(255,255,255,.13);display:flex;align-items:center;justify-content:space-between;padding:0 24px}.work-item:nth-child(2) .screen-nav{border-bottom-color:rgba(0,0,0,.10)}.screen-brand{font-weight:1000;letter-spacing:-.04em}.screen-btn{width:126px;height:34px;border-radius:999px;background:currentColor;opacity:.9}.screen-hero{padding:36px}.screen-hero h4{font-size:clamp(42px,4.25vw,70px);line-height:.9;letter-spacing:-.055em;margin:0;max-width:520px}.visual-bars{position:absolute;left:36px;right:36px;bottom:36px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.visual-bars i{height:120px;border-radius:24px;background:linear-gradient(180deg,#8effb4,#0c4225)}.work-item:nth-child(2) .visual-bars i{background:linear-gradient(180deg,#e8f6ff,#8ecbff)}.work-item:nth-child(3) .visual-bars i{background:linear-gradient(180deg,#e8c87c,#6d4e16)}.visual-bars i:nth-child(2){height:170px}.visual-bars i:nth-child(3){height:96px}
 .offer-grid{display:grid;grid-template-columns:1fr;gap:18px;margin-top:50px}.offer-row{min-height:260px;display:grid;grid-template-columns:1.1fr .9fr;align-items:center;gap:24px;padding:28px;border-top:1px solid var(--line)}.offer-row:last-child{border-bottom:1px solid var(--line)}.offer-row h3{font-size:clamp(42px,4.85vw,76px);line-height:.9;letter-spacing:-.055em;margin:0}.offer-art{height:210px;border-radius:34px;background:#0a0a0a;color:#fff;position:relative;overflow:hidden}.offer-art.paper{background:#fff;color:#080808;border:1px solid rgba(0,0,0,.12)}.offer-art .block{position:absolute;border-radius:24px;background:currentColor;opacity:.12}.offer-art .b1{left:24px;top:24px;width:44%;height:70px}.offer-art .b2{right:24px;top:50px;width:34%;height:130px}.offer-art .b3{left:24px;bottom:24px;width:62%;height:52px}.offer-art .ring{position:absolute;right:34px;top:34px;width:120px;height:120px;border:26px solid #d7ff68;border-radius:50%}.offer-art .dia{position:absolute;left:60px;top:50px;width:120px;height:120px;background:#9ddfff;transform:rotate(45deg)}
-.process{background:#0a0a0a;color:#fffaf1;border-radius:48px}.process-line{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.12);border-radius:38px;overflow:hidden;margin-top:46px}.step{min-height:300px;padding:28px;background:#0d0d0d;position:relative}.step b{font-size:18px}.step h3{position:absolute;left:28px;right:28px;bottom:28px;margin:0;font-size:clamp(32px,3.75vw,58px);line-height:.9;letter-spacing:-.052em}.step:nth-child(2){background:#d8f76c;color:#070707}.step:nth-child(3){background:#95dfff;color:#070707}
+.process{background:#0a0a0a;color:#fffaf1;border-radius:48px}.process-note{max-width:720px;margin:-10px 0 0;color:#bbb4aa;font-size:clamp(16px,1.8vw,21px);line-height:1.42;font-weight:720}.process-line{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.12);border-radius:38px;overflow:hidden;margin-top:38px}.step{min-height:300px;padding:28px;background:#0d0d0d;position:relative}.step b{font-size:18px}.step h3{position:absolute;left:28px;right:28px;bottom:28px;margin:0;font-size:clamp(32px,3.75vw,58px);line-height:.9;letter-spacing:-.052em}.step:nth-child(2){background:#d8f76c;color:#070707}.step:nth-child(3){background:#95dfff;color:#070707}
 .form-section{min-height:100svh;display:grid;align-items:center;padding:120px 0;background:#060606;color:#fffaf1}.form-shell{display:grid;grid-template-columns:.78fr 1.22fr;gap:44px;align-items:start}.form-copy{position:sticky;top:128px}.form-copy h2{font-size:clamp(54px,6.6vw,106px);line-height:.88;letter-spacing:-.062em;margin:0}.form-copy>p{max-width:470px;font-size:clamp(19px,2vw,28px);line-height:1.08;letter-spacing:-.045em;font-weight:850;color:#c9c3b8}.form-promise{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}.form-promise span{padding:9px 12px;border:1px solid rgba(255,255,255,.14);border-radius:999px;color:#e7e1d8;font-size:12px;font-weight:850}.form-meta{display:grid;gap:10px;margin-top:22px;max-width:420px}.form-meta span{display:flex;justify-content:space-between;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.13);font-weight:820;color:#d4cec4}.form-card{border:1px solid rgba(255,255,255,.14);border-radius:42px;background:#101010;box-shadow:0 40px 120px rgba(0,0,0,.45);overflow:hidden}.form-top{padding:22px;border-bottom:1px solid rgba(255,255,255,.12)}.form-count{display:flex;align-items:center;justify-content:space-between;gap:16px;font-weight:900}.form-save{margin-top:10px;color:#9f998f;font-size:12px;font-weight:760}.bar{height:10px;margin-top:16px;border-radius:999px;background:rgba(255,255,255,.10);overflow:hidden}.bar span{display:block;height:100%;width:20%;background:#fffaf1;border-radius:999px;transition:width .35s var(--ease)}form{padding:24px}.form-step{border:0;margin:0;padding:0;display:none}.form-step.active{display:grid;gap:16px;animation:stepIn .3s var(--ease)}@keyframes stepIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}legend{padding:0;margin:0 0 4px;font-size:clamp(31px,3.35vw,48px);line-height:.94;letter-spacing:-.048em;font-weight:1000}.step-copy{margin:-4px 0 2px;color:#a9a399;font-size:14px;line-height:1.5;font-weight:700}.field{display:grid;gap:8px}.group-title{margin:2px 0 -2px;font-weight:900;color:#eee8dc}.hint{margin:0;color:#969087;font-size:13px;line-height:1.4;font-weight:680}.required-note{color:#b6b0a6;font-size:13px;font-weight:760}.optional{color:#8e887f;font-size:12px;font-weight:720}label{font-weight:820;color:#eee8dc}input,textarea,select{width:100%;min-height:56px;border:1px solid rgba(255,255,255,.16);border-radius:20px;background:rgba(255,255,255,.055);color:#fffaf1;padding:0 16px;outline:0;transition:.22s var(--ease)}select option{background:#fff;color:#080808}textarea{min-height:112px;padding:15px 16px;resize:vertical}input[type=file]{padding:13px 14px;height:auto}input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.46);box-shadow:0 0 0 5px rgba(255,255,255,.06)}::placeholder{color:#868178}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.choices{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.choices label,.budget{min-height:58px;display:flex;align-items:center;gap:10px;padding:13px 14px;border:1px solid rgba(255,255,255,.14);border-radius:20px;background:rgba(255,255,255,.045);cursor:pointer;color:#eee8dc}.choices input,.budget input{width:auto;min-height:auto;accent-color:#fff}.choices label:has(input:checked),.budget:has(input:checked){border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.11)}.budget{border-color:rgba(255,255,255,.32);background:rgba(255,255,255,.075);font-weight:900}.privacy-note{display:flex;gap:9px;align-items:flex-start;padding:12px 14px;border-radius:18px;background:rgba(255,255,255,.05);color:#aaa49a;font-size:12px;line-height:1.45;font-weight:720}.privacy-note:before{content:"✓";color:#d8f76c;font-weight:1000}.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-nav{display:flex;justify-content:space-between;gap:12px;margin-top:18px}.form-nav .btn{flex:1}.form-nav #prev{background:#080808;color:#fffaf1;border-color:#080808;box-shadow:0 12px 30px rgba(0,0,0,.22)}.form-nav #next{background:#fffaf1;color:#080808;border-color:#fffaf1;box-shadow:0 12px 30px rgba(0,0,0,.22)}
 .conditional-panel{display:grid;gap:14px;padding:16px;border:1px solid rgba(255,255,255,.12);border-radius:24px;background:rgba(255,255,255,.035)}
 .conditional-panel[hidden]{display:none!important}.conditional-panel .group-title{margin:0}
@@ -66,6 +72,74 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
 .float{will-change:transform}
 @media(max-width:1000px){.hero-grid,.work-item,.offer-row,.form-shell{grid-template-columns:1fr}.canvas{height:560px;min-height:560px}.process-line{grid-template-columns:1fr 1fr}.nav-links a:not(.keep){display:none}.work-item{min-height:0}.offer-row{min-height:0}.offer-art{height:250px}.form-copy{position:static}.form-copy>p{max-width:620px}.footer{display:block}.footer div+div{margin-top:12px}}
 @media(max-width:700px){.wrap,.nav{width:min(100% - 24px,var(--max))}.nav{top:10px;padding:9px 9px 9px 14px}.brand span{font-size:13px}.nav .btn{min-height:46px;padding:0 16px}.hero{padding:116px 0 48px;min-height:auto}.hero-grid{gap:30px}h1{font-size:clamp(56px,17vw,90px);letter-spacing:-.07em}.hero-copy{font-size:20px}.actions .btn{width:100%}.canvas{height:430px;min-height:430px}.hero-window{inset:0 10px 68px 0;border-radius:30px;padding:18px}.hero-window h2{font-size:43px;margin-top:38px;letter-spacing:-.055em}.hero-window .stripe{left:18px;right:18px;bottom:18px;height:76px;border-radius:22px}.phone-card{right:0;bottom:0;width:170px;height:286px;border-radius:30px;padding:18px}.phone-card h3{font-size:30px;letter-spacing:-.048em}.diamond{width:80px;height:80px;top:94px}.circle{width:92px;height:92px;right:6px;top:26px}.rect{width:136px;height:70px;bottom:54px}.section{padding:72px 0}.dark,.process{border-radius:32px 32px 0 0}.section-title{font-size:clamp(54px,16vw,84px)}.work-stack{gap:18px}.work-item{border-radius:32px;padding:16px;gap:16px}.work-copy{padding:6px}.work-copy h3{font-size:46px;letter-spacing:-.054em}.mockup-big{min-height:390px;border-radius:26px}.screen-nav{height:54px;padding:0 16px}.screen-btn{width:88px}.screen-hero{padding:24px}.screen-hero h4{font-size:40px;letter-spacing:-.052em}.visual-bars{left:20px;right:20px;bottom:20px;gap:10px}.visual-bars i{height:95px;border-radius:18px}.visual-bars i:nth-child(2){height:135px}.offer-row{padding:24px 0;gap:18px}.offer-row h3{font-size:44px;letter-spacing:-.052em}.process-line{grid-template-columns:1fr;border-radius:28px}.step{min-height:230px}.form-section{padding:76px 0}.form-copy h2{font-size:58px;letter-spacing:-.056em}.form-card{border-radius:30px}.form-top,form{padding:18px}.row,.choices,.upload-grid{grid-template-columns:1fr}legend{font-size:34px}.form-nav{flex-direction:column}.noise{display:none}}
+@media(max-width:700px){
+  .nav{min-height:58px}
+  .arc-logo{width:44px;height:31px}
+  .hero{padding:104px 0 42px}
+  .hero-grid{gap:24px}
+  h1{font-size:clamp(44px,13.2vw,60px);line-height:.9;letter-spacing:-.064em}
+  .hero-copy{margin-top:18px;font-size:18px;line-height:1.3}
+  .actions{margin-top:24px}
+  .trust-points{gap:7px;margin-top:16px}
+  .trust-points span{min-height:32px;padding-inline:10px;font-size:11px}
+  .canvas{height:382px;min-height:382px}
+  .hero-window{inset:0 10px 56px 0}
+  .hero-window h2{font-size:36px;margin-top:32px}
+  .hero-window .stripe{height:64px}
+  .phone-card{width:148px;height:244px;border-radius:27px}
+  .phone-card h3{font-size:26px;margin-top:26px}
+  .diamond{width:68px;height:68px;top:86px}
+  .diamond span{font-size:17px}
+  .circle{width:78px;height:78px}
+  .rect{width:116px;height:58px;bottom:48px}
+  .section{padding:56px 0}
+  .dark + .section{padding-top:64px}
+  .section-title{font-size:clamp(44px,12.8vw,60px);line-height:.91;margin-bottom:24px}
+  .work-stack{margin-top:28px}
+  .work-copy h3{font-size:36px}
+  .mockup-big{min-height:320px}
+  .screen-hero h4{font-size:32px}
+  .visual-bars i{height:76px}.visual-bars i:nth-child(2){height:110px}.visual-bars i:nth-child(3){height:68px}
+  .offer-grid{margin-top:30px}
+  .offer-row{padding:20px 0}
+  .offer-row h3{font-size:36px}
+  .offer-art{height:190px}
+  .process-note{font-size:16px}
+  .process-line{margin-top:28px}
+  .step{min-height:188px;padding:22px}
+  .step h3{left:22px;right:22px;bottom:22px;font-size:38px}
+  .form-section{padding:58px 0}
+  .form-shell{gap:28px}
+  .form-copy h2{font-size:46px}
+  .form-copy>p{font-size:19px;line-height:1.22}
+  .form-promise{margin-top:18px}
+  .form-meta{margin-top:16px}
+  .form-meta span{padding:11px 0;font-size:13px}
+  .form-card{border-radius:26px}
+  .form-top,form{padding:16px}
+  form{padding-bottom:12px}
+  .form-step.active{gap:14px}
+  legend{font-size:29px;line-height:.98}
+  .step-copy{font-size:13px}
+  input,textarea,select{min-height:52px;border-radius:17px}
+  textarea{min-height:98px}
+  .choices label,.budget{min-height:52px;border-radius:17px}
+  .conditional-panel{padding:14px;border-radius:20px}
+  .form-nav{position:sticky;z-index:8;bottom:8px;flex-direction:row;margin:14px -8px -4px;padding:8px;border:1px solid rgba(255,255,255,.13);border-radius:999px;background:rgba(16,16,16,.94);backdrop-filter:blur(16px)}
+  .form-nav .btn{min-height:48px;padding-inline:16px}
+  .first #prev{display:none}
+  .last .form-nav{border-radius:22px}
+  .review-row{grid-template-columns:1fr;gap:4px}
+  .footer{padding:34px 0}
+}
+@media(max-width:390px){
+  .nav .btn{padding-inline:13px;font-size:13px}
+  h1{font-size:43px}
+  .trust-points span{width:100%;justify-content:flex-start}
+  .canvas{height:354px;min-height:354px}
+  .section-title{font-size:42px}
+  .form-nav .btn{padding-inline:12px;font-size:13px}
+}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}.js .reveal{opacity:1;transform:none}.float{transform:none!important}}
 </style>
 </head>
@@ -87,10 +161,12 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
     <div class="wrap hero-grid">
       <div class="reveal">
         <h1>Websites that make you look trusted.</h1>
+        <p class="hero-copy">Get a private website preview built around your business—before you decide to pay.</p>
         <div class="actions">
           <a class="btn black" href="#start">Get Free Preview</a>
           <a class="btn ghost" href="#work">See Work</a>
         </div>
+        <div class="trust-points" role="list" aria-label="ARC preview benefits"><span role="listitem">Custom to your business</span><span role="listitem">Built before payment</span><span role="listitem">Launch ownership included</span></div>
       </div>
       <div class="canvas reveal" aria-hidden="true">
         <div class="shape circle float" data-speed=".06"></div>
@@ -112,7 +188,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
 
   <section id="work" class="section dark">
     <div class="wrap">
-      <h2 class="section-title reveal">Less talk. More visual proof.</h2>
+      <h2 class="section-title reveal">Three directions. One clear standard.</h2>
       <div class="work-stack">
         <a class="work-item reveal" href="#start">
           <div class="work-copy"><h3>Verdant Landscape</h3><div class="tags"><span>Local service</span><span>Lead form</span><span>Mobile-first</span></div></div>
@@ -132,7 +208,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
 
   <section class="section">
     <div class="wrap">
-      <h2 class="section-title small reveal">Everything needed to look real online.</h2>
+      <h2 class="section-title small reveal">What your $5K website includes.</h2>
       <div class="offer-grid">
         <div class="offer-row reveal"><h3>Strong homepage.</h3><div class="offer-art"><span class="block b1"></span><span class="block b2"></span><span class="block b3"></span></div></div>
         <div class="offer-row reveal"><h3>Clear services.</h3><div class="offer-art paper"><span class="dia"></span><span class="block b2"></span></div></div>
@@ -144,6 +220,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
   <section id="process" class="section process">
     <div class="wrap">
       <h2 class="section-title reveal">Preview. Purchase. Launch.</h2>
+      <p class="process-note reveal">Approve the exact website first. Payment and ownership handoff happen only after you choose to move forward.</p>
       <div class="process-line reveal">
         <div class="step"><b>1</b><h3>Free Preview</h3></div>
         <div class="step"><b>2</b><h3>$5K Purchase</h3></div>
@@ -161,20 +238,20 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
         <div class="form-meta"><span><b>Time</b><b>About 7 minutes</b></span><span><b>Preview</b><b>Free</b></span><span><b>Website</b><b>$5,000 after approval</b></span></div>
       </div>
       <div class="form-card reveal" id="formCard">
-        <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 5</span></div><div class="bar"><span id="barFill"></span></div><div class="form-save" id="saveStatus">Answers save on this device.</div></div>
+        <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 5</span></div><div class="bar" id="formProgress" role="progressbar" aria-label="Preview request progress" aria-valuemin="1" aria-valuemax="6" aria-valuenow="1"><span id="barFill"></span></div><div class="form-save" id="saveStatus" role="status" aria-live="polite">Answers save on this device.</div></div>
         <form action="/thank-you/" data-netlify="true" enctype="multipart/form-data" id="projectForm" method="POST" name="arc-preview" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="arc-preview">
-          <input type="hidden" name="intake_version" value="arc-intake-v4">
+          <input type="hidden" name="intake_version" value="arc-intake-v5">
           <input type="hidden" name="submission_timestamp" id="submissionTimestamp" value="">
-          <p class="bot"><label>Don’t fill this out: <input name="bot-field"></label></p>
+          <p class="bot"><label>Don’t fill this out: <input name="bot-field" type="text" autocomplete="off" tabindex="-1"></label></p>
 
           <fieldset class="form-step active" data-name="Business">
             <legend>Start with the business.</legend>
             <p class="step-copy">We use this to personalize the preview and send it only to you. Required fields are marked *.</p>
-            <div class="row"><div class="field"><label for="name">Your name *</label><input id="name" name="name" autocomplete="name" required placeholder="John Smith"></div><div class="field"><label for="email">Your email *</label><input id="email" name="email" type="email" autocomplete="email" required placeholder="you@business.com"></div></div>
+            <div class="row"><div class="field"><label for="name">Your name *</label><input id="name" name="name" type="text" autocomplete="name" required placeholder="John Smith"></div><div class="field"><label for="email">Your email *</label><input id="email" name="email" type="email" autocomplete="email" required placeholder="you@business.com"></div></div>
             <div class="privacy-note">Preview delivery is by email. We do not require a sales call.</div>
-            <div class="row"><div class="field"><label for="business">Business name *</label><input id="business" name="business" autocomplete="organization" required placeholder="Business name"></div><div class="field"><label for="website">Current website <span class="optional">(optional)</span></label><input id="website" name="website" type="url" inputmode="url" autocomplete="url" placeholder="yourbusiness.com"></div></div>
-            <div class="row"><div class="field"><label for="industry">Industry *</label><input id="industry" name="industry" list="industryOptions" required placeholder="Roofing, dental, restaurant..."><datalist id="industryOptions"><option value="Accounting"><option value="Construction"><option value="Dental"><option value="Home services"><option value="Insurance"><option value="Law"><option value="Medical"><option value="Real estate"><option value="Restaurant"><option value="Retail"></datalist></div><div class="field"><label for="city">City / service area *</label><input id="city" name="city" autocomplete="address-level2" required placeholder="Everett, WA"></div></div>
+            <div class="row"><div class="field"><label for="business">Business name *</label><input id="business" name="business" type="text" autocomplete="organization" required placeholder="Business name"></div><div class="field"><label for="website">Current website <span class="optional">(optional)</span></label><input id="website" name="website" type="url" inputmode="url" autocomplete="url" placeholder="yourbusiness.com"></div></div>
+            <div class="row"><div class="field"><label for="industry">Industry *</label><input id="industry" name="industry" type="text" list="industryOptions" required placeholder="Roofing, dental, restaurant..."><datalist id="industryOptions"><option value="Accounting"></option><option value="Construction"></option><option value="Dental"></option><option value="Home services"></option><option value="Insurance"></option><option value="Law"></option><option value="Medical"></option><option value="Real estate"></option><option value="Restaurant"></option><option value="Retail"></option></datalist></div><div class="field"><label for="city">City / service area *</label><input id="city" name="city" type="text" autocomplete="address-level2" required placeholder="Everett, WA"></div></div>
             <div class="row"><div class="field"><label for="publicPhone">Public business phone <span class="optional">(optional)</span></label><input id="publicPhone" name="public_phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="(555) 555-5555"></div><div class="field"><label for="publicEmail">Public business email <span class="optional">(optional)</span></label><input id="publicEmail" name="public_email" type="email" autocomplete="email" placeholder="hello@business.com"></div></div>
           </fieldset>
 
@@ -182,8 +259,8 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
             <legend>What should the site sell?</legend>
             <p class="step-copy">Clear offers create better previews and better leads.</p>
             <div class="field"><label for="services">Main services *</label><textarea id="services" name="main_services" required placeholder="List the services that should appear on the website."></textarea></div>
-            <div class="row"><div class="field"><label for="money">Priority service <span class="optional">(optional)</span></label><input id="money" name="highest_profit_service" placeholder="The service to feature first"></div><div class="field"><label for="customer">Target customer *</label><input id="customer" name="target_customer" required placeholder="Homeowners, clinics, business owners..."></div></div>
-            <div class="field"><label for="offer">Main offer or pricing detail <span class="optional">(optional)</span></label><input id="offer" name="main_offer" placeholder="Free estimate, first visit offer, starting price..."></div>
+            <div class="row"><div class="field"><label for="money">Priority service <span class="optional">(optional)</span></label><input id="money" name="highest_profit_service" type="text" placeholder="The service to feature first"></div><div class="field"><label for="customer">Target customer *</label><input id="customer" name="target_customer" type="text" required placeholder="Homeowners, clinics, business owners..."></div></div>
+            <div class="field"><label for="offer">Main offer or pricing detail <span class="optional">(optional)</span></label><input id="offer" name="main_offer" type="text" placeholder="Free estimate, first visit offer, starting price..."></div>
             <p class="group-title">Primary goals *</p>
             <div class="choices" data-group="goals">
               <label><input type="checkbox" name="goals" value="More calls"> More calls</label><label><input type="checkbox" name="goals" value="Estimate requests"> Estimate requests</label>
@@ -197,7 +274,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
               <label><input type="radio" name="main_call_to_action" value="Contact"> Contact</label>
             </div>
             <div class="conditional-panel" id="ctaDestinationPanel" hidden>
-              <div class="field"><label for="ctaDestination" id="ctaDestinationLabel">CTA destination</label><input id="ctaDestination" name="cta_destination" placeholder="Phone number, booking URL, or order link"></div>
+              <div class="field"><label for="ctaDestination" id="ctaDestinationLabel">CTA destination</label><input id="ctaDestination" name="cta_destination" type="text" placeholder="Phone number, booking URL, or order link"></div>
             </div>
             <div class="conditional-panel" id="secondaryFormPanel" hidden>
               <p class="group-title">Also include a contact form?</p>
@@ -226,7 +303,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
               <label><input type="checkbox" name="sections" value="About" checked> About</label><label><input type="checkbox" name="sections" value="Services" checked> Services</label>
               <label><input type="checkbox" name="sections" value="Process" checked> Process</label><label><input type="checkbox" name="sections" value="Reviews"> Reviews</label>
               <label><input type="checkbox" name="sections" value="Gallery"> Gallery</label><label><input type="checkbox" name="sections" value="FAQ"> FAQ</label>
-              <label><input type="checkbox" name="sections" value="Contact or quote form" checked> Contact / quote form</label><label><input type="checkbox" name="sections" value="Location and hours"> Location & hours</label>
+              <label><input type="checkbox" name="sections" value="Contact or quote form" checked> Contact / quote form</label><label><input type="checkbox" name="sections" value="Location and hours"> Location &amp; hours</label>
             </div>
             <div class="field"><label for="features">Special features <span class="optional">(optional)</span></label><textarea id="features" name="features" placeholder="Booking link, pricing table, service-area map, gallery..."></textarea></div>
             <div class="field"><label for="faqs">FAQs or common customer concerns <span class="optional">(optional)</span></label><textarea id="faqs" name="faqs_and_objections" placeholder="Questions customers ask before contacting you"></textarea></div>
@@ -239,10 +316,10 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
             <div class="choices">
               <label><input type="radio" name="primary_style" value="Modern" required checked> Modern</label><label><input type="radio" name="primary_style" value="Luxury"> Luxury</label>
               <label><input type="radio" name="primary_style" value="Minimal"> Minimal</label><label><input type="radio" name="primary_style" value="Bold"> Bold</label>
-              <label><input type="radio" name="primary_style" value="Warm and local"> Warm & local</label><label><input type="radio" name="primary_style" value="Editorial"> Editorial</label>
+              <label><input type="radio" name="primary_style" value="Warm and local"> Warm &amp; local</label><label><input type="radio" name="primary_style" value="Editorial"> Editorial</label>
             </div>
-            <div class="row"><div class="field"><label for="colors">Preferred colors <span class="optional">(optional)</span></label><input id="colors" name="colors" placeholder="Black, white, gold..."></div><div class="field"><label for="tone">Brand tone <span class="optional">(optional)</span></label><select id="tone" name="brand_tone"><option value="">Select one</option><option selected>Professional</option><option>Friendly</option><option>Confident</option><option>Calm</option><option>Energetic</option></select></div></div>
-            <div class="field"><label for="competitors">Websites you like <span class="optional">(optional)</span></label><input id="competitors" name="competitor_sites" placeholder="Paste 1–3 links"></div>
+            <div class="row"><div class="field"><label for="colors">Preferred colors <span class="optional">(optional)</span></label><input id="colors" name="colors" type="text" placeholder="Black, white, gold..."></div><div class="field"><label for="tone">Brand tone <span class="optional">(optional)</span></label><select id="tone" name="brand_tone"><option value="">Select one</option><option selected>Professional</option><option>Friendly</option><option>Confident</option><option>Calm</option><option>Energetic</option></select></div></div>
+            <div class="field"><label for="competitors">Websites you like <span class="optional">(optional)</span></label><input id="competitors" name="competitor_sites" type="text" placeholder="Paste 1–3 links"></div>
             <div class="row"><div class="field"><label for="referenceLikes">What do you like about them? <span class="optional">(optional)</span></label><textarea id="referenceLikes" name="reference_site_likes" placeholder="Layout, images, colors, typography..."></textarea></div><div class="field"><label for="dislikes">Anything to avoid? <span class="optional">(optional)</span></label><textarea id="dislikes" name="design_dislikes" placeholder="Colors, styles, layouts, or effects you dislike"></textarea></div></div>
             <div class="field"><label for="whyChoose">Your strongest difference *</label><textarea id="whyChoose" name="why_choose_you" required placeholder="What makes your business the better choice?"></textarea></div>
             <div class="field"><label for="businessStory">Short business story <span class="optional">(optional)</span></label><textarea id="businessStory" name="business_story" placeholder="How it started and what it stands for"></textarea></div>
@@ -281,9 +358,9 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
               <label class="budget"><input id="assetPermission" name="asset_permission" value="Confirmed" type="checkbox"> I have permission to use the assets I’m submitting.</label>
             </div>
             <div class="field"><label for="domainStatus">Domain status <span class="optional">(optional)</span></label><select id="domainStatus" name="domain_status"><option value="">Select one</option><option>I own a domain</option><option>I need a domain</option><option>Not sure</option></select></div>
-            <div class="row"><div class="field"><label for="address">Public address <span class="optional">(optional)</span></label><input id="address" name="public_address" autocomplete="street-address" placeholder="Only if customers visit"></div><div class="field"><label for="hours">Business hours <span class="optional">(optional)</span></label><input id="hours" name="business_hours" placeholder="Mon–Fri, 8 AM–5 PM"></div></div>
+            <div class="row"><div class="field"><label for="address">Public address <span class="optional">(optional)</span></label><input id="address" name="public_address" type="text" autocomplete="street-address" placeholder="Only if customers visit"></div><div class="field"><label for="hours">Business hours <span class="optional">(optional)</span></label><input id="hours" name="business_hours" type="text" placeholder="Mon–Fri, 8 AM–5 PM"></div></div>
             <div class="field"><label for="notes">Final notes <span class="optional">(optional)</span></label><textarea id="notes" name="final_notes" placeholder="Anything else that would make the first preview accurate?"></textarea></div>
-            <label class="budget"><input id="budget" name="budget_confirmed" value="Yes, understands the ARC website price is $5,000" type="checkbox" required> I understand the website price is $5,000.</label>
+            <label class="budget"><input id="budget" name="budget_confirmed" value="Yes, understands the finished ARC website is $5,000 only after preview approval" type="checkbox" required> I understand the finished website costs $5,000 only if I approve the preview.</label>
           </fieldset>
 
           <fieldset class="form-step" data-name="Review" id="reviewStep">
@@ -347,10 +424,11 @@ updateReveals();
 window.addEventListener('scroll',queueRevealUpdate,{passive:true});
 window.addEventListener('resize',queueRevealUpdate,{passive:true});
 const floats=[...document.querySelectorAll('.float')];
+const allowParallax=!window.matchMedia('(prefers-reduced-motion: reduce)').matches&&window.matchMedia('(min-width: 701px)').matches;
 function baseRotate(el){if(el.classList.contains('diamond'))return ' rotate(45deg)';if(el.classList.contains('rect'))return ' rotate(-5deg)';if(el.classList.contains('phone-card'))return ' rotate(4deg)';return ''}
 function parallax(){const y=window.scrollY;floats.forEach(el=>{const s=parseFloat(el.dataset.speed||0);el.style.transform=`translate3d(0,${y*s}px,0)${baseRotate(el)}`})}
-parallax();window.addEventListener('scroll',parallax,{passive:true});
-const formCard=document.getElementById('formCard'), form=document.getElementById('projectForm'), steps=[...document.querySelectorAll('.form-step')], bar=document.getElementById('barFill'), count=document.getElementById('stepCount'), nameEl=document.getElementById('stepName'), err=document.getElementById('error'), next=document.getElementById('next'), prev=document.getElementById('prev'), submit=document.getElementById('submit'), reviewGrid=document.getElementById('reviewGrid'), saveStatus=document.getElementById('saveStatus');
+if(allowParallax){parallax();window.addEventListener('scroll',parallax,{passive:true})}
+const formCard=document.getElementById('formCard'), form=document.getElementById('projectForm'), steps=[...document.querySelectorAll('.form-step')], bar=document.getElementById('barFill'), progressBar=document.getElementById('formProgress'), count=document.getElementById('stepCount'), nameEl=document.getElementById('stepName'), err=document.getElementById('error'), next=document.getElementById('next'), prev=document.getElementById('prev'), submit=document.getElementById('submit'), reviewGrid=document.getElementById('reviewGrid'), saveStatus=document.getElementById('saveStatus');
 const reviewIndex=steps.findIndex(step=>step.id==='reviewStep'), questionCount=reviewIndex;
 let current=0;
 function isVisible(el){return !el.closest('[hidden]')}
@@ -361,6 +439,8 @@ function showStep(i,shouldScroll=true){
   bar.style.width=(isReview?100:((current+1)/questionCount*100))+'%';
   count.textContent=isReview?'Review':(current+1)+' / '+questionCount;
   nameEl.textContent=steps[current].dataset.name;
+  progressBar.setAttribute('aria-valuenow',String(current+1));
+  progressBar.setAttribute('aria-valuetext',isReview?'Review':`Step ${current+1} of ${questionCount}`);
   formCard.classList.toggle('first',current===0);
   formCard.classList.toggle('last',isReview);
   err.textContent='';
@@ -546,7 +626,7 @@ form.addEventListener('change',event=>{
   if(field.matches('input,textarea,select')){field.classList.remove('field-error');if(err.textContent)err.textContent=''}
 });
 
-const draftKey='arc-preview-draft-v3';
+const draftKey='arc-preview-draft-v4';
 let saveTimer;
 function draftData(){
   const data={};
