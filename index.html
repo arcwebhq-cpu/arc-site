@@ -67,6 +67,8 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
 .process-line.show .step:nth-child(2){transition-delay:.09s}.process-line.show .step:nth-child(3){transition-delay:.18s}
 .form-copy h2,.form-copy p,.form-copy .form-meta{opacity:0;transform:translate3d(-54px,44px,0) scale(.94);filter:blur(8px)}
 .form-card{opacity:0;transform:translate3d(86px,58px,0) scale(.93);filter:blur(9px)}
+/* The intake is critical UI: it must never depend on reveal JavaScript. */
+#start .form-copy,#start .form-copy h2,#start .form-copy p,#start .form-copy .form-meta,#start .form-card{opacity:1;transform:none;filter:none}
 .form-copy.show h2,.form-copy.show p,.form-copy.show .form-meta,.form-card.show{opacity:1;transform:none;filter:blur(0)}
 .form-copy.show p{transition-delay:.08s}.form-copy.show .form-meta{transition-delay:.16s}
 .float{will-change:transform}
@@ -141,6 +143,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
   .form-nav .btn{padding-inline:12px;font-size:13px}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}.js .reveal{opacity:1;transform:none}.float{transform:none!important}}
+.mockup-big.thumb{min-height:0;aspect-ratio:1363/936;background:#050505}.work-thumb{width:100%;height:100%;object-fit:cover;object-position:top center;pointer-events:none;transition:transform .55s var(--ease)}.work-item:hover .work-thumb{transform:scale(1.02)}
 </style>
 </head>
 <body>
@@ -192,15 +195,15 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
       <div class="work-stack">
         <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/summit-ridge-roofing-qa-v20-6a6b09ee/" target="_blank" rel="noopener">
           <div class="work-copy"><span class="work-kicker">Open live sample ↗</span><h3>Summit Ridge Roofing</h3><div class="tags"><span>Local service</span><span>Estimate form</span><span>Mobile-first</span></div></div>
-          <div class="mockup-big"><div class="screen-nav"><div class="screen-brand">Summit Ridge</div><div class="screen-btn"></div></div><div class="screen-hero"><h4>A stronger roof starts with clarity.</h4></div><div class="visual-bars"><i></i><i></i><i></i></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-roofing-showcase-1785497742846.jpg" alt="Summit Ridge Roofing showcase homepage"></div>
         </a>
-        <a class="work-item reveal" href="#start">
-          <div class="work-copy"><span class="work-kicker">Design direction</span><h3>Lumen Dental</h3><div class="tags"><span>Clinic</span><span>Booking</span><span>Trust</span></div></div>
-          <div class="mockup-big"><div class="screen-nav"><div class="screen-brand">Lumen</div><div class="screen-btn"></div></div><div class="screen-hero"><h4>A calmer way to book care.</h4></div><div class="visual-bars"><i></i><i></i><i></i></div></div>
+        <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/lumen-dental-showcase/" target="_blank" rel="noopener">
+          <div class="work-copy"><span class="work-kicker">Open live sample ↗</span><h3>Lumen Dental</h3><div class="tags"><span>Clinic</span><span>Booking</span><span>Trust</span></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-dental-showcase-1785497742846.jpg" alt="Lumen Dental showcase homepage"></div>
         </a>
-        <a class="work-item reveal" href="#start">
-          <div class="work-copy"><span class="work-kicker">Design direction</span><h3>Clarity Capital</h3><div class="tags"><span>Finance</span><span>Premium</span><span>Conversion</span></div></div>
-          <div class="mockup-big"><div class="screen-nav"><div class="screen-brand">Clarity</div><div class="screen-btn"></div></div><div class="screen-hero"><h4>Confidence before the first call.</h4></div><div class="visual-bars"><i></i><i></i><i></i></div></div>
+        <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/clarity-capital-showcase/" target="_blank" rel="noopener">
+          <div class="work-copy"><span class="work-kicker">Open live sample ↗</span><h3>Clarity Capital</h3><div class="tags"><span>Finance</span><span>Premium</span><span>Conversion</span></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-finance-showcase-1785497742846.jpg" alt="Clarity Capital showcase homepage"></div>
         </a>
       </div>
     </div>
@@ -233,7 +236,7 @@ h1{margin:0;font-size:clamp(56px,7.9vw,122px);line-height:.88;letter-spacing:-.0
     <div class="wrap form-shell">
       <div class="form-copy reveal">
         <h2>Get your free preview.</h2>
-        <p>Answer once. Get a private preview built around your business.</p>
+        <p>Tell us what you need. We’ll build the preview.</p>
         <div class="form-promise"><span>No call required</span><span>Private preview</span><span>Built before you pay</span></div>
         <div class="form-meta"><span><b>Time</b><b>5–7 minutes</b></span><span><b>Preview</b><b>Free</b></span><span><b>Website</b><b>$5,000 after approval</b></span></div>
       </div>
@@ -449,6 +452,18 @@ if(allowParallax){parallax();window.addEventListener('scroll',parallax,{passive:
 const formCard=document.getElementById('formCard'), form=document.getElementById('projectForm'), steps=[...document.querySelectorAll('.form-step')], bar=document.getElementById('barFill'), progressBar=document.getElementById('formProgress'), count=document.getElementById('stepCount'), nameEl=document.getElementById('stepName'), err=document.getElementById('error'), next=document.getElementById('next'), prev=document.getElementById('prev'), submit=document.getElementById('submit'), reviewGrid=document.getElementById('reviewGrid'), saveStatus=document.getElementById('saveStatus');
 const reviewIndex=steps.findIndex(step=>step.id==='reviewStep'), questionCount=reviewIndex;
 let current=0;
+const formCopy=document.querySelector('.form-copy');
+function revealAndFocusForm(delay=450){
+  formCopy?.classList.add('show');
+  formCard.classList.add('show');
+  setTimeout(()=>{
+    const first=steps[current]?.querySelector('input:not([type="hidden"]):not([disabled]),select:not([disabled]),textarea:not([disabled])');
+    if(first)first.focus({preventScroll:true});
+  },delay);
+}
+document.querySelectorAll('a[href="#start"]').forEach(link=>link.addEventListener('click',()=>revealAndFocusForm()));
+window.addEventListener('hashchange',()=>{if(location.hash==='#start')revealAndFocusForm(150)});
+if(location.hash==='#start')revealAndFocusForm(0);
 function isVisible(el){return !el.closest('[hidden]')}
 function showStep(i,shouldScroll=true){
   const target=Math.max(0,Math.min(i,steps.length-1));
