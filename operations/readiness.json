@@ -1,0 +1,152 @@
+{
+  "schema": "arc-operations-readiness-v1",
+  "reviewed_at": "2026-08-11",
+  "offer": {
+    "currency": "USD",
+    "amount": 5000,
+    "billing": "one-time",
+    "deliverable": "one-premium-single-page-website"
+  },
+  "checkout": {
+    "status": "blocked",
+    "allowed_mode": "test-only",
+    "consent_version": "2026-08-11",
+    "required_evidence": [
+      "adult-purchaser-affirmative-acceptance",
+      "accepted-terms-version",
+      "accepted-at-server-timestamp",
+      "price-currency-and-scope-shown-before-checkout",
+      "stripe-test-session-id"
+    ],
+    "blockers": [
+      "adult-contracting-representative-unconfirmed",
+      "checkout-consent-not-wired-or-live-tested"
+    ]
+  },
+  "analytics": {
+    "status": "pending-live-verification",
+    "receiver": "Netlify Function /api/analytics/event",
+    "dashboard": "Basic-auth Netlify Function /internal/analytics",
+    "storage": "Netlify Blobs arc-analytics",
+    "retention_days": 90,
+    "client_buffer": "window.dataLayer plus nonblocking first-party POST",
+    "allowed_events": [
+      "arc_page_view",
+      "arc_cta_click",
+      "arc_form_start",
+      "arc_form_step",
+      "arc_preview_request"
+    ],
+    "forbidden_fields": [
+      "email",
+      "phone",
+      "name",
+      "business",
+      "public_address",
+      "form_answers",
+      "ip_address",
+      "user_agent",
+      "referrer_host",
+      "utm_parameters"
+    ],
+    "environment_requirements": [
+      "ARC_ANALYTICS_DASHBOARD_USER",
+      "ARC_ANALYTICS_DASHBOARD_PASSWORD"
+    ],
+    "integrity_limitations": [
+      "public-browser-events-can-be-forged",
+      "metrics-are-directional-not-audit-grade"
+    ],
+    "verified_live_events": [],
+    "activation_requirements": [
+      "named-receiver",
+      "private-dashboard-access",
+      "retention-confirmed",
+      "privacy-policy-updated-to-match-collected-events",
+      "live-event-receipt-verified"
+    ]
+  },
+  "intake_routing": {
+    "status": "unverified",
+    "netlify_form": "arc-preview",
+    "workflow_route": "arc-preview-zapier",
+    "verified_recipient": null,
+    "verification_requirements": [
+      "production-form-detected-by-netlify",
+      "unique-live-submission-received",
+      "zapier-trigger-received-once",
+      "intended-recipient-confirms-message",
+      "duplicate-and-failure-alerting-verified"
+    ]
+  },
+  "customer_lead_routing": {
+    "default_status": "pending-verification",
+    "launch_requirement": "test-submission-and-recipient-confirmation",
+    "must_block_production_when_unverified": true
+  },
+  "intake_trust_boundary": {
+    "status": "pending-server-verification",
+    "client_hidden_fields_are_authoritative": false,
+    "required_pipeline_evidence": [
+      "provider-submission-id-used-for-folder-identity",
+      "provider-received-at-used-for-accepted-at",
+      "exact-budget-and-terms-acceptance-required",
+      "client-status-assertions-ignored",
+      "provider-submission-replay-rejected",
+      "folder-collision-rejected-before-build"
+    ]
+  },
+  "asset_uploads": {
+    "status": "pending-server-verification",
+    "client_allowlist": [
+      "image/png",
+      "image/jpeg",
+      "image/webp"
+    ],
+    "required_pipeline_evidence": [
+      "controlled-source-url",
+      "per-file-and-total-byte-limits",
+      "content-type-and-magic-byte-match",
+      "successful-raster-decode",
+      "svg-html-and-polyglot-rejection",
+      "validated-content-sha256-bound-to-private-preview-state"
+    ],
+    "client_checks_are_security_boundary": false
+  },
+  "data_retention": {
+    "status": "pending-provider-enforcement",
+    "control_document": "operations/data-retention.md",
+    "currently_automated": [
+      "seven-day-browser-draft-expiry",
+      "ninety-day-first-party-analytics-pruning"
+    ],
+    "unverified_stores": [
+      "netlify-forms-and-uploads",
+      "zapier-tables",
+      "gmail",
+      "github-previews-and-deliveries",
+      "stripe-and-backups"
+    ],
+    "live_compliance_claim_allowed": false
+  },
+  "legal_and_outreach_compliance": {
+    "status": "blocked",
+    "adult_contracting_representative": null,
+    "legal_operator": null,
+    "legal_entity": null,
+    "mailing_address": null,
+    "governing_venue": null,
+    "branded_sender": null,
+    "verified_routing_recipient": null,
+    "apollo_must_remain_off": true,
+    "activation_requirements": [
+      "adult-representative-confirmed",
+      "legal-operator-confirmed",
+      "real-mailing-address-confirmed",
+      "governing-venue-reviewed",
+      "branded-sender-and-spf-dkim-dmarc-verified",
+      "unsubscribe-and-suppression-flow-live-tested",
+      "verified-routing-recipient-live-tested"
+    ]
+  }
+}

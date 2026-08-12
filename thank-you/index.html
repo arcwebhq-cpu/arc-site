@@ -28,10 +28,25 @@
     <svg viewBox="0 0 120 72" role="img" aria-label="ARC"><path d="M18 56 C18 26 39 14 60 14 C81 14 102 26 102 56"/></svg>
     <p class="kicker">Request received</p>
     <h1>Your preview is in motion.</h1>
-    <p>We have your build brief. Watch the email you submitted for your private ARC website preview and next steps.</p>
-    <div class="next" role="list" aria-label="What happens next"><span role="listitem"><b>1.</b> Check your inbox for confirmation.</span><span role="listitem"><b>2.</b> Open the private preview link when it arrives.</span><span role="listitem"><b>3.</b> Pay only if you approve the website.</span></div>
+    <p>We have your build brief. Watch the email you submitted for your unlisted ARC website preview and next steps.</p>
+    <div class="next" role="list" aria-label="What happens next"><span role="listitem"><b>1.</b> Check your inbox for confirmation.</span><span role="listitem"><b>2.</b> Open the unlisted preview link when it arrives.</span><span role="listitem"><b>3.</b> Pay only if you approve the website.</span></div>
     <a href="/">Back to ARC</a>
   </main>
-  <script>try{localStorage.removeItem('arc-preview-draft-v4');localStorage.removeItem('arc-preview-draft-v3')}catch(error){}</script>
+  <script>
+  (async()=>{
+    try{
+      const pendingKey='arc-pending-preview-analytics',raw=sessionStorage.getItem(pendingKey);
+      if(raw){
+        const pending=JSON.parse(raw),expiresAt=Number(pending?.expires_at);
+        if(Number.isFinite(expiresAt)&&expiresAt>Date.now()){
+          const {expires_at,...payload}=pending;
+          const response=await fetch('/api/analytics/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true});
+          if(response.ok)sessionStorage.removeItem(pendingKey);
+        }else sessionStorage.removeItem(pendingKey);
+      }
+    }catch(error){}
+    try{localStorage.removeItem('arc-preview-draft-v7');localStorage.removeItem('arc-preview-draft-v4');localStorage.removeItem('arc-preview-draft-v3')}catch(error){}
+  })();
+  </script>
 </body>
 </html>
