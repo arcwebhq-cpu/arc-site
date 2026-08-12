@@ -12,6 +12,7 @@ const publicEntries = Object.freeze([
   'assets',
   'thank-you',
   'payment-success',
+  'claim',
   'privacy',
   'terms',
   'refunds',

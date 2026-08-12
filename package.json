@@ -7,9 +7,16 @@
   },
   "scripts": {
     "build": "node scripts/build-site.mjs",
-    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && npm run build && node tests/build-contract.mjs"
+    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "10.7.12"
+  },
+  "overrides": {
+    "image-size": "file:vendor/image-size-disabled"
+  },
+  "devDependencies": {
+    "@sparticuz/chromium": "149.0.0",
+    "playwright": "1.62.0"
   }
 }

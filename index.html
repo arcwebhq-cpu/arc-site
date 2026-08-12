@@ -42,6 +42,7 @@ body{margin:0;overflow-x:hidden;color:var(--ink);font-family:Inter,ui-sans-serif
 a{color:inherit;text-decoration:none} button,input,textarea,select{font:inherit} img,svg{max-width:100%;display:block} [hidden]{display:none!important}
 button,a,input,textarea,select{touch-action:manipulation}
 :focus-visible{outline:3px solid #87c9ff;outline-offset:4px}
+.skip-link{position:fixed;z-index:120;top:10px;left:10px;transform:translateY(-180%);padding:12px 16px;border-radius:999px;background:#080808;color:#fffaf1;font-weight:900;box-shadow:0 12px 30px rgba(0,0,0,.28)}.skip-link:focus{transform:none}
 .wrap{width:min(var(--max),calc(100% - 36px));margin:0 auto}.page{position:relative;isolation:isolate}
 .noise{position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.035;background-image:linear-gradient(90deg,rgba(0,0,0,.45) 1px,transparent 1px),linear-gradient(rgba(0,0,0,.45) 1px,transparent 1px);background-size:72px 72px;mask-image:linear-gradient(to bottom,black,transparent 80%)}
 .arc-logo{width:50px;height:36px;overflow:visible}.arc-logo path{fill:none;stroke:currentColor;stroke-width:18;stroke-linecap:round;stroke-linejoin:round}
@@ -64,24 +65,24 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
 .review-intro{margin:0;color:#bdb7ad;font-weight:730;line-height:1.45}.review-grid{display:grid;gap:12px}.review-card{border:1px solid rgba(255,255,255,.13);border-radius:24px;background:rgba(255,255,255,.04);overflow:hidden}.review-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.10)}.review-head h3{margin:0;font-size:18px;letter-spacing:-.025em}.review-edit{border:0;border-radius:999px;padding:8px 12px;background:#fffaf1;color:#090909;font-weight:900;cursor:pointer}.review-body{display:grid;gap:10px;padding:15px 16px}.review-row{display:grid;grid-template-columns:minmax(120px,.42fr) 1fr;gap:14px}.review-row dt{color:#9c968d;font-weight:800}.review-row dd{margin:0;color:#fffaf1;font-weight:760;overflow-wrap:anywhere}.review-empty{color:#8c867e;font-style:italic}.review-confirm{margin-top:2px;color:#d7d1c7;font-size:13px;line-height:1.4;font-weight:720}
 .error{min-height:22px;color:#ffc3c3;font-weight:800;font-size:14px}.field-error{border-color:#ff8c8c!important;box-shadow:0 0 0 5px rgba(255,94,94,.12)!important}.group-error{outline:2px solid #ff8c8c;outline-offset:4px;border-radius:20px}.bot{position:absolute;left:-9999px;opacity:0;pointer-events:none}.first #prev{opacity:.4;pointer-events:none}.last #next{display:none}.last #submit{display:inline-flex}#submit{display:none;background:#fffaf1;color:#080808;border-color:#fffaf1;box-shadow:0 12px 30px rgba(0,0,0,.22)}#submit:disabled{opacity:.6;cursor:wait;transform:none}
 .footer{padding:50px 0;display:flex;justify-content:space-between;gap:24px;color:#5f594f;font-weight:800}.footer-links{display:flex;justify-content:flex-end;gap:12px 18px;flex-wrap:wrap}.footer a{text-decoration:underline;text-underline-offset:3px}
-.js .reveal{opacity:0;transform:translate3d(0,96px,0) scale(.94);transition:opacity 1.05s var(--ease),transform 1.05s var(--ease),filter 1.05s var(--ease);filter:blur(8px);will-change:transform,opacity,filter;backface-visibility:hidden;-webkit-backface-visibility:hidden}.js .reveal.from-top{transform:translate3d(0,-78px,0) scale(.94)}.js .reveal.show{opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0)}.js .reveal.resetting,.js .reveal.resetting *{transition:none!important}
+.js.reveal-ready .reveal{opacity:0;transform:translate3d(0,96px,0) scale(.94);transition:opacity 1.05s var(--ease),transform 1.05s var(--ease),filter 1.05s var(--ease);filter:blur(8px);will-change:transform,opacity,filter;backface-visibility:hidden;-webkit-backface-visibility:hidden}.js.reveal-ready .reveal.show{opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0);will-change:auto}
 .work-item .work-copy,.work-item .mockup-big,.offer-row h3,.offer-row .offer-art,.process-line .step,.form-copy h2,.form-copy p,.form-copy .form-meta,.form-card{transition:transform 1.15s var(--ease),opacity 1.15s var(--ease),filter 1.15s var(--ease)}
-.work-item .work-copy{opacity:0;transform:translate3d(-96px,58px,0) scale(.94);filter:blur(10px)}
-.work-item .mockup-big{opacity:0;transform:translate3d(110px,68px,0) scale(.92);filter:blur(10px)}
-.work-item .screen-nav,.work-item .screen-hero,.work-item .visual-bars i{opacity:0;transform:translate3d(0,56px,0) scale(.94);transition:transform 1s var(--ease),opacity 1s var(--ease),filter 1s var(--ease);filter:blur(8px)}
+.js.reveal-ready .work-item .work-copy{opacity:0;transform:translate3d(-96px,58px,0) scale(.94);filter:blur(10px)}
+.js.reveal-ready .work-item .mockup-big{opacity:0;transform:translate3d(110px,68px,0) scale(.92);filter:blur(10px)}
+.js.reveal-ready .work-item .screen-nav,.js.reveal-ready .work-item .screen-hero,.js.reveal-ready .work-item .visual-bars i{opacity:0;transform:translate3d(0,56px,0) scale(.94);transition:transform 1s var(--ease),opacity 1s var(--ease),filter 1s var(--ease);filter:blur(8px)}
 .work-item .visual-bars i:nth-child(2){transition-delay:.11s}.work-item .visual-bars i:nth-child(3){transition-delay:.22s}
-.work-item.show .work-copy,.work-item.show .mockup-big,.work-item.show .screen-nav,.work-item.show .screen-hero,.work-item.show .visual-bars i{opacity:1;transform:none;filter:blur(0)}
-.offer-row h3{opacity:0;transform:translate3d(-82px,48px,0) scale(.94);filter:blur(9px)}
-.offer-row .offer-art{opacity:0;transform:translate3d(94px,52px,0) scale(.92);filter:blur(9px)}
-.offer-row.show h3,.offer-row.show .offer-art{opacity:1;transform:none;filter:blur(0)}
-.process-line .step{opacity:0;transform:translate3d(0,90px,0) scale(.9);filter:blur(9px)}
-.process-line.show .step{opacity:1;transform:none;filter:blur(0)}
+.js.reveal-ready .work-item.show .work-copy,.js.reveal-ready .work-item.show .mockup-big,.js.reveal-ready .work-item.show .screen-nav,.js.reveal-ready .work-item.show .screen-hero,.js.reveal-ready .work-item.show .visual-bars i{opacity:1;transform:none;filter:blur(0)}
+.js.reveal-ready .offer-row h3{opacity:0;transform:translate3d(-82px,48px,0) scale(.94);filter:blur(9px)}
+.js.reveal-ready .offer-row .offer-art{opacity:0;transform:translate3d(94px,52px,0) scale(.92);filter:blur(9px)}
+.js.reveal-ready .offer-row.show h3,.js.reveal-ready .offer-row.show .offer-art{opacity:1;transform:none;filter:blur(0)}
+.js.reveal-ready .process-line .step{opacity:0;transform:translate3d(0,90px,0) scale(.9);filter:blur(9px)}
+.js.reveal-ready .process-line.show .step{opacity:1;transform:none;filter:blur(0)}
 .process-line.show .step:nth-child(2){transition-delay:.09s}.process-line.show .step:nth-child(3){transition-delay:.18s}
-.form-copy h2,.form-copy p,.form-copy .form-meta{opacity:0;transform:translate3d(-54px,44px,0) scale(.94);filter:blur(8px)}
-.form-card{opacity:0;transform:translate3d(86px,58px,0) scale(.93);filter:blur(9px)}
+.js.reveal-ready .form-copy h2,.js.reveal-ready .form-copy p,.js.reveal-ready .form-copy .form-meta{opacity:0;transform:translate3d(-54px,44px,0) scale(.94);filter:blur(8px)}
+.js.reveal-ready .form-card{opacity:0;transform:translate3d(86px,58px,0) scale(.93);filter:blur(9px)}
 /* The intake is critical UI: it must never depend on reveal JavaScript. */
 #start .form-copy,#start .form-copy h2,#start .form-copy p,#start .form-copy .form-meta,#start .form-card{opacity:1;transform:none;filter:none}
-.form-copy.show h2,.form-copy.show p,.form-copy.show .form-meta,.form-card.show{opacity:1;transform:none;filter:blur(0)}
+.js.reveal-ready .form-copy.show h2,.js.reveal-ready .form-copy.show p,.js.reveal-ready .form-copy.show .form-meta,.js.reveal-ready .form-card.show{opacity:1;transform:none;filter:blur(0)}
 .form-copy.show p{transition-delay:.08s}.form-copy.show .form-meta{transition-delay:.16s}
 .float{will-change:transform}
 @media(max-width:1000px){.hero-grid,.work-item,.offer-row,.form-shell{grid-template-columns:1fr}.hero{padding-top:120px}.hero-grid{gap:36px}.hero-showcase{height:520px;min-height:520px;max-width:720px;width:100%;margin-inline:auto}.process-line{grid-template-columns:1fr 1fr}.nav-links a:not(.keep){display:none}.work-item{min-height:0}.offer-row{min-height:0}.scope-copy{justify-self:start;max-width:760px}.offer-art{height:250px}.form-copy{position:static}.form-copy>p{max-width:620px}.footer{display:block}.footer-links{justify-content:flex-start}.footer div+div{margin-top:12px}}
@@ -154,13 +155,14 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
   .section-title{font-size:42px}
   .form-nav .btn{padding-inline:12px;font-size:13px}
 }
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}.js .reveal{opacity:1;transform:none}.float{transform:none!important}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}.js.reveal-ready .reveal{opacity:1;transform:none;filter:none}.float{transform:none!important}}
 .mockup-big.thumb{min-height:0;aspect-ratio:1363/936;background:#050505}.work-thumb{width:100%;height:100%;object-fit:cover;object-position:top center;pointer-events:none;transition:transform .55s var(--ease)}.work-item:hover .work-thumb{transform:scale(1.02)}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#top">Skip to main content</a>
 <div class="noise" aria-hidden="true"></div>
-<nav class="nav">
+<nav class="nav" aria-label="Primary navigation">
   <a class="brand" href="#top" aria-label="ARC home">
     <svg class="arc-logo" viewBox="0 0 120 72" aria-hidden="true"><path d="M18 56 C18 26 39 14 60 14 C81 14 102 26 102 56"/></svg>
     <span>ARC</span>
@@ -172,20 +174,21 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
     <a class="btn black keep" href="#start">Get Free Preview</a>
   </div>
 </nav>
-<main id="top" class="page">
+<main id="top" class="page" tabindex="-1">
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy-block reveal">
         <h1>Your new website. Built before you pay.</h1>
+        <p class="hero-copy">Tell us about your business. We build the preview. Pay $5,000 only when you approve it.</p>
         <div class="actions">
           <a class="btn black" href="#start">Build My Free Preview</a>
           <a class="hero-work-link" href="#work">See our work ↓</a>
         </div>
       </div>
       <div class="hero-showcase reveal" aria-label="ARC-built concept website previews">
-        <div class="showcase-frame showcase-main"><img src="/assets/showcases/arc-roofing-showcase-1785497742846.jpg" alt="Summit Ridge Roofing website preview" width="1348" height="926" loading="eager" fetchpriority="high"></div>
-        <div class="showcase-frame showcase-mini showcase-dental"><img src="/assets/showcases/arc-dental-showcase-1785497742846.jpg" alt="Lumen Dental website preview" width="1348" height="926" loading="eager" fetchpriority="high"></div>
-        <div class="showcase-frame showcase-mini showcase-finance"><img src="/assets/showcases/arc-finance-showcase-1785497742846.jpg" alt="Clarity Capital website preview" width="1348" height="926" loading="eager" fetchpriority="high"></div>
+        <div class="showcase-frame showcase-main"><img src="/assets/showcases/arc-roofing-showcase-1785497742846.jpg" alt="Ironwood Roofing Concept website preview" width="1348" height="926" loading="eager" fetchpriority="high" decoding="async"></div>
+        <div class="showcase-frame showcase-mini showcase-dental"><img src="/assets/showcases/arc-dental-showcase-1785497742846.jpg" alt="Cedar Dental Concept website preview" width="1348" height="926" loading="eager" decoding="async"></div>
+        <div class="showcase-frame showcase-mini showcase-finance"><img src="/assets/showcases/arc-finance-showcase-1785497742846.jpg" alt="Clearwater Finance Concept website preview" width="1348" height="926" loading="eager" decoding="async"></div>
         <div class="showcase-label"><strong>ARC-built concept previews</strong><span>Roofing · Dental · Finance</span></div>
         <div class="showcase-stamp" aria-hidden="true">BUILT<br>BEFORE<br>PAYMENT</div>
       </div>
@@ -198,16 +201,16 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
       <p class="concept-note reveal">These are fictional business concepts created to demonstrate ARC’s design system. They are not customer endorsements, client results, or claims of completed work.</p>
       <div class="work-stack">
         <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/showcases/roofing/" target="_blank" rel="noopener">
-          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Summit Ridge Roofing</h3><div class="tags"><span>Local service</span><span>Estimate form</span><span>Mobile-first</span></div></div>
-          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-roofing-showcase-1785497742846.jpg" alt="Summit Ridge Roofing showcase homepage"></div>
+          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Ironwood Roofing Concept</h3><div class="tags"><span>Local service</span><span>Estimate form</span><span>Mobile-first</span></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-roofing-showcase-1785497742846.jpg" alt="Ironwood Roofing Concept showcase homepage" width="1348" height="926" loading="lazy" decoding="async"></div>
         </a>
         <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/showcases/dental/" target="_blank" rel="noopener">
-          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Lumen Dental</h3><div class="tags"><span>Clinic</span><span>Booking</span><span>Trust</span></div></div>
-          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-dental-showcase-1785497742846.jpg" alt="Lumen Dental showcase homepage"></div>
+          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Cedar Dental Concept</h3><div class="tags"><span>Preventive care</span><span>Appointments</span><span>Patient trust</span></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-dental-showcase-1785497742846.jpg" alt="Cedar Dental Concept showcase homepage" width="1348" height="926" loading="lazy" decoding="async"></div>
         </a>
         <a class="work-item reveal" href="https://arcwebhq-cpu.github.io/arc-previews/showcases/finance/" target="_blank" rel="noopener">
-          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Clarity Capital</h3><div class="tags"><span>Finance</span><span>Premium</span><span>Conversion</span></div></div>
-          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-finance-showcase-1785497742846.jpg" alt="Clarity Capital showcase homepage"></div>
+          <div class="work-copy"><span class="work-kicker">Open live concept ↗</span><h3>Clearwater Finance Concept</h3><div class="tags"><span>Financial planning</span><span>Clarity</span><span>Consultation</span></div></div>
+          <div class="mockup-big thumb"><img class="work-thumb" src="/assets/showcases/arc-finance-showcase-1785497742846.jpg" alt="Clearwater Finance Concept showcase homepage" width="1348" height="926" loading="lazy" decoding="async"></div>
         </a>
       </div>
     </div>
@@ -224,7 +227,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
         <div class="offer-row reveal"><h3>Launch, ownership, and support.</h3><div class="scope-copy"><b>Handoff</b><p>Launch or production-file delivery, ownership of the custom site after full payment, and 30 calendar days of launch-related bug support.</p></div></div>
       </div>
       <div class="scope-summary reveal">
-        <div class="scope-note"><strong>Price and timing</strong><p>$5,000 USD once, only after you approve the free preview. Target delivery is seven business days after payment, final content and assets, verified lead routing, and required account access are complete.</p></div>
+        <div class="scope-note"><strong>Price and timing</strong><p>The exact service price remains $5,000 USD, once, only after you approve the free preview. Stripe may display the price in your local currency and charge its disclosed currency-conversion fee. Target delivery is seven business days after payment, final content and assets, verified lead routing, and required account access are complete.</p></div>
         <div class="scope-note"><strong>Not included</strong><p>Domain, hosting, paid software, original photography, ecommerce, memberships, custom applications, ongoing maintenance, ongoing SEO, advertising, or legal/compliance review unless added in writing.</p></div>
       </div>
       <a class="scope-link reveal" href="/service-scope/">Read the complete service scope →</a>
@@ -293,14 +296,14 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
                 <div class="field"><label for="offer">Main offer or pricing detail</label><input id="offer" name="main_offer" type="text" placeholder="Free estimate, first visit offer, starting price..."></div>
               </div>
             </details>
-            <p class="group-title">Primary goals *</p>
-            <div class="choices" data-group="goals">
+            <p class="group-title" id="goalsLabel">Primary goals *</p>
+            <div class="choices" data-group="goals" role="group" aria-labelledby="goalsLabel">
               <label><input type="checkbox" name="goals" value="More calls"> More calls</label><label><input type="checkbox" name="goals" value="Estimate requests"> Estimate requests</label>
               <label><input type="checkbox" name="goals" value="Bookings"> Bookings</label><label><input type="checkbox" name="goals" value="Look more trusted"> Look more trusted</label>
               <label><input type="checkbox" name="goals" value="Explain services"> Explain services</label><label><input type="checkbox" name="goals" value="Sell or reserve online"> Sell or reserve online</label>
             </div>
-            <p class="group-title">Main call to action *</p>
-            <div class="choices" id="ctaChoices">
+            <p class="group-title" id="ctaLabel">Main call to action *</p>
+            <div class="choices" id="ctaChoices" role="radiogroup" aria-labelledby="ctaLabel">
               <label><input type="radio" name="main_call_to_action" value="Call" required> Call</label><label><input type="radio" name="main_call_to_action" value="Request Estimate"> Request Estimate</label>
               <label><input type="radio" name="main_call_to_action" value="Book Consultation"> Book Consultation</label><label><input type="radio" name="main_call_to_action" value="Order or Reserve"> Order / Reserve</label>
               <label><input type="radio" name="main_call_to_action" value="Contact"> Contact</label>
@@ -309,8 +312,8 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
               <div class="field"><label for="ctaDestination" id="ctaDestinationLabel">CTA destination</label><input id="ctaDestination" name="cta_destination" type="text" placeholder="Phone number, booking URL, or order link"></div>
             </div>
             <div class="conditional-panel" id="secondaryFormPanel" hidden>
-              <p class="group-title">Also include a contact form?</p>
-              <div class="choices">
+              <p class="group-title" id="secondaryFormLabel">Also include a contact form?</p>
+              <div class="choices" role="radiogroup" aria-labelledby="secondaryFormLabel">
                 <label><input type="radio" id="leadFormYes" name="lead_form_needed" value="Yes"> Yes</label>
                 <label><input type="radio" id="leadFormNo" name="lead_form_needed" value="No"> No</label>
               </div>
@@ -327,16 +330,16 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
               <div class="optional-details-body brief-details-body">
             <div class="conditional-panel" id="leadFormPanel" hidden>
               <div class="field"><label for="leadEmail">Lead notification email</label><input id="leadEmail" name="lead_notification_email" type="email" placeholder="Where website form leads should go"><p class="hint">Pending verification. Before production launch, ARC must send a real test submission to this address and the recipient must confirm receipt.</p></div>
-              <p class="group-title">Lead form fields *</p>
-              <div class="choices" id="leadFieldChoices" data-group="lead_form_fields">
+              <p class="group-title" id="leadFieldsLabel">Lead form fields *</p>
+              <div class="choices" id="leadFieldChoices" data-group="lead_form_fields" role="group" aria-labelledby="leadFieldsLabel">
                 <label><input type="checkbox" name="lead_form_fields" value="Name" checked> Name</label><label><input type="checkbox" name="lead_form_fields" value="Email" checked> Email</label>
                 <label><input type="checkbox" name="lead_form_fields" value="Phone" checked> Phone</label><label><input type="checkbox" name="lead_form_fields" value="Service" checked> Service</label>
                 <label><input type="checkbox" name="lead_form_fields" value="Address"> Address</label><label><input type="checkbox" name="lead_form_fields" value="Project details"> Project details</label>
                 <label><input type="checkbox" name="lead_form_fields" value="Preferred date"> Preferred date</label><label><input type="checkbox" name="lead_form_fields" value="Budget"> Budget</label>
               </div>
             </div>
-            <p class="group-title">Website sections *</p>
-            <div class="choices" data-group="sections">
+            <p class="group-title" id="sectionsLabel">Website sections *</p>
+            <div class="choices" data-group="sections" role="group" aria-labelledby="sectionsLabel">
               <label><input type="checkbox" name="sections" value="About" checked> About</label><label><input type="checkbox" name="sections" value="Services" checked> Services</label>
               <label><input type="checkbox" name="sections" value="Process" checked> Process</label><label><input type="checkbox" name="sections" value="Reviews"> Reviews</label>
               <label><input type="checkbox" name="sections" value="Gallery"> Gallery</label><label><input type="checkbox" name="sections" value="FAQ"> FAQ</label>
@@ -355,8 +358,8 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
             <details class="optional-details brief-details">
               <summary>Add brand direction or proof <span class="optional">Optional</span></summary>
               <div class="optional-details-body brief-details-body">
-            <p class="group-title">Primary style *</p>
-            <div class="choices">
+            <p class="group-title" id="styleLabel">Primary style *</p>
+            <div class="choices" role="radiogroup" aria-labelledby="styleLabel">
               <label><input type="radio" name="primary_style" value="Modern" required checked> Modern</label><label><input type="radio" name="primary_style" value="Luxury"> Luxury</label>
               <label><input type="radio" name="primary_style" value="Minimal"> Minimal</label><label><input type="radio" name="primary_style" value="Bold"> Bold</label>
               <label><input type="radio" name="primary_style" value="Warm and local"> Warm &amp; local</label><label><input type="radio" name="primary_style" value="Editorial"> Editorial</label>
@@ -371,8 +374,8 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
                 <div class="field"><label for="businessStory">Short business story</label><textarea id="businessStory" name="business_story" placeholder="How it started and what it stands for"></textarea></div>
               </div>
             </details>
-            <p class="group-title">Available proof <span class="optional">(optional)</span></p>
-            <div class="choices" data-exclusive-group="proof">
+            <p class="group-title" id="proofLabel">Available proof <span class="optional">(optional)</span></p>
+            <div class="choices" data-exclusive-group="proof" role="group" aria-labelledby="proofLabel">
               <label><input type="checkbox" name="proof" value="Customer reviews"> Customer reviews</label><label><input type="checkbox" name="proof" value="Licensed or insured"> Licensed / insured</label>
               <label><input type="checkbox" name="proof" value="Awards or certifications"> Awards / certifications</label><label><input type="checkbox" name="proof" value="Years of experience"> Years of experience</label>
               <label><input type="checkbox" name="proof" value="Case studies or results"> Case studies / results</label><label><input type="checkbox" name="proof" value="None yet" data-none> None yet</label>
@@ -384,8 +387,8 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
             <details class="optional-details brief-details">
               <summary>Add assets or launch details <span class="optional">Optional</span></summary>
               <div class="optional-details-body brief-details-body">
-            <p class="group-title">Available assets <span class="optional">(optional)</span></p>
-            <div class="choices" data-exclusive-group="assets" id="assetChoices">
+            <p class="group-title" id="assetsLabel">Available assets <span class="optional">(optional)</span></p>
+            <div class="choices" data-exclusive-group="assets" id="assetChoices" role="group" aria-labelledby="assetsLabel">
               <label><input type="checkbox" name="assets" value="Logo"> Logo</label><label><input type="checkbox" name="assets" value="Photos"> Project photos</label>
               <label><input type="checkbox" name="assets" value="Reviews"> Reviews</label><label><input type="checkbox" name="assets" value="Brand guide"> Brand guide</label>
               <label><input type="checkbox" name="assets" value="Social links"> Social links</label><label><input type="checkbox" name="assets" value="None yet" data-none> None yet</label>
@@ -467,46 +470,19 @@ const track=(event,details={})=>{
 };
 track('arc_page_view',{path:location.pathname});
 const reveals=[...document.querySelectorAll('.reveal')];
-let lastScrollY=window.scrollY,revealTick=false,revealsReady=false,scrollDirection=1;
-function resetReveal(el,fromTop){
-  el.classList.add('resetting');
-  el.classList.toggle('from-top',fromTop);
-  el.classList.remove('show');
-  void el.offsetHeight;
-  requestAnimationFrame(()=>el.classList.remove('resetting'));
-}
+let revealTick=false;
 function updateReveals(){
-  const currentY=Math.max(0,window.scrollY);
-  const delta=currentY-lastScrollY;
-  if(Math.abs(delta)>1)scrollDirection=delta>0?1:-1;
-  const goingDown=scrollDirection===1;
   const viewportH=window.innerHeight||document.documentElement.clientHeight;
-  const downTrigger=viewportH*.88;
-  const upTrigger=viewportH*.14;
-  const resetGap=64;
+  const trigger=viewportH*.88;
   reveals.forEach(el=>{
+    if(el.classList.contains('show'))return;
     const rect=el.getBoundingClientRect();
-    if(!revealsReady){
-      if(rect.bottom<=0||rect.top<=downTrigger&&rect.bottom>=0)el.classList.add('show');
-      return;
-    }
-    if(el.classList.contains('show')){
-      if(goingDown&&rect.bottom<=-resetGap)resetReveal(el,true);
-      else if(!goingDown&&rect.top>=viewportH+resetGap)resetReveal(el,false);
-      return;
-    }
-    if(goingDown){
-      if(rect.top<=downTrigger&&rect.bottom>=0){el.classList.remove('from-top');el.classList.add('show')}
-    }else if(rect.bottom>=upTrigger&&rect.top<=viewportH){
-      el.classList.add('from-top');
-      el.classList.add('show');
-    }
+    if(rect.bottom<=0||rect.top<=trigger&&rect.bottom>=0)el.classList.add('show');
   });
-  revealsReady=true;
-  lastScrollY=currentY;
   revealTick=false;
 }
 function queueRevealUpdate(){if(!revealTick){revealTick=true;requestAnimationFrame(updateReveals)}}
+document.documentElement.classList.add('reveal-ready');
 updateReveals();
 window.addEventListener('scroll',queueRevealUpdate,{passive:true});
 window.addEventListener('resize',queueRevealUpdate,{passive:true});
@@ -563,7 +539,17 @@ function showStep(i,shouldScroll=true,shouldTrack=true){
     if(legend){legend.tabIndex=-1;setTimeout(()=>legend.focus({preventScroll:true}),280)}
   }
 }
-function clearErrors(step){step.querySelectorAll('.field-error,.group-error').forEach(el=>el.classList.remove('field-error','group-error'))}
+function clearErrors(step){
+  step.querySelectorAll('.field-error,.group-error').forEach(el=>el.classList.remove('field-error','group-error'));
+  step.querySelectorAll('[aria-invalid="true"]').forEach(el=>el.removeAttribute('aria-invalid'));
+  step.querySelectorAll('[aria-describedby="error"]').forEach(el=>el.removeAttribute('aria-describedby'));
+}
+function markFieldError(field){field.classList.add('field-error');field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby','error')}
+function clearFieldError(field){field.classList.remove('field-error');field.removeAttribute('aria-invalid');if(field.getAttribute('aria-describedby')==='error')field.removeAttribute('aria-describedby')}
+function markGroupError(group){group.classList.add('group-error');group.setAttribute('aria-invalid','true')}
+function clearRelatedGroupError(field){
+  [field.closest('.choices'),field.closest('.conditional-panel')].filter(Boolean).forEach(group=>{group.classList.remove('group-error');group.removeAttribute('aria-invalid')});
+}
 function normalizeUrlField(field){
   if(field.type!=='url')return;
   field.setCustomValidity('');
@@ -588,7 +574,7 @@ function requiredGroupsComplete(step,markErrors=true){
     ok=false;
     if(markErrors){
       const group=[...container.querySelectorAll('[data-group]')].find(element=>element.dataset.group===name);
-      if(group)group.classList.add('group-error');
+      if(group)markGroupError(group);
     }
   });
   return ok;
@@ -598,16 +584,16 @@ function validStep(){
   clearErrors(step);
   let ok=true;
   const fields=validationFields(step);
-  fields.forEach(field=>{normalizeUrlField(field);if(!field.checkValidity()){field.classList.add('field-error');ok=false}});
+  fields.forEach(field=>{normalizeUrlField(field);if(!field.checkValidity()){markFieldError(field);ok=false}});
   if(!requiredGroupsComplete(step))ok=false;
   if(step.querySelector('#ctaChoices')){
     const cta=form.querySelector('input[name="main_call_to_action"]:checked')?.value||'';
     const secondaryVisible=!document.getElementById('secondaryFormPanel').hidden;
-    if(secondaryVisible&&!form.querySelector('input[name="lead_form_needed"]:checked')){document.getElementById('secondaryFormPanel').classList.add('group-error');ok=false}
-    if(!cta){document.getElementById('ctaChoices').classList.add('group-error');ok=false}
+    if(secondaryVisible&&!form.querySelector('input[name="lead_form_needed"]:checked')){markGroupError(document.getElementById('secondaryFormPanel'));ok=false}
+    if(!cta){markGroupError(document.getElementById('ctaChoices'));ok=false}
   }
   if(step.querySelector('#leadFieldChoices')&&leadFormYes.checked&&!form.querySelector('input[name="lead_form_fields"]:checked')){
-    document.getElementById('leadFieldChoices').classList.add('group-error');ok=false
+    markGroupError(document.getElementById('leadFieldChoices'));ok=false
   }
   if(!ok){
     const invalidField=fields.find(field=>!field.checkValidity());
@@ -646,7 +632,7 @@ function updateLeadPanel(){
   const leadFields=[...form.querySelectorAll('input[name="lead_form_fields"]')];
   leadEmail.disabled=!show;leadFields.forEach(input=>input.disabled=!show);
   if(show&&!leadEmail.value)leadEmail.value=document.getElementById('publicEmail').value||document.getElementById('email').value;
-  if(!show){leadEmail.classList.remove('field-error');document.getElementById('leadFieldChoices').classList.remove('group-error')}
+  if(!show){clearFieldError(leadEmail);document.getElementById('leadFieldChoices').classList.remove('group-error');document.getElementById('leadFieldChoices').removeAttribute('aria-invalid')}
 }
 function updateCTA(){
   const cta=form.querySelector('input[name="main_call_to_action"]:checked')?.value||'';
@@ -658,7 +644,7 @@ function updateCTA(){
   const config=configs[cta];setPanel(ctaDestinationPanel,Boolean(config));
   ctaDestination.required=Boolean(config);
   if(config){ctaDestinationLabel.textContent=config[0];ctaDestination.placeholder=config[1];ctaDestination.type=config[2];ctaDestination.inputMode=config[2]==='tel'?'tel':'url'}
-  else{ctaDestination.required=false;ctaDestination.value='';ctaDestination.classList.remove('field-error')}
+  else{ctaDestination.required=false;ctaDestination.value='';clearFieldError(ctaDestination)}
   if(!cta){leadFormYes.checked=false;leadFormNo.checked=false}
   updateLeadPanel();
 }
@@ -680,7 +666,7 @@ function updateAssetPanels(){
   if(!hasPhotos){document.getElementById('heroFile').value='';document.getElementById('supportFile').value=''}
   if(!hasRealAssets)document.getElementById('assetLink').value='';
   if(!hasSocial)document.getElementById('socialLinks').value='';
-  if(!hasRealAssets){assetPermission.checked=false;assetPermission.classList.remove('field-error')}
+  if(!hasRealAssets){assetPermission.checked=false;clearFieldError(assetPermission)}
   uploadNote.hidden=!selected.some(value=>value==='Logo'||value==='Photos'||value==='Brand guide'||value==='Reviews');
 }
 const proofDetailsPanel=document.getElementById('proofDetailsPanel'), proofDetails=document.getElementById('proofDetails');
@@ -688,7 +674,7 @@ function updateProofPanel(){
   const selected=[...form.querySelectorAll('input[name="proof"]:checked')].map(el=>el.value);
   const show=selected.some(value=>value!=='None yet');
   setPanel(proofDetailsPanel,show);proofDetails.required=show;
-  if(!show){proofDetails.value='';proofDetails.classList.remove('field-error')}
+  if(!show){proofDetails.value='';clearFieldError(proofDetails)}
 }
 
 const fileInputs=[...form.querySelectorAll('input[type="file"]')];
@@ -699,24 +685,24 @@ function isAllowedRaster(file){
 }
 fileInputs.forEach(input=>input.addEventListener('change',()=>{
   const file=input.files[0];const maxMb=parseFloat(input.dataset.maxMb||'2.5');
-  input.classList.remove('field-error');
-  if(file&&!isAllowedRaster(file)){input.value='';input.classList.add('field-error');err.textContent=`${file.name} is not an accepted image. Upload a PNG, JPG, or WEBP file.`;return}
-  if(file&&file.size>maxMb*1024*1024){input.value='';input.classList.add('field-error');err.textContent=`${file.name} is larger than ${maxMb} MB. Use the asset-folder link instead.`;return}
+  clearFieldError(input);
+  if(file&&!isAllowedRaster(file)){input.value='';markFieldError(input);err.textContent=`${file.name} is not an accepted image. Upload a PNG, JPG, or WEBP file.`;return}
+  if(file&&file.size>maxMb*1024*1024){input.value='';markFieldError(input);err.textContent=`${file.name} is larger than ${maxMb} MB. Use the asset-folder link instead.`;return}
   const total=fileInputs.reduce((sum,el)=>sum+[...el.files].reduce((n,f)=>n+f.size,0),0);
-  if(total>7.5*1024*1024){input.value='';input.classList.add('field-error');err.textContent='Uploads exceed the 7.5 MB total. Use the asset-folder link instead.'}else err.textContent='';
+  if(total>7.5*1024*1024){input.value='';markFieldError(input);err.textContent='Uploads exceed the 7.5 MB total. Use the asset-folder link instead.'}else err.textContent='';
 }));
 
 const reviewLabels={
   name:'Name',email:'Email',business:'Business',website:'Current website',industry:'Industry',city:'Service area',public_phone:'Public phone',public_email:'Public email',
   main_services:'Services',highest_profit_service:'Priority service',target_customer:'Target customer',main_offer:'Offer / pricing',goals:'Goals',main_call_to_action:'Main CTA',cta_destination:'CTA destination',lead_form_needed:'Lead form',lead_notification_email:'Lead email',lead_form_fields:'Lead fields',
   primary_style:'Primary style',colors:'Colors',brand_tone:'Brand tone',competitor_sites:'Reference websites',reference_site_likes:'Reference likes',design_dislikes:'Avoid',sections:'Sections',features:'Features',faqs_and_objections:'FAQs / objections',
-  assets:'Assets',logo_file:'Logo file',hero_image_file:'Hero photo',supporting_image_file:'Supporting photo',asset_folder_link:'Asset folder',social_links:'Social links',
+  assets:'Assets',asset_permission:'Asset permission',logo_file:'Logo file',hero_image_file:'Hero photo',supporting_image_file:'Supporting photo',asset_folder_link:'Asset folder',social_links:'Social links',
   why_choose_you:'Strongest difference',business_story:'Business story',proof:'Proof',proof_details:'Proof details',domain_status:'Domain',public_address:'Address',business_hours:'Hours',final_notes:'Final notes',budget_confirmed:'Price confirmation',terms_accepted:'Terms acceptance'
 };
 function fieldValues(step){
   const result=new Map();
   [...step.querySelectorAll('input,textarea,select')].forEach(field=>{
-    if(!field.name||['form-name','intake_version','submission_timestamp','bot-field','asset_permission'].includes(field.name)||!isVisible(field))return;
+    if(!field.name||['form-name','intake_version','submission_timestamp','bot-field'].includes(field.name)||!isVisible(field))return;
     let value='';
     if(field.type==='checkbox'||field.type==='radio'){if(!field.checked)return;value=field.value}
     else if(field.type==='file'){value=field.files[0]?.name||''}
@@ -765,21 +751,22 @@ form.addEventListener('input',event=>{
     track('arc_form_start');
   }
   if(field.type==='url')field.setCustomValidity('');
-  if(field.matches('input,textarea,select')){field.classList.remove('field-error');if(err.textContent)err.textContent=''}
+  if(field.matches('input,textarea,select')){clearFieldError(field);clearRelatedGroupError(field);if(err.textContent)err.textContent=''}
 });
 form.addEventListener('change',event=>{
   const field=event.target;
-  if(field.matches('input,textarea,select')&&field.type!=='file'){field.classList.remove('field-error');if(err.textContent)err.textContent=''}
+  if(field.matches('input,textarea,select')&&field.type!=='file'){clearFieldError(field);clearRelatedGroupError(field);if(err.textContent)err.textContent=''}
 });
 
 const operationalFields=['form-name','intake_version','landing_path','referrer_host','utm_source','utm_medium','utm_campaign','utm_content','utm_term','first_cta','form_started_at','last_step_reached','bot-field'];
+const freshConfirmationFields=new Set(['asset_permission','budget_confirmed','terms_accepted']);
 const draftKey='arc-preview-draft-v7';
 const draftTtlMs=7*24*60*60*1000;
 let saveTimer;
 function draftData(){
   const data={};
   [...form.elements].forEach(field=>{
-    if(!field.name||field.type==='file'||operationalFields.includes(field.name))return;
+    if(!field.name||field.type==='file'||operationalFields.includes(field.name)||freshConfirmationFields.has(field.name))return;
     if(field.type==='checkbox'||field.type==='radio'){
       if(!data[field.name])data[field.name]=[];
       if(field.checked)data[field.name].push(field.value);
@@ -809,7 +796,7 @@ function restoreDraft(){
     }
     const data=saved.data;
     [...form.elements].forEach(field=>{
-      if(!field.name||field.type==='file'||!(field.name in data))return;
+      if(!field.name||field.type==='file'||freshConfirmationFields.has(field.name)||!(field.name in data))return;
       if(field.type==='checkbox'||field.type==='radio')field.checked=Array.isArray(data[field.name])&&data[field.name].includes(field.value);
       else if(!operationalFields.includes(field.name))field.value=data[field.name]||'';
     });
@@ -842,7 +829,7 @@ function validateUploads(){
     if(!file)continue;
     if(!isAllowedRaster(file)){
       err.textContent=`${file.name} is not an accepted image. Upload a PNG, JPG, or WEBP file.`;
-      input.classList.add('field-error');
+      markFieldError(input);
       showStep(steps.indexOf(input.closest('.form-step')));
       openAncestorDetails(input);
       input.scrollIntoView({behavior:'smooth',block:'center'});
@@ -851,7 +838,7 @@ function validateUploads(){
     const maxMb=parseFloat(input.dataset.maxMb||'2.5');
     if(file.size>maxMb*1024*1024){
       err.textContent=`${file.name} is larger than ${maxMb} MB. Use the asset-folder link instead.`;
-      input.classList.add('field-error');
+      markFieldError(input);
       showStep(steps.indexOf(input.closest('.form-step')));
       openAncestorDetails(input);
       input.scrollIntoView({behavior:'smooth',block:'center'});
