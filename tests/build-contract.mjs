@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
-const expectedRoots = ['assets', 'favicon.svg', 'index.html', 'privacy', 'refunds', 'service-scope', 'terms', 'thank-you'];
+const expectedRoots = ['assets', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
 const files = [];
@@ -25,6 +25,17 @@ for (const forbidden of ['operations/', 'tests/', 'netlify/', '.github/', 'node_
 assert.ok(files.includes('index.html'));
 assert.ok(files.includes('privacy/index.html'));
 assert.ok(files.includes('assets/legal.css'));
+assert.ok(files.includes('robots.txt'));
+assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');
 assert.match(home, /name="form-name" value="arc-preview"/);
+
+for (const file of files.filter((name) => name.endsWith('.html'))) {
+  const html = await readFile(path.join(dist, file), 'utf8');
+  for (const match of html.matchAll(/(?:href|src)="(\/[^"#?]*)[^\"]*"/g)) {
+    const relative = match[1].replace(/^\//, '');
+    const target = !relative || relative.endsWith('/') ? path.join(relative, 'index.html') : relative;
+    await assert.doesNotReject(stat(path.join(dist, target)), `${file} contains a broken internal path: ${match[1]}`);
+  }
+}
 console.log(`ARC build contract passed with ${files.length} public files.`);

@@ -7,8 +7,11 @@ const output = path.join(root, 'dist');
 const publicEntries = Object.freeze([
   'index.html',
   'favicon.svg',
+  'robots.txt',
+  'sitemap.xml',
   'assets',
   'thank-you',
+  'payment-success',
   'privacy',
   'terms',
   'refunds',
