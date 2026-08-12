@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
-const expectedRoots = ['assets', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'terms', 'thank-you'];
+const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
 const files = [];
@@ -19,12 +19,14 @@ async function walk(directory) {
 }
 await walk(dist);
 
-for (const forbidden of ['operations/', 'tests/', 'netlify/', '.github/', 'node_modules/', 'package.json', 'package-lock.json']) {
+for (const forbidden of ['operations/', 'tests/', 'netlify/', 'vendor/', '.github/', 'node_modules/', 'package.json', 'package-lock.json']) {
   assert.ok(!files.some((file) => file === forbidden || file.startsWith(forbidden)), `${forbidden} must not enter the public build.`);
 }
 assert.ok(files.includes('index.html'));
 assert.ok(files.includes('privacy/index.html'));
 assert.ok(files.includes('assets/legal.css'));
+assert.ok(files.includes('claim/index.html'));
+assert.ok(files.includes('claim/claim.js'));
 assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');

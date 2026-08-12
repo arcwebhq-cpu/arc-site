@@ -1,8 +1,12 @@
 # ARC customer email contract
 
-These templates are the approved minimum copy for the live workflow. Dynamic
+These templates are the approved minimum copy for the proposed workflow. Dynamic
 values must come from verified project state; email text must never unlock
-publication or delivery by itself.
+publication or delivery by itself. The automatic claim workflow remains disabled
+until resumable deployment, signed inbox-receipt evidence, replay-safe claim
+exchange, and customer-authorized post-claim verification are implemented and
+tested. The future state model must separately record durable invitation issuance
+and successful claim-wrapper exchange; those transitions are not implemented yet.
 
 ## Preview ready
 
@@ -21,33 +25,51 @@ approval of the then-current preview for production handoff.
 
 ARC never needs your full card number by email.
 
-## Payment received
+## Checkout verification
 
-**Subject:** ARC payment received — production handoff started
+**Subject:** ARC checkout verification in progress
 
 Hi {{customer_name}},
 
-Stripe confirmed the $5,000 payment for the approved {{business_name}} preview.
-ARC is completing production, lead-routing, and launch checks. Target delivery is
-within seven business days after all required content, assets, routing, and account
-access are complete.
+ARC is verifying the Checkout Session directly with Stripe. This page or email is
+not confirmation that payment succeeded and does not start production by itself.
+If verification succeeds and all required content, routing, and account access are
+complete, target delivery is within seven business days.
 
 Status: {{payment_success_url}}
 
-## Production handoff
+## Ownership claim invitation
 
-**Subject:** Your finished ARC website is ready
+**Subject:** Claim your ARC website in Netlify
 
 Hi {{customer_name}},
 
-Your approved production website passed ARC's final checks:
+ARC prepared an unlisted, noindex handoff deploy, sent an exact synthetic
+submission through its rendered Netlify form, and verified receipt in the
+authoritative lead inbox. Use the one-time claim invitation below within the
+stated window. Form and hook configuration alone never authorizes this email:
+
+{{claim_invitation_url}}
+
+Treat this bearer invitation like a password. Do not forward it. Sending this
+invitation does not prove ownership handoff or mean the site is launch-ready.
+
+## Verified final handoff
+
+**Subject:** Your ARC website ownership handoff is ready
+
+Hi {{customer_name}},
+
+Netlify destination-account control, the exact final deploy, and the durable
+delivery outbox were independently verified:
 
 {{production_url}}
 
-Ownership handoff: {{ownership_handoff_url}}
+This final email must not include a claim URL, OAuth credential, Netlify access
+token, or other bearer secret.
 
 Follow the handoff steps, connect the final domain, then submit one real lead-form
 test before advertising the site. Your 30-day launch-bug support period begins
-when the production handoff is completed.
-
-Do not forward an ownership-claim link to anyone who should not control the site.
+when the verified ownership handoff is completed. This is not a claim that the
+site is fully launch-ready: the final domain, client-supplied privacy policy, real
+lead inbox, and one real lead-form submission must still be confirmed.

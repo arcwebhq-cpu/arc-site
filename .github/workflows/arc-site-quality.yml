@@ -15,9 +15,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: arcwebhq-cpu/arc-previews
+          path: .arc-previews-contract
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          ARC_PREVIEWS_DIR: .arc-previews-contract

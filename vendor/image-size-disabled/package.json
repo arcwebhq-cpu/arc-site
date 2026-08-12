@@ -1,0 +1,7 @@
+{
+  "name": "image-size",
+  "version": "3.0.0-arc-disabled.0",
+  "private": true,
+  "type": "module",
+  "exports": "./index.mjs"
+}
