@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /internal/
+Disallow: /thank-you/
+Disallow: /payment-success/
+
+Sitemap: https://arcweb.onl/sitemap.xml

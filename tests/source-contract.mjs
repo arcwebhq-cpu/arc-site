@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
-const [home, thankYou, privacy, terms, refunds, scope, readinessText, retentionControl, netlifyConfig, packageText, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune] = await Promise.all([
+const [home, thankYou, paymentSuccess, privacy, terms, refunds, scope, robots, sitemap, readinessText, retentionControl, netlifyConfig, packageText, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune] = await Promise.all([
   readFile(new URL('index.html', root), 'utf8'),
   readFile(new URL('thank-you/index.html', root), 'utf8'),
+  readFile(new URL('payment-success/index.html', root), 'utf8'),
   readFile(new URL('privacy/index.html', root), 'utf8'),
   readFile(new URL('terms/index.html', root), 'utf8'),
   readFile(new URL('refunds/index.html', root), 'utf8'),
   readFile(new URL('service-scope/index.html', root), 'utf8'),
+  readFile(new URL('robots.txt', root), 'utf8'),
+  readFile(new URL('sitemap.xml', root), 'utf8'),
   readFile(new URL('operations/readiness.json', root), 'utf8'),
   readFile(new URL('operations/data-retention.md', root), 'utf8'),
   readFile(new URL('netlify.toml', root), 'utf8'),
@@ -23,8 +26,19 @@ const packageJson = JSON.parse(packageText);
 
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
+assert.match(home, /<meta property="og:image" content="https:\/\/arcweb\.onl\/assets\/showcases\//);
+assert.match(home, /<meta name="twitter:card" content="summary_large_image">/);
+for (const category of ['roofing', 'dental', 'finance']) {
+  assert.match(home, new RegExp(`https:\\/\\/arcwebhq-cpu\\.github\\.io\\/arc-previews\\/showcases\\/${category}\\/`));
+}
+assert.doesNotMatch(home, /summit-ridge-roofing-qa-v20|lumen-dental-showcase|clarity-capital-showcase/);
 assert.doesNotMatch(`${home}\n${privacy}\n${terms}\n${refunds}\n${scope}`, /arcsites\.netlify\.app/);
 assert.doesNotMatch(privacy, /where users stopped/i);
+assert.match(paymentSuccess, /Payment received/i);
+assert.match(paymentSuccess, /seven business days/i);
+assert.match(paymentSuccess, /Payment confirms approval of the preview/i);
+assert.match(paymentSuccess, /ownership handoff/i);
+assert.match(paymentSuccess, /noindex,nofollow,noarchive/i);
 
 assert.doesNotMatch(
   `${home}\n${thankYou}`,
@@ -80,19 +94,55 @@ assert.match(privacy, /does not store names, business names, emails, phone numbe
 assert.match(privacy, /scheduled for deletion after 90 days/i);
 
 assert.match(home, /<b>3–4 minutes<\/b>/);
+assert.match(home, /\.form-section\{[^}]*scroll-margin-top:90px/);
+assert.match(home, /\.form-card\{[^}]*scroll-margin-top:104px/);
 assert.match(home, /id="stepCount">1 \/ 3</);
 assert.match(home, /aria-valuemax="4"/);
 assert.equal((home.match(/class="form-step(?: active)?"/g) || []).length, 4, 'Expected three intake steps plus review.');
 assert.match(home, /Add audience or offer details/);
-assert.match(home, /Adjust website structure/);
+assert.match(home, /Confirm contact form and website structure/);
 assert.match(home, /Add brand direction or proof/);
 assert.match(home, /Add assets or launch details/);
 assert.doesNotMatch(home, /name="target_customer"[^>]*\brequired\b/);
 assert.doesNotMatch(home, /name="why_choose_you"[^>]*\brequired\b/);
 assert.match(home, /function openAncestorDetails\(element\)/);
+assert.match(home, /\['http:','https:'\]\.includes\(new URL\(field\.value\)\.protocol\)/);
+assert.match(home, /if\(field\.type==='url'\)field\.setCustomValidity\(''\)/);
 assert.match(home, /if\(first\)\{openAncestorDetails\(first\);first\.scrollIntoView/);
+assert.match(home, /function requiredGroupsComplete\(step,markErrors=true\)/);
+assert.match(home, /requiredGroupContainers\(step\)/);
+assert.match(home, /if\(!requiredGroupsComplete\(step\)\)ok=false/);
+assert.match(home, /let missingGroup=!requiredGroupsComplete\(step,false\)/);
+assert.match(home, /data-required-group="sections" id="structureDetails"/);
+assert.match(home, /structureStatus\.textContent=show\?'Lead routing required':'Defaults selected'/);
+assert.match(home, /if\(show\)structureDetails\.open=true/);
+assert.match(home, /Confirm its routing email in the next step/);
+assert.match(home, /const clickedCta=/);
+assert.match(home, /track\('arc_cta_click',\{cta:clickedCta\}\)/);
 
 assert.match(home, /Before production launch, ARC must send a real test submission to this address and the recipient must confirm receipt\./);
+
+for (const document of [home, terms, refunds, scope]) assert.match(document, /\$5,000/);
+assert.match(home, /One premium single-page site\./);
+assert.match(scope, /single-page marketing website/);
+assert.match(home, /Two preview revision rounds\./);
+assert.match(scope, /Two consolidated revision rounds before purchase/);
+assert.match(scope, /Payment confirms approval of the then-current preview/);
+assert.match(terms, /Completing payment confirms approval of the then-current preview/);
+assert.match(home, /seven business days/i);
+assert.match(scope, /within seven business days/i);
+assert.match(home, /30 calendar days of launch-related bug support/i);
+assert.match(scope, /30 calendar days of support/i);
+assert.match(scope, /Ongoing maintenance/);
+assert.doesNotMatch(home, /\$500\s*\/\s*(?:mo|month)|monthly maintenance/i);
+
+assert.match(robots, /Disallow: \/thank-you\//);
+assert.match(robots, /Disallow: \/payment-success\//);
+assert.match(robots, /Sitemap: https:\/\/arcweb\.onl\/sitemap\.xml/);
+for (const path of ['/', '/service-scope/', '/terms/', '/privacy/', '/refunds/']) {
+  assert.match(sitemap, new RegExp(`<loc>https:\\/\\/arcweb\\.onl${path.replaceAll('/', '\\/')}<\\/loc>`));
+}
+assert.doesNotMatch(sitemap, /thank-you/);
 
 assert.equal(readiness.schema, 'arc-operations-readiness-v1');
 assert.deepEqual(readiness.offer, {
@@ -134,6 +184,10 @@ assert.match(netlifyConfig, /from = "\/operations\/\*"[\s\S]*?status = 404[\s\S]
 assert.match(netlifyConfig, /from = "\/tests\/\*"[\s\S]*?status = 404[\s\S]*?force = true/);
 assert.match(netlifyConfig, /\[functions\][\s\S]*?directory = "netlify\/functions"/);
 assert.match(netlifyConfig, /\[build\][\s\S]*?command = "npm run build"[\s\S]*?publish = "dist"/);
+assert.match(netlifyConfig, /Content-Security-Policy = "[^"]*default-src 'self'[^"]*form-action 'self'[^"]*frame-ancestors 'none'/);
+assert.match(netlifyConfig, /Strict-Transport-Security = "max-age=31536000"/);
+assert.match(netlifyConfig, /for = "\/thank-you\/\*"[\s\S]*?X-Robots-Tag = "noindex, nofollow, noarchive"/);
+assert.match(netlifyConfig, /for = "\/payment-success\/\*"[\s\S]*?X-Robots-Tag = "noindex, nofollow, noarchive"/);
 for (const blockedPath of ['netlify', 'node_modules']) {
   assert.match(netlifyConfig, new RegExp(`from = "\\/${blockedPath}\\/\\*"[\\s\\S]*?status = 404[\\s\\S]*?force = true`));
 }
