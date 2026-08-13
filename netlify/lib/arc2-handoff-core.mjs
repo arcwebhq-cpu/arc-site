@@ -10,13 +10,13 @@ export const HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
 export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v1';
 export const ARTIFACT_EVIDENCE_SCOPE = 'netlify-claimable-deploy-artifacts';
 export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v1\n';
-export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v1';
-export const PAYMENT_EVIDENCE_SCOPE = 'authoritative-stripe-test-checkout-session';
-export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v1\n';
+export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v2';
+export const PAYMENT_EVIDENCE_SCOPE = 'authoritative-stripe-checkout-session';
+export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v2\n';
 export const LEAD_RECIPIENT_PREFIX = 'arc-lead-route-recipient-v1\n';
-export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v1';
+export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v2';
 export const CLAIM_STATE_EVIDENCE_SCOPE = 'netlify-deploy-and-claim-final-deploy';
-export const CLAIM_STATE_SIGNATURE_PREFIX = 'arc2-claim-state-evidence-signature-v1\n';
+export const CLAIM_STATE_SIGNATURE_PREFIX = 'arc2-claim-state-evidence-signature-v2\n';
 export const OUTBOX_CLAIM_VERSION = 'arc2-final-delivery-outbox-v1';
 export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
@@ -27,7 +27,8 @@ export const HANDOFF_STATES = Object.freeze([
   'SITE_CREATED',
   'PRECLAIM_DEPLOY_READY',
   'LEAD_ROUTE_VERIFIED',
-  'CLAIM_INVITED',
+  'INVITATION_READY',
+  'CLAIM_WRAPPER_CONSUMED',
   'CLAIM_CALLBACK_RECEIVED',
   'CLAIMED_VERIFIED',
   'FINAL_DEPLOY_READY',
@@ -38,9 +39,10 @@ const TRANSITIONS = Object.freeze({
   PAYMENT_VERIFIED: new Set(['SITE_INTENT']),
   SITE_INTENT: new Set(['SITE_CREATED']),
   SITE_CREATED: new Set(['PRECLAIM_DEPLOY_READY']),
-  PRECLAIM_DEPLOY_READY: new Set(['LEAD_ROUTE_VERIFIED']),
-  LEAD_ROUTE_VERIFIED: new Set(['CLAIM_INVITED']),
-  CLAIM_INVITED: new Set(['CLAIM_CALLBACK_RECEIVED']),
+  PRECLAIM_DEPLOY_READY: new Set(['LEAD_ROUTE_VERIFIED', 'INVITATION_READY']),
+  LEAD_ROUTE_VERIFIED: new Set(['INVITATION_READY']),
+  INVITATION_READY: new Set(['CLAIM_WRAPPER_CONSUMED']),
+  CLAIM_WRAPPER_CONSUMED: new Set(['CLAIM_CALLBACK_RECEIVED']),
   CLAIM_CALLBACK_RECEIVED: new Set(['CLAIMED_VERIFIED']),
   CLAIMED_VERIFIED: new Set(['FINAL_DEPLOY_READY']),
   FINAL_DEPLOY_READY: new Set(['DELIVERED']),
@@ -56,13 +58,18 @@ const SAFE_FORM_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const SAFE_PATH_PATTERN = /^(?:index\.html|_headers)$/;
 const PAYMENT_FIELDS = Object.freeze([
   'adult_purchaser_acknowledgement',
-  'amount_subtotal_minor_units',
   'amount_total_minor_units',
   'artifact_manifest_sha256',
+  'automatic_tax_enabled',
+  'automatic_tax_status',
   'bundle_fingerprint',
   'checkout_session_id',
   'client_reference_id_sha256',
   'currency',
+  'customer_address_country',
+  'customer_address_sha256',
+  'customer_address_state',
+  'customer_address_status',
   'customer_email_sha256',
   'handoff_artifact_evidence_sha256',
   'livemode',
@@ -71,10 +78,18 @@ const PAYMENT_FIELDS = Object.freeze([
   'payment_status',
   'preview_folder',
   'price_id',
+  'price_tax_behavior',
+  'product_tax_code',
   'production_content_sha256',
   'quantity',
   'scope',
   'status',
+  'stripe_account_id_sha256',
+  'subtotal_amount_minor_units',
+  'tax_amount_minor_units',
+  'tax_contract_version',
+  'tax_registrations_sha256',
+  'tax_registration_status',
   'terms_of_service_consent',
   'terms_version',
   'version',
@@ -168,6 +183,18 @@ export function configuredEnvironment(env = process.env) {
     'ARC_EMAIL_CLAIM_BINDING_SECRET',
     'ARC_EXPECTED_PAYMENT_LINK_ID',
     'ARC_EXPECTED_PRICE_ID',
+    'ARC_EXPECTED_PRODUCT_TAX_CODE',
+    'ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256',
+    'ARC_EXPECTED_NETLIFY_SITE_ID',
+    'ARC_HANDOFF_ENABLED',
+    'ARC_ADULT_OPERATOR_VERIFIED',
+    'ARC_BUSINESS_LICENSE_VERIFIED',
+    'ARC_TAX_REGISTRATION_VERIFIED',
+    'ARC_TRANSACTIONAL_EMAIL_VERIFIED',
+    'ARC_RETENTION_CONTROL_VERIFIED',
+    'ARC_POSTCLAIM_READBACK_VERIFIED',
+    'ARC_DEVICE_QA_VERIFIED',
+    'ARC_LEAD_ROUTE_VERIFIED',
     'NETLIFY_ADMIN_PAT',
     'NETLIFY_TEAM_SLUG',
     'NETLIFY_TEAM_ACCOUNT_ID',
@@ -178,10 +205,27 @@ export function configuredEnvironment(env = process.env) {
   const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name));
   const shortSecrets = secretNames.filter((name) => String(env[name] || '').length < 32 || String(env[name] || '').length > 512);
   const duplicateSecrets = new Set(secretNames.map((name) => String(env[name] || '')).filter(Boolean)).size !== secretNames.filter((name) => env[name]).length;
+  const attestations = [
+    'ARC_HANDOFF_ENABLED',
+    'ARC_ADULT_OPERATOR_VERIFIED',
+    'ARC_BUSINESS_LICENSE_VERIFIED',
+    'ARC_TAX_REGISTRATION_VERIFIED',
+    'ARC_TRANSACTIONAL_EMAIL_VERIFIED',
+    'ARC_RETENTION_CONTROL_VERIFIED',
+    'ARC_POSTCLAIM_READBACK_VERIFIED',
+    'ARC_DEVICE_QA_VERIFIED',
+    'ARC_LEAD_ROUTE_VERIFIED',
+  ];
+  const invalidAttestations = attestations.filter((name) => env[name] !== 'true');
+  const liveModeSetting = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || 'false');
+  const liveModeValid = liveModeSetting === 'true' || liveModeSetting === 'false';
   const identifiersValid = /^plink_[A-Za-z0-9]+$/.test(String(env.ARC_EXPECTED_PAYMENT_LINK_ID || '')) &&
     /^price_[A-Za-z0-9]+$/.test(String(env.ARC_EXPECTED_PRICE_ID || '')) &&
+    /^txcd_\d{8}$/.test(String(env.ARC_EXPECTED_PRODUCT_TAX_CODE || '')) &&
+    HEX_64_PATTERN.test(String(env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 || '')) &&
     NETLIFY_ID_PATTERN.test(String(env.NETLIFY_TEAM_ACCOUNT_ID || '')) &&
     NETLIFY_ID_PATTERN.test(String(env.NETLIFY_OAUTH_CLIENT_ID || '')) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(env.ARC_EXPECTED_NETLIFY_SITE_ID || '')) &&
     /^[A-Za-z0-9][A-Za-z0-9-]{1,62}$/.test(String(env.NETLIFY_TEAM_SLUG || ''));
   const publicOrigin = String(env.ARC_PUBLIC_ORIGIN || '').trim();
   let originValid = false;
@@ -191,14 +235,27 @@ export function configuredEnvironment(env = process.env) {
   } catch {
     originValid = false;
   }
+  const runtimeSiteValid = env.SITE_ID === env.ARC_EXPECTED_NETLIFY_SITE_ID && env.SITE_NAME === 'arcsites';
+  let runtimeOriginsValid = false;
+  try {
+    const expectedOrigin = new URL(publicOrigin).origin;
+    runtimeOriginsValid = new URL(String(env.URL || '')).origin === expectedOrigin;
+  } catch {
+    runtimeOriginsValid = false;
+  }
   return {
-    enabled: missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && identifiersValid && originValid,
+    enabled: missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
+      liveModeValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
     missing,
     invalid: [
       ...shortSecrets,
       ...(duplicateSecrets ? ['ARC_SECRETS_MUST_BE_DISTINCT'] : []),
+      ...invalidAttestations,
+      ...(liveModeValid ? [] : ['ARC_STRIPE_LIVE_MODE_ENABLED']),
       ...(identifiersValid ? [] : ['ARC_EXPECTED_IDS_OR_NETLIFY_IDS']),
       ...(originValid ? [] : ['ARC_PUBLIC_ORIGIN']),
+      ...(runtimeSiteValid ? [] : ['ARC_PRODUCTION_SITE_BINDING']),
+      ...(runtimeOriginsValid ? [] : ['ARC_PRODUCTION_ORIGIN_BINDING']),
     ],
   };
 }
@@ -218,7 +275,7 @@ export function parseJsonBodyText(body, maximumBytes = 1_048_576) {
   return plainObject(JSON.parse(body), 'Request body');
 }
 
-export function normalizeArtifactEvidence(raw, secret, now = new Date()) {
+export function normalizeArtifactEvidence(raw, secret, now = new Date(), options = {}) {
   const canonical = stringValue(raw, 'Artifact evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Artifact evidence');
   if (canonicalJson(value) !== canonical) throw new TypeError('Artifact evidence is not canonical JSON.');
@@ -241,7 +298,7 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date()) {
   const issuedAt = isoTimestamp(value.issued_at, 'Artifact issued_at');
   const issuedMs = Date.parse(issuedAt);
   const nowMs = new Date(now).getTime();
-  if (!Number.isFinite(nowMs) || issuedMs > nowMs + 5 * 60_000 || issuedMs < nowMs - 24 * 60 * 60_000) {
+  if (!Number.isFinite(nowMs) || issuedMs > nowMs + 5 * 60_000 || (options.enforceFreshness !== false && issuedMs < nowMs - 24 * 60 * 60_000)) {
     throw new TypeError('Artifact evidence is stale or from the future.');
   }
   if (!Array.isArray(value.artifacts) || value.artifacts.length !== 2) throw new TypeError('Exactly two deploy artifacts are required.');
@@ -300,23 +357,40 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   if (!secret || secret.length < 32 || !safeEqual(hex64(signature, 'Payment evidence signature'), hmacHex(secret, `${PAYMENT_SIGNATURE_PREFIX}${canonical}`))) {
     throw new TypeError('Payment evidence signature mismatch.');
   }
+  const liveModeEnabled = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || 'false') === 'true';
+  const checkoutSessionPattern = liveModeEnabled ? /^cs_live_[A-Za-z0-9_]+$/ : /^cs_test_[A-Za-z0-9_]+$/;
+  const amountsValid = Number.isSafeInteger(value.subtotal_amount_minor_units) && value.subtotal_amount_minor_units === 500000 &&
+    Number.isSafeInteger(value.tax_amount_minor_units) && value.tax_amount_minor_units >= 0 && value.tax_amount_minor_units <= 500000 &&
+    Number.isSafeInteger(value.amount_total_minor_units) && value.amount_total_minor_units === value.subtotal_amount_minor_units + value.tax_amount_minor_units;
+  const countryValid = /^[A-Z]{2}$/.test(value.customer_address_country);
+  const regionValid = value.customer_address_country === 'US'
+    ? /^[A-Z]{2}$/.test(value.customer_address_state)
+    : /^[A-Z0-9-]{0,10}$/.test(value.customer_address_state);
+  const destinationValid = countryValid && regionValid &&
+    !(value.customer_address_country === 'US' && value.customer_address_state === 'WA' && value.tax_amount_minor_units <= 0);
   if (value.preview_folder !== artifactEvidence.preview_folder ||
       value.production_content_sha256 !== artifactEvidence.production_content_sha256 ||
       value.artifact_manifest_sha256 !== artifactEvidence.artifact_manifest_sha256 ||
       value.handoff_artifact_evidence_sha256 !== sha256Hex(canonicalJson(artifactEvidence)) ||
       value.bundle_fingerprint !== artifactEvidence.bundle_fingerprint ||
-      value.livemode !== false || value.mode !== 'payment' || value.status !== 'complete' ||
-      value.payment_status !== 'paid' || value.currency !== 'usd' || value.amount_total_minor_units !== 500000 ||
-      value.amount_subtotal_minor_units !== 500000 || value.quantity !== 1 ||
+      value.livemode !== liveModeEnabled || value.mode !== 'payment' || value.status !== 'complete' ||
+      value.payment_status !== 'paid' || value.currency !== 'usd' || !amountsValid ||
+      value.automatic_tax_enabled !== true || value.automatic_tax_status !== 'complete' ||
+      value.price_tax_behavior !== 'exclusive' || value.product_tax_code !== env.ARC_EXPECTED_PRODUCT_TAX_CODE ||
+      value.tax_contract_version !== 'arc-tax-v1' || !destinationValid || value.customer_address_status !== 'verified' ||
+      value.tax_registration_status !== 'verified' || value.quantity !== 1 ||
       value.payment_link_id !== env.ARC_EXPECTED_PAYMENT_LINK_ID ||
       value.price_id !== env.ARC_EXPECTED_PRICE_ID ||
-      value.terms_of_service_consent !== 'accepted' || value.terms_version !== '2026-08-11' ||
+      !safeEqual(hex64(value.stripe_account_id_sha256, 'Stripe account id sha256'), env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256) ||
+      value.terms_of_service_consent !== 'accepted' || value.terms_version !== '2026-08-12' ||
       value.adult_purchaser_acknowledgement !== 'accepted' ||
-      !/^cs_test_[A-Za-z0-9_]+$/.test(value.checkout_session_id)) {
+      !checkoutSessionPattern.test(value.checkout_session_id)) {
     throw new TypeError('Payment evidence bindings are invalid.');
   }
   hex64(value.customer_email_sha256, 'Customer email sha256');
   hex64(value.client_reference_id_sha256, 'Client reference id sha256');
+  hex64(value.customer_address_sha256, 'Customer address sha256');
+  hex64(value.tax_registrations_sha256, 'Tax registrations sha256');
   return { canonical, value, digest: sha256Hex(canonical) };
 }
 
@@ -337,7 +411,7 @@ export function extractNetlifyFormName(indexBytes) {
   return validateFormName(nameMatch[2]);
 }
 
-export function normalizeStartPayload(input, env, now = new Date()) {
+export function normalizeStartPayload(input, env, now = new Date(), options = {}) {
   plainObject(input, 'Start payload');
   exactKeys(input, [
     'artifact_evidence',
@@ -348,7 +422,7 @@ export function normalizeStartPayload(input, env, now = new Date()) {
     'payment_evidence',
     'payment_evidence_hmac_sha256',
   ], 'Start payload');
-  const artifact = normalizeArtifactEvidence(input.artifact_evidence, env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET, now);
+  const artifact = normalizeArtifactEvidence(input.artifact_evidence, env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET, now, options);
   if (!verifyArtifactSignature(artifact.canonical, input.artifact_evidence_hmac_sha256, env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET)) {
     throw new TypeError('Artifact evidence signature mismatch.');
   }
@@ -413,18 +487,25 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     netlify_source_account_id: env.NETLIFY_TEAM_ACCOUNT_ID,
     netlify_site_id: null,
     site_created_at: null,
+    preclaim_deploy_attempted_at: null,
+    preclaim_deploy_candidate_id: null,
     preclaim_deploy_id: null,
+    final_deploy_attempted_at: null,
+    final_deploy_candidate_id: null,
     final_deploy_id: null,
+    email_hook_attempted_at: null,
     form_id: null,
     hook_id: null,
     destination_account_id: null,
+    lead_route_receipt_sha256: null,
     claim_token_hmac_sha256: null,
+    claim_token_consumed_hmac_sha256: null,
     claim_token_expires_at: null,
     claim_token_used_at: null,
     claim_wrapper_consumed_at: null,
     claim_jwt_issued_at: null,
-    claim_invitation_sent_at: null,
-    claim_invitation_provider_message_id_sha256: null,
+    claim_invitation_ready_at: null,
+    lead_route_provider_message_id_sha256: null,
     claim_callback_received_at: null,
     claimed_verified_at: null,
     final_deploy_ready_at: null,
@@ -461,12 +542,12 @@ export function reviseRecord(record, patch = {}, now = new Date()) {
 }
 
 export function publicStatus(record, now = new Date()) {
+  const nowMs = new Date(now).getTime();
   const status = {
     status: record.state,
-    site_ready: ['PRECLAIM_DEPLOY_READY', 'LEAD_ROUTE_VERIFIED', 'CLAIM_INVITED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state),
-    // Invitation issuance and wrapper exchange are not implemented, so no
-    // stored/fabricated state is externally claimable in this scaffold.
-    claim_available: false,
+    site_ready: ['PRECLAIM_DEPLOY_READY', 'LEAD_ROUTE_VERIFIED', 'INVITATION_READY', 'CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state),
+    claim_available: record.state === 'INVITATION_READY' && Number.isFinite(nowMs) &&
+      Date.parse(record.claim_token_expires_at) > nowMs,
     claim_verified: ['CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state),
     delivery_ready: ['FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state),
     delivered: record.state === 'DELIVERED',
@@ -477,12 +558,19 @@ export function publicStatus(record, now = new Date()) {
 }
 
 export function netlifyClaimUrl(record, env) {
-  if (record.state !== 'CLAIM_INVITED') throw new TypeError('Claim link is not available in the current state.');
+  if (record.state !== 'CLAIM_WRAPPER_CONSUMED') throw new TypeError('Claim link is not available in the current state.');
   const claimWebhook = `${new URL(env.ARC_PUBLIC_ORIGIN).origin}/api/arc2/claim-webhook`;
+  const issuedAt = record.claim_jwt_issued_at;
+  const expiresAt = Math.floor(Date.parse(record.claim_token_expires_at) / 1000);
+  if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt) {
+    throw new TypeError('Claim JWT lifetime is invalid.');
+  }
   const token = signJwtHS256({
     client_id: env.NETLIFY_OAUTH_CLIENT_ID,
     session_id: record.netlify_session_id,
     claim_webhook: claimWebhook,
+    iat: issuedAt,
+    exp: expiresAt,
   }, env.NETLIFY_OAUTH_CLIENT_SECRET);
   return `https://app.netlify.com/claim#${token}`;
 }
@@ -686,7 +774,10 @@ export async function downloadVerifiedArtifacts(siteId, artifacts, env, fetchImp
   for (const artifact of artifacts) {
     const raw = await netlifyRequest(`/sites/${encodeURIComponent(siteId)}/files/${artifact.path}`, {
       method: 'GET',
-      headers: { Accept: 'application/vnd.bitballoon.v1.raw' },
+      headers: {
+        Accept: 'application/vnd.bitballoon.v1.raw',
+        'Content-Type': 'application/vnd.bitballoon.v1.raw',
+      },
     }, env, fetchImpl);
     const bytes = Buffer.from(await raw.arrayBuffer());
     if (bytes.length !== artifact.size || sha256Hex(bytes) !== artifact.sha256) throw new Error('Netlify raw source bytes mismatch.');
@@ -700,7 +791,7 @@ export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fe
   const account = await netlifyJson(`/accounts/${encodeURIComponent(expected.accountId)}`, env, fetchImpl);
   const deployId = expected.deployId;
   const deploy = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}`, env, fetchImpl);
-  if (site.id !== record.netlify_site_id || site.session_id !== record.netlify_session_id || account.id !== expected.accountId ||
+  if (site.id !== record.netlify_site_id || site.name !== record.netlify_site_name || site.session_id !== record.netlify_session_id || account.id !== expected.accountId ||
       site.account_id !== expected.accountId || deploy.id !== deployId || deploy.site_id !== record.netlify_site_id ||
       deploy.state !== 'ready' || site.published_deploy?.id !== deployId) {
     throw new Error('Netlify site, account, session, or deploy binding failed.');
@@ -720,7 +811,7 @@ export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fe
     hook.form_id === expected.formId && hook.type === 'email' && hook.event === 'submission_created' && hook.disabled !== true &&
     sha256Hex(String(hook.data?.email || '').trim().toLowerCase()) === expected.leadEmailSha256);
   if (matchingHooks.length !== 1) throw new Error('Netlify hook binding failed.');
-  const productionUrl = normalizeProductionUrl(site.ssl_url || site.url);
+  const productionUrl = canonicalNetlifySiteUrl(record.netlify_site_name);
   const publicResponse = await fetchImpl(productionUrl, { method: 'GET', redirect: 'error' });
   if (!publicResponse.ok || !(publicResponse.headers.get('x-robots-tag') || '').toLowerCase().includes('noindex')) {
     throw new Error('Published handoff is unavailable or missing noindex protection.');
@@ -734,6 +825,12 @@ export function normalizeProductionUrl(value) {
     throw new TypeError('Netlify production URL must be a plain HTTPS root.');
   }
   return url.toString();
+}
+
+export function canonicalNetlifySiteUrl(siteName) {
+  const value = stringValue(siteName, 'Netlify site name', 5, 63);
+  if (!SAFE_SITE_NAME_PATTERN.test(value)) throw new TypeError('Netlify site name is invalid.');
+  return `https://${value}.netlify.app/`;
 }
 
 export function normalizeClaimWebhook(input) {
@@ -783,7 +880,7 @@ export function createOutboxClaim(record, env) {
   };
 }
 
-export function createClaimStateEvidence(record, env, now = new Date()) {
+export function createClaimStateEvidence(record, env) {
   if (record.state !== 'FINAL_DEPLOY_READY' || record.outbox_claim_status !== 'CLAIMED') {
     throw new TypeError('Claim-state evidence is unavailable before final deploy and outbox claim.');
   }
@@ -801,15 +898,17 @@ export function createClaimStateEvidence(record, env, now = new Date()) {
     netlify_deploy_id_sha256: sha256Hex(record.final_deploy_id),
     netlify_destination_account_id_sha256: sha256Hex(record.destination_account_id),
     production_url: normalizeProductionUrl(record.production_url),
-    claim_invitation_sent_at: isoTimestamp(record.claim_invitation_sent_at, 'Claim invitation timestamp'),
+    claim_invitation_ready_at: isoTimestamp(record.claim_invitation_ready_at, 'Claim invitation ready timestamp'),
     claim_callback_received_at: isoTimestamp(record.claim_callback_received_at, 'Claim callback timestamp'),
     claimed_verified_at: isoTimestamp(record.claimed_verified_at, 'Claim verification timestamp'),
     final_deploy_ready_at: isoTimestamp(record.final_deploy_ready_at, 'Final deploy timestamp'),
     outbox_claim_status: 'CLAIMED',
     outbox_claim_key_hmac_sha256: hex64(record.outbox_claim_key_hmac_sha256, 'Outbox claim key HMAC'),
-    issued_at: new Date(now).toISOString(),
+    // Evidence is an immutable snapshot of the verification transition. Status
+    // reads must never make stale provider state look freshly re-verified.
+    issued_at: isoTimestamp(record.final_deploy_ready_at, 'Final deploy timestamp'),
   };
-  const orderedTimes = [value.claim_invitation_sent_at, value.claim_callback_received_at, value.claimed_verified_at, value.final_deploy_ready_at, value.issued_at]
+  const orderedTimes = [value.claim_invitation_ready_at, value.claim_callback_received_at, value.claimed_verified_at, value.final_deploy_ready_at, value.issued_at]
     .map((timestamp) => Date.parse(timestamp));
   if (orderedTimes.some((timestamp, index) => index > 0 && timestamp < orderedTimes[index - 1])) {
     throw new TypeError('Claim-state timestamps are out of order.');
@@ -830,32 +929,91 @@ export function validateExpectedBindings(record) {
     hex64(record[field], field);
   }
   if (record.claim_token_hmac_sha256 !== null) hex64(record.claim_token_hmac_sha256, 'claim_token_hmac_sha256');
-  // Later claim states are externally unreachable in this scaffold. These
-  // checks only ensure a manually introduced/future record fails closed; token
-  // issuance and wrapper-consumption semantics are deliberately not modeled.
-  if (record.claim_invitation_sent_at === null) {
+  if (record.claim_token_consumed_hmac_sha256 !== null) hex64(record.claim_token_consumed_hmac_sha256, 'claim_token_consumed_hmac_sha256');
+  if (record.lead_route_receipt_sha256 !== null) hex64(record.lead_route_receipt_sha256, 'lead_route_receipt_sha256');
+  for (const field of ['preclaim_deploy_attempted_at', 'final_deploy_attempted_at', 'email_hook_attempted_at']) {
+    if (record[field] !== null) isoTimestamp(record[field], field);
+  }
+  for (const field of ['preclaim_deploy_candidate_id', 'final_deploy_candidate_id']) {
+    if (record[field] !== null) identifier(record[field], field);
+  }
+  if (record.preclaim_deploy_candidate_id !== null && record.preclaim_deploy_attempted_at === null) throw new TypeError('Preclaim deploy candidate lacks an attempt intent.');
+  if (record.final_deploy_candidate_id !== null && record.final_deploy_attempted_at === null) throw new TypeError('Final deploy candidate lacks an attempt intent.');
+  if (record.claim_invitation_ready_at === null) {
     if (record.claim_token_hmac_sha256 !== null || record.claim_token_expires_at !== null || record.claim_token_used_at !== null ||
-        record.claim_wrapper_consumed_at !== null || record.claim_invitation_provider_message_id_sha256 !== null ||
-        ['CLAIM_INVITED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state)) {
+        record.claim_token_consumed_hmac_sha256 !== null || record.claim_wrapper_consumed_at !== null ||
+        record.lead_route_provider_message_id_sha256 !== null || record.lead_route_receipt_sha256 !== null ||
+        ['INVITATION_READY', 'CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state)) {
       throw new TypeError('Unissued claim token fields must be null.');
     }
   } else {
-    hex64(record.claim_invitation_provider_message_id_sha256, 'claim_invitation_provider_message_id_sha256');
-    const sentAt = Date.parse(isoTimestamp(record.claim_invitation_sent_at, 'claim_invitation_sent_at'));
+    hex64(record.lead_route_provider_message_id_sha256, 'lead_route_provider_message_id_sha256');
+    const readyAt = Date.parse(isoTimestamp(record.claim_invitation_ready_at, 'claim_invitation_ready_at'));
     const expiresAt = Date.parse(isoTimestamp(record.claim_token_expires_at, 'claim_token_expires_at'));
-    if (expiresAt <= sentAt || expiresAt - sentAt > CLAIM_TOKEN_TTL_SECONDS * 1000) {
+    if (expiresAt <= readyAt || expiresAt - readyAt > CLAIM_TOKEN_TTL_SECONDS * 1000) {
       throw new TypeError('Claim token expiry ordering is invalid.');
     }
-    if (record.state === 'LEAD_ROUTE_VERIFIED' && record.claim_token_hmac_sha256 === null) {
-      throw new TypeError('Issued claim token hash is missing.');
+    if (record.lead_route_receipt_sha256 === null) throw new TypeError('Issued claim token lacks lead-route evidence.');
+    if (record.state === 'INVITATION_READY' && (record.claim_token_hmac_sha256 === null || record.claim_token_consumed_hmac_sha256 !== null ||
+        record.claim_token_used_at !== null || record.claim_wrapper_consumed_at !== null)) {
+      throw new TypeError('Issued claim token fields are invalid.');
     }
-    if (['CLAIM_INVITED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state) &&
-        (record.claim_token_hmac_sha256 !== null || !record.claim_token_used_at || !record.claim_wrapper_consumed_at)) {
+    if (['CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state) &&
+        (record.claim_token_hmac_sha256 !== null || record.claim_token_consumed_hmac_sha256 === null || !record.claim_token_used_at || !record.claim_wrapper_consumed_at)) {
       throw new TypeError('Consumed claim token fields are invalid.');
     }
   }
   if (!PREVIEW_FOLDER_PATTERN.test(record.preview_folder) || !Array.isArray(record.artifacts) || record.artifacts.length !== 2 ||
       validateFormName(record.form_name) !== record.form_name) throw new TypeError('Stored artifact bindings are invalid.');
+  const stateRank = HANDOFF_STATES.indexOf(record.state);
+  const atLeast = (state) => stateRank >= HANDOFF_STATES.indexOf(state);
+  const requireIdentifier = (field, required) => {
+    if (required) identifier(record[field], field);
+    else if (record[field] !== null) throw new TypeError(`${field} must be null before its state transition.`);
+  };
+  const requireTimestamp = (field, required) => {
+    if (required) isoTimestamp(record[field], field);
+    else if (record[field] !== null) throw new TypeError(`${field} must be null before its state transition.`);
+  };
+  requireIdentifier('netlify_source_account_id', true);
+  requireIdentifier('netlify_site_id', atLeast('SITE_CREATED'));
+  requireTimestamp('site_created_at', atLeast('SITE_CREATED'));
+  requireIdentifier('preclaim_deploy_id', atLeast('PRECLAIM_DEPLOY_READY'));
+  requireIdentifier('destination_account_id', atLeast('CLAIM_CALLBACK_RECEIVED'));
+  requireTimestamp('claim_callback_received_at', atLeast('CLAIM_CALLBACK_RECEIVED'));
+  requireTimestamp('claimed_verified_at', atLeast('CLAIMED_VERIFIED'));
+  requireIdentifier('final_deploy_id', atLeast('FINAL_DEPLOY_READY'));
+  requireTimestamp('final_deploy_ready_at', atLeast('FINAL_DEPLOY_READY'));
+  requireTimestamp('delivered_at', record.state === 'DELIVERED');
+  if (atLeast('CLAIM_CALLBACK_RECEIVED')) normalizeProductionUrl(record.production_url);
+  else if (record.production_url !== null) throw new TypeError('production_url must be null before verified claim readback.');
+  if (atLeast('CLAIM_WRAPPER_CONSUMED')) {
+    if (!Number.isSafeInteger(record.claim_jwt_issued_at) || record.claim_jwt_issued_at < 1 ||
+        record.claim_jwt_issued_at * 1000 < Date.parse(record.claim_invitation_ready_at) ||
+        record.claim_jwt_issued_at * 1000 > Date.parse(record.claim_token_used_at) + 1000) {
+      throw new TypeError('claim_jwt_issued_at is invalid or out of order.');
+    }
+  } else if (record.claim_jwt_issued_at !== null) throw new TypeError('claim_jwt_issued_at must be null before claim exchange.');
+  if (atLeast('FINAL_DEPLOY_READY')) {
+    if (record.outbox_claim_status !== 'CLAIMED') throw new TypeError('Final deploy lacks a claimed delivery outbox.');
+    hex64(record.outbox_claim_key_hmac_sha256, 'outbox_claim_key_hmac_sha256');
+    if (record.final_deploy_candidate_id !== record.final_deploy_id) throw new TypeError('Final deploy candidate and verified deploy differ.');
+  } else if (record.outbox_claim_status !== null || record.outbox_claim_key_hmac_sha256 !== null) {
+    throw new TypeError('Delivery outbox must be null before final deploy verification.');
+  }
+  const orderedTimestamps = [
+    record.created_at,
+    record.site_created_at,
+    record.claim_invitation_ready_at,
+    record.claim_token_used_at,
+    record.claim_callback_received_at,
+    record.claimed_verified_at,
+    record.final_deploy_ready_at,
+    record.delivered_at,
+  ].filter(Boolean).map((value) => Date.parse(isoTimestamp(value, 'state timestamp')));
+  if (orderedTimestamps.some((value, index) => index > 0 && value < orderedTimestamps[index - 1])) {
+    throw new TypeError('Stored handoff timestamps are out of order.');
+  }
   return record;
 }
 
