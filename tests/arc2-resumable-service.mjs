@@ -1,0 +1,121 @@
+import assert from 'node:assert/strict';
+import { canonicalJson, hmacHex, sha256Hex, validateExpectedBindings } from '../netlify/lib/arc2-handoff-core.mjs';
+import { createEntry, readEntry } from '../netlify/lib/arc2-handoff-store.mjs';
+import {
+  exchangeClaimBearer,
+  getHandoffStatus,
+  leadRouteReceiptContract,
+  markClaimInvitationReady,
+} from '../netlify/lib/arc2-handoff-service.mjs';
+
+class FakeStore {
+  constructor() { this.values = new Map(); this.sequence = 0; }
+  async getWithMetadata(key) {
+    const entry = this.values.get(key);
+    return entry ? { data: structuredClone(entry.data), etag: entry.etag } : null;
+  }
+  async setJSON(key, data, options = {}) {
+    const current = this.values.get(key);
+    if (options.onlyIfNew && current) return { modified: false };
+    if (options.onlyIfMatch && current?.etag !== options.onlyIfMatch) return { modified: false };
+    const etag = `e-${++this.sequence}`;
+    this.values.set(key, { data: structuredClone(data), etag });
+    return { modified: true, etag };
+  }
+}
+
+const now = new Date('2026-08-12T20:00:00.000Z');
+const handoffId = 'a'.repeat(64);
+const env = {
+  ARC_CLAIM_TOKEN_SECRET: 'claim-token-secret-unique-0123456789abcdef',
+  ARC_LEAD_ROUTE_EVIDENCE_SECRET: 'route-evidence-secret-unique-0123456789abcdef',
+  ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-binding-secret-unique-0123456789abcdef',
+  NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
+  NETLIFY_OAUTH_CLIENT_SECRET: 'oauth-client-secret-unique-0123456789abcdef',
+  ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
+};
+const record = {
+  schema: 'arc2-netlify-handoff-v1', handoff_id: handoffId, state: 'PRECLAIM_DEPLOY_READY', revision: 8,
+  created_at: now.toISOString(), updated_at: now.toISOString(),
+  payment_evidence_sha256: '1'.repeat(64), artifact_evidence_sha256: '2'.repeat(64), artifact_manifest_sha256: '3'.repeat(64),
+  bundle_fingerprint: '4'.repeat(64), production_content_sha256: '5'.repeat(64), customer_email_sha256: '6'.repeat(64),
+  lead_notification_email_sha256: sha256Hex('leads@example.test'), preview_folder: 'sample-roofing-a1b2c3d4',
+  artifacts: [{ path: '_headers', sha256: '7'.repeat(64), size: 10 }, { path: 'index.html', sha256: '8'.repeat(64), size: 20 }],
+  form_name: 'sample-lead', netlify_session_id: '11111111-1111-4111-8111-111111111111',
+  netlify_site_name: 'arc-' + 'b'.repeat(24), netlify_source_account_id: 'source-account-123', netlify_site_id: 'site-arc123',
+  site_created_at: now.toISOString(), preclaim_deploy_id: 'deploy-pre123', final_deploy_id: null,
+  preclaim_deploy_attempted_at: now.toISOString(), preclaim_deploy_candidate_id: 'deploy-pre123',
+  final_deploy_attempted_at: null, final_deploy_candidate_id: null, email_hook_attempted_at: now.toISOString(),
+  form_id: 'form-arc123', hook_id: 'hook-arc123', destination_account_id: null,
+  lead_route_receipt_sha256: null, claim_token_hmac_sha256: null, claim_token_consumed_hmac_sha256: null,
+  claim_token_expires_at: null, claim_token_used_at: null, claim_wrapper_consumed_at: null,
+  claim_jwt_issued_at: null, claim_invitation_ready_at: null, lead_route_provider_message_id_sha256: null,
+  claim_callback_received_at: null, claimed_verified_at: null, final_deploy_ready_at: null, production_url: null,
+  outbox_claim_status: null, outbox_claim_key_hmac_sha256: null, delivered_at: null,
+};
+const store = new FakeStore();
+await createEntry(store, `handoffs/${handoffId}`, record);
+
+const evidenceValue = {
+  version: leadRouteReceiptContract.version,
+  scope: leadRouteReceiptContract.scope,
+  handoff_id: handoffId,
+  netlify_site_id_sha256: sha256Hex(record.netlify_site_id),
+  form_id_sha256: sha256Hex(record.form_id),
+  hook_id_sha256: sha256Hex(record.hook_id),
+  recipient_email_sha256: record.lead_notification_email_sha256,
+  provider_message_id_sha256: sha256Hex('provider-message'),
+  inbox_receipt_id_sha256: sha256Hex('inbox-receipt'),
+  received_at: new Date(now.getTime() - 30_000).toISOString(),
+  issued_at: now.toISOString(),
+};
+const evidence = canonicalJson(evidenceValue);
+const signature = hmacHex(env.ARC_LEAD_ROUTE_EVIDENCE_SECRET, `${leadRouteReceiptContract.signaturePrefix}${evidence}`);
+const adapters = { store, clock: () => new Date(now) };
+const issued = await markClaimInvitationReady(handoffId, evidence, signature, env, adapters);
+assert.equal(issued.record.state, 'INVITATION_READY');
+assert.equal(issued.record.revision, 9, 'Receipt binding and invitation readiness must be one atomic record transition.');
+assert.match(issued.claimBearer, /^[A-Za-z0-9_-]{43}$/);
+assert.equal(JSON.stringify([...store.values.values()]).includes(issued.claimBearer), false, 'Raw claim bearer must not be durable state.');
+const replay = await markClaimInvitationReady(handoffId, evidence, signature, env, adapters);
+assert.equal(replay.claimBearer, issued.claimBearer, 'Lost invitation response must recover the same bearer.');
+const elevenMinuteReplay = await markClaimInvitationReady(handoffId, evidence, signature, env, {
+  ...adapters, clock: () => new Date(now.getTime() + 11 * 60_000),
+});
+assert.equal(elevenMinuteReplay.claimBearer, issued.claimBearer, 'READY recovery must not re-apply receipt issuance freshness.');
+const twentyNineMinuteReplay = await markClaimInvitationReady(handoffId, evidence, signature, env, {
+  ...adapters, clock: () => new Date(now.getTime() + 29 * 60_000),
+});
+assert.equal(twentyNineMinuteReplay.claimBearer, issued.claimBearer, 'READY recovery must recover the original bearer through its TTL.');
+await assert.rejects(markClaimInvitationReady(handoffId, evidence, signature, env, {
+  ...adapters, clock: () => new Date(now.getTime() + 30 * 60_000),
+}), /BEARER_EXPIRED/, 'READY recovery must stop exactly at expiry.');
+assert.equal((await getHandoffStatus(handoffId, env, adapters)).claim_available, true);
+
+const exchanged = await exchangeClaimBearer(handoffId, issued.claimBearer, env, adapters);
+assert.match(exchanged.claimUrl, /^https:\/\/app\.netlify\.com\/claim#[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+const exchangeReplay = await exchangeClaimBearer(handoffId, issued.claimBearer, env, adapters);
+assert.equal(exchangeReplay.claimUrl, exchanged.claimUrl, 'Lost exchange response must recover the same official JWT fragment URL.');
+await assert.rejects(exchangeClaimBearer(handoffId, 'z'.repeat(43), env, adapters), /BEARER_INVALID/);
+const stored = await readEntry(store, `handoffs/${handoffId}`);
+assert.equal(stored.record.state, 'CLAIM_WRAPPER_CONSUMED');
+assert.equal(stored.record.claim_token_hmac_sha256, null);
+assert.equal(JSON.stringify([...store.values.values()]).includes(issued.claimBearer), false);
+assert.equal((await getHandoffStatus(handoffId, env, adapters)).claim_available, false);
+const consumedReceiptReplay = await markClaimInvitationReady(handoffId, evidence, signature, env, {
+  ...adapters, clock: () => new Date(now.getTime() + 11 * 60_000),
+});
+assert.equal(consumedReceiptReplay.alreadyConsumed, true, 'Exact receipt replay after exchange must remain stable without refreshing issuance.');
+assert.equal(consumedReceiptReplay.claimBearer, null);
+const boundaryStore = new FakeStore();
+await createEntry(boundaryStore, `handoffs/${handoffId}`, record);
+const boundaryIssued = await markClaimInvitationReady(handoffId, evidence, signature, env, { store: boundaryStore, clock: () => new Date(now) });
+await assert.rejects(exchangeClaimBearer(handoffId, boundaryIssued.claimBearer, env, {
+  store: boundaryStore, clock: () => new Date(now.getTime() + 30 * 60_000 - 999),
+}), /BEARER_INVALID/, 'Sub-second expiry boundary must fail before consuming state.');
+assert.equal((await readEntry(boundaryStore, `handoffs/${handoffId}`)).record.state, 'INVITATION_READY');
+assert.throws(() => validateExpectedBindings({ ...stored.record, claim_jwt_issued_at: 0 }), /claim_jwt_issued_at/);
+assert.throws(() => validateExpectedBindings({ ...stored.record, destination_account_id: 'customer-account-123' }), /must be null/);
+assert.throws(() => validateExpectedBindings({ ...stored.record, outbox_claim_status: 'CLAIMED' }), /outbox must be null/i);
+
+console.log('ARC2 resumable claim service contract passed.');

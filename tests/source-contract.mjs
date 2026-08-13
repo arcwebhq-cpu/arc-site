@@ -31,7 +31,7 @@ const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, r
   readFile(new URL('netlify/functions/arc2-handoff-start.mjs', root), 'utf8'),
   readFile(new URL('netlify/functions/arc2-claim.mjs', root), 'utf8'),
   readFile(new URL('netlify/functions/arc2-claim-webhook.mjs', root), 'utf8'),
-  readFile(new URL('netlify/functions/arc2-claim-invitation-sent.mjs', root), 'utf8'),
+  readFile(new URL('netlify/functions/arc2-claim-invitation-ready.mjs', root), 'utf8'),
   readFile(new URL('netlify/functions/arc2-handoff-status.mjs', root), 'utf8'),
 ]);
 const readiness = JSON.parse(readinessText);
@@ -60,9 +60,16 @@ assert.match(paymentSuccess, /<script>if\(location\.search\)history\.replaceStat
 assert.match(claimPage, /noindex,nofollow,noarchive/i);
 assert.match(claimPage, /no-referrer/i);
 assert.match(claimScript, /history\.replaceState\(null, '', '\/claim\/'\)/);
-assert.match(claimPage, /Ownership claims are not available yet/i);
-assert.match(claimPage, /No invitation was used/i);
-assert.doesNotMatch(claimScript, /fetch\(|Authorization|Bearer|claim_url|location\.replace/);
+assert.match(claimPage, /Preparing your secure handoff/i);
+assert.ok(claimScript.includes("rawFragment.match(/^#arc2\\.([a-f0-9]{64})\\.([A-Za-z0-9_-]{43})$/)"));
+assert.match(claimScript, /fetch\('\/api\/arc2\/claim'/);
+assert.match(claimScript, /Authorization: `Bearer \$\{bearer\}`/);
+assert.match(claimScript, /'X-ARC-Handoff-Id': handoffId/);
+assert.match(claimScript, /credentials: 'omit'/);
+assert.match(claimScript, /referrerPolicy: 'no-referrer'/);
+assert.match(claimScript, /hostname !== 'app\.netlify\.com'/);
+assert.match(claimScript, /location\.replace\(target\.toString\(\)\)/);
+assert.doesNotMatch(claimScript, /localStorage|sessionStorage|console\.|dataLayer|analytics/i);
 assert.doesNotMatch(claimScript, /[?&](?:token|secret|handoff)=/i);
 
 assert.doesNotMatch(
@@ -104,6 +111,13 @@ assert.match(home, /const allowedRasterTypes=new Set\(\['image\/png','image\/jpe
 assert.match(home, /if\(!isAllowedRaster\(file\)\)/);
 
 assert.match(home, /const draftKey='arc-preview-draft-v7'/);
+assert.match(home, /data-intake-enabled="false"/);
+assert.match(home, /data-intake-build-enabled="true"/);
+assert.match(home, /form\.dataset\.intakeBuildEnabled==='true'/);
+assert.match(home, /id="projectForm" inert/);
+assert.match(home, /Preview requests are temporarily paused while delivery routing is verified/);
+assert.match(home, /fetch\('\/api\/intake\/readiness'/);
+assert.match(home, /ARC_INTAKE_ENABLED|intake_enabled/);
 assert.match(home, /const draftTtlMs=7\*24\*60\*60\*1000/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /freshConfirmationFields\.has\(field\.name\)/);
@@ -116,10 +130,10 @@ for (const untrustedHiddenName of ['submission_timestamp', 'submission_id', 'lea
   assert.doesNotMatch(home, new RegExp(`name="${untrustedHiddenName}"`));
 }
 assert.match(home, /This does not authorize a charge\./);
-assert.match(home, /adult purchaser must accept the then-current purchase terms again at checkout/i);
+assert.match(home, /adult purchaser must accept the then-current purchase terms and checkout total again at checkout/i);
 assert.match(terms, /does not authorize a charge/i);
 assert.match(terms, /affirmatively accept the then-current purchase terms again at checkout/i);
-assert.match(terms, /Version 2026-08-11/);
+assert.match(terms, /Version 2026-08-12/);
 assert.match(terms, /bearer credential/i);
 assert.match(terms, /creator application can retain a limited ability to push deploys/i);
 assert.match(terms, /will not deploy afterward without new written authorization/i);
@@ -151,10 +165,10 @@ assert.match(privacy, /does not store names, business names, emails, phone numbe
 assert.match(privacy, /scheduled for deletion after 90 days/i);
 
 assert.match(home, /<b>3–4 minutes<\/b>/);
-assert.match(home, /Tell us about your business\. We build the preview\. Pay \$5,000 only when you approve it\./);
-assert.match(home, /exact service price remains \$5,000 USD/i);
-assert.match(home, /Stripe may display the price in your local currency/i);
-assert.match(home, /currency-conversion fee/i);
+assert.match(home, /Pay the \$5,000 service subtotal plus applicable sales tax only when you approve it/i);
+assert.match(home, /service subtotal is \$5,000 USD/i);
+assert.match(home, /Applicable sales tax is calculated from the purchaser’s destination address/i);
+assert.match(home, /subtotal, tax, and final total must be shown before payment/i);
 assert.match(home, /\.form-section\{[^}]*scroll-margin-top:90px/);
 assert.match(home, /\.form-card\{[^}]*scroll-margin-top:104px/);
 assert.match(home, /id="stepCount">1 \/ 3</);
@@ -188,6 +202,11 @@ assert.match(home, /track\('arc_cta_click',\{cta:clickedCta\}\)/);
 assert.match(home, /Before production launch, ARC must send a real test submission to this address and the recipient must confirm receipt\./);
 
 for (const document of [home, terms, refunds, scope]) assert.match(document, /\$5,000/);
+for (const document of [home, terms, refunds, scope]) assert.match(document, /applicable sales tax/i);
+assert.match(terms, /required tax registration and Stripe automatic-tax configuration are verified/i);
+assert.match(scope, /required tax registration and automatic-tax configuration are verified/i);
+assert.match(scope, /reusable design system, templates, components, and automation/i);
+assert.match(terms, /not represented as an entirely from-scratch software build/i);
 assert.match(home, /One premium single-page site\./);
 assert.match(scope, /single-page marketing website/);
 assert.match(home, /Two preview revision rounds\./);
@@ -212,13 +231,18 @@ assert.doesNotMatch(sitemap, /thank-you/);
 assert.equal(readiness.schema, 'arc-operations-readiness-v1');
 assert.deepEqual(readiness.offer, {
   currency: 'USD',
-  amount: 5000,
+  subtotal_amount: 5000,
+  tax: 'applicable-destination-based-sales-tax-added-at-checkout',
   billing: 'one-time',
   deliverable: 'one-premium-single-page-website',
 });
 assert.equal(readiness.checkout.status, 'blocked');
 assert.equal(readiness.checkout.allowed_mode, 'test-only');
 assert.ok(readiness.checkout.required_evidence.includes('adult-purchaser-affirmative-acceptance'));
+assert.ok(readiness.checkout.required_evidence.includes('automatic-tax-complete'));
+assert.equal(readiness.manual_activation_gates.status, 'blocked');
+assert.equal(readiness.manual_activation_gates.stripe_live_mode_default, false);
+assert.deepEqual(readiness.manual_activation_gates.verified_attestations, []);
 assert.equal(readiness.analytics.status, 'pending-live-verification');
 assert.equal(readiness.analytics.receiver, 'Netlify Function /api/analytics/event');
 assert.equal(readiness.analytics.dashboard, 'Basic-auth Netlify Function /internal/analytics');
@@ -242,7 +266,8 @@ assert.match(retentionControl, /Netlify Forms\/uploads, Zapier Tables, Gmail, Gi
 assert.match(retentionControl, /Apollo must remain off and live checkout must remain blocked/);
 assert.match(customerEmailContract, /checkout verification in progress/i);
 assert.match(customerEmailContract, /not confirmation that payment succeeded/i);
-assert.match(customerEmailContract, /one-time claim invitation/i);
+assert.match(customerEmailContract, /time-limited claim invitation/i);
+assert.match(customerEmailContract, /may be\s+retried until that window closes/i);
 assert.match(customerEmailContract, /exact synthetic\s+submission through its rendered Netlify form/i);
 assert.match(customerEmailContract, /verified receipt in the\s+authoritative lead inbox/i);
 assert.match(customerEmailContract, /Form and hook configuration alone never authorizes this email/i);
@@ -251,7 +276,11 @@ assert.match(customerEmailContract, /final email must not include a claim URL/i)
 assert.match(customerEmailContract, /or other bearer secret/i);
 assert.match(customerEmailContract, /destination-account control, the exact final deploy, and the durable\s+delivery outbox/i);
 assert.match(customerEmailContract, /not a claim that the\s+site is fully launch-ready/i);
-assert.match(customerEmailContract, /separately record durable invitation issuance\s+and successful claim-wrapper exchange/i);
+assert.match(customerEmailContract, /durable\s+`READY` invitation outbox and bearer/i);
+assert.match(customerEmailContract, /must never be represented as sent/i);
+assert.match(customerEmailContract, /separate provider receipt is\s+required before any workflow records email delivery/i);
+assert.match(customerEmailContract, /https:\/\/arcweb\.onl\/claim\/#arc2\./i);
+assert.match(customerEmailContract, /never appear in a URL\s+path, query, server log, browser storage, DOM text, or analytics event/i);
 assert.equal(readiness.legal_and_outreach_compliance.status, 'blocked');
 assert.equal(readiness.legal_and_outreach_compliance.adult_contracting_representative, null);
 assert.equal(readiness.legal_and_outreach_compliance.legal_operator, null);
@@ -280,7 +309,7 @@ assert.match(imageSizeDisabled, /throw new Error\('Image parsing is intentionall
 assert.equal(packageJson.devDependencies['@sparticuz/chromium'], '149.0.0');
 assert.equal(packageJson.devDependencies.playwright, '1.62.0');
 assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
-assert.equal(packageJson.scripts.test, 'node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs');
+assert.equal(packageJson.scripts.test, 'node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs');
 assert.match(analyticsCore, /const ALLOWED_KEYS = new Set\(\['event', 'event_id', 'session_id', 'path', 'cta', 'step', 'step_name'\]\)/);
 assert.match(analyticsCore, /STEP_LABELS = Object\.freeze\(\{ 1: 'Business', 2: 'Offer', 3: 'Details & consent', 4: 'Review' \}\)/);
 assert.match(analyticsCore, /Unexpected analytics field/);
@@ -298,30 +327,45 @@ assert.match(arc2Core, /PAYMENT_FIELDS = Object\.freeze\(\[/);
 assert.match(arc2Core, /terms_of_service_consent/);
 assert.match(arc2Core, /ARC_EXPECTED_PAYMENT_LINK_ID/);
 assert.match(arc2Core, /ARC_EXPECTED_PRICE_ID/);
+assert.match(arc2Core, /ARC_EXPECTED_PRODUCT_TAX_CODE/);
+assert.match(arc2Core, /ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256/);
+assert.match(arc2Core, /ARC_EXPECTED_NETLIFY_SITE_ID/);
+assert.match(arc2Core, /ARC_PRODUCTION_SITE_BINDING/);
+assert.match(arc2Core, /ARC_PRODUCTION_ORIGIN_BINDING/);
+assert.match(arc2Core, /ARC_HANDOFF_ENABLED/);
+assert.match(arc2Core, /ARC_STRIPE_LIVE_MODE_ENABLED/);
+assert.match(arc2Core, /subtotal_amount_minor_units/);
+assert.match(arc2Core, /tax_amount_minor_units/);
+assert.match(arc2Core, /automatic_tax_enabled/);
+assert.match(arc2Core, /tax_registration_status/);
+assert.match(arc2Core, /stripe_account_id_sha256/);
 assert.match(arc2Core, /ARC_SECRETS_MUST_BE_DISTINCT/);
-assert.match(arc2Core, /arc2-claim-state-evidence-signature-v1\\n/);
+assert.match(arc2Core, /arc2-claim-state-evidence-signature-v2\\n/);
 assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
-assert.doesNotMatch(arc2Core, /deterministicClaimToken|claim-token-v1/);
-assert.doesNotMatch(arc2Core, /issueClaimInvitation/);
-assert.doesNotMatch(arc2Core, /claimTokenIsValid|newSecretToken/);
-assert.match(arc2Service, /ARC2_POSTCLAIM_REVERIFY_NOT_CONFIGURED/);
-assert.match(arc2Service, /ARC2_LEAD_ROUTE_EVIDENCE_ENDPOINT_NOT_IMPLEMENTED/);
+assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
+assert.match(arc2Service, /filter: 'owner'/);
+assert.match(arc2Service, /deploys\?per_page=100/);
+assert.match(arc2Service, /restore/);
+assert.match(arc2Service, /claim_token_consumed_hmac_sha256/);
+assert.match(arc2Service, /lead-route-inbox-receipt/);
 assert.doesNotMatch(arc2Service, /destination_account_id_hint_sha256/);
-assert.match(arc2Service, /not mutate state from this replayable hint/);
 assert.doesNotMatch(arc2Service, /console\.(?:log|error|warn)/);
 assert.match(arc2Store, /onlyIfNew: true/);
 assert.match(arc2Store, /onlyIfMatch: entry\.etag/);
 assert.match(arc2Store, /if \(!result\?\.modified/);
 for (const source of [arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status]) {
-  assert.doesNotMatch(source, /@netlify\/blobs|getStore|startHandoff|markClaimInvitationSent|processClaimWebhook|getHandoffStatus|prepareRequest/);
+  assert.match(source, /configuredEnvironment\(process\.env\)\.enabled/);
+  assert.match(source, /getStore\(\{ name: HANDOFF_STORE, consistency: 'strong' \}\)/);
   assert.doesNotMatch(source, /Access-Control-Allow-Origin|console\.(?:log|error|warn)/i);
 }
 assert.match(netlifyConfig, /for = "\/claim\/\*"[\s\S]*?Cache-Control = "no-store"[\s\S]*?Referrer-Policy = "no-referrer"[\s\S]*?X-Robots-Tag = "noindex, nofollow, noarchive"/);
-assert.match(arc2Start, /export default async \(\) => jsonResponse\(503, \{ error: 'resumable_recovery_not_implemented' \}\)/);
-assert.match(arc2Invitation, /export default async \(\) => jsonResponse\(503, \{ error: 'lead_route_evidence_endpoint_not_implemented' \}\)/);
-assert.match(arc2Claim, /export default async \(\) => jsonResponse\(503, \{ error: 'resumable_claim_exchange_not_implemented' \}\)/);
-assert.match(arc2Webhook, /export default async \(\) => jsonResponse\(503, \{ error: 'postclaim_reverification_not_implemented' \}\)/);
-assert.match(arc2Status, /export default async \(\) => jsonResponse\(503, \{ error: 'handoff_status_not_implemented' \}\)/);
+assert.match(arc2Start, /authenticateBearer\(request, process\.env\.ARC_HANDOFF_TRIGGER_SECRET\)/);
+assert.match(arc2Invitation, /authenticateBearer\(request, process\.env\.ARC_HANDOFF_TRIGGER_SECRET\)/);
+assert.match(arc2Invitation, /invitation_status: 'READY'/);
+assert.doesNotMatch(arc2Invitation, /invitation[_ -]sent/i);
+assert.match(arc2Claim, /exchangeClaimBearer/);
+assert.match(arc2Webhook, /processClaimWebhook/);
+assert.match(arc2Status, /authenticateBearer\(request, process\.env\.ARC_HANDOFF_TRIGGER_SECRET\)/);
 
 for (const script of [...home.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]) {
   Function(script[1]);

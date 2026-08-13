@@ -3,25 +3,53 @@
   "reviewed_at": "2026-08-12",
   "offer": {
     "currency": "USD",
-    "amount": 5000,
+    "subtotal_amount": 5000,
+    "tax": "applicable-destination-based-sales-tax-added-at-checkout",
     "billing": "one-time",
     "deliverable": "one-premium-single-page-website"
   },
   "checkout": {
     "status": "blocked",
     "allowed_mode": "test-only",
-    "consent_version": "2026-08-11",
+    "consent_version": "2026-08-12",
     "required_evidence": [
       "adult-purchaser-affirmative-acceptance",
       "accepted-terms-version",
       "accepted-at-server-timestamp",
       "price-currency-and-scope-shown-before-checkout",
+      "stripe-account-binding-verified",
+      "automatic-tax-complete",
+      "destination-address-verified",
+      "subtotal-tax-and-total-reconcile",
       "stripe-test-session-id"
     ],
     "blockers": [
       "adult-contracting-representative-unconfirmed",
-      "checkout-consent-not-wired-or-live-tested"
+      "checkout-consent-not-wired-or-live-tested",
+      "arc-stripe-account-unverified",
+      "business-license-unverified",
+      "sales-tax-registration-unverified",
+      "destination-tax-configuration-unverified"
     ]
+  },
+  "manual_activation_gates": {
+    "status": "blocked",
+    "required_exact_environment_attestations": [
+      "ARC_HANDOFF_ENABLED=true",
+      "ARC_EXPECTED_NETLIFY_SITE_ID=8f9d462c-952f-42fc-a3a0-50a2529e8f5d",
+      "ARC_ADULT_OPERATOR_VERIFIED=true",
+      "ARC_BUSINESS_LICENSE_VERIFIED=true",
+      "ARC_TAX_REGISTRATION_VERIFIED=true",
+      "ARC_TRANSACTIONAL_EMAIL_VERIFIED=true",
+      "ARC_RETENTION_CONTROL_VERIFIED=true",
+      "ARC_POSTCLAIM_READBACK_VERIFIED=true",
+      "ARC_DEVICE_QA_VERIFIED=true",
+      "ARC_LEAD_ROUTE_VERIFIED=true",
+      "ARC_INTAKE_ENABLED=true"
+    ],
+    "stripe_live_mode_default": false,
+    "stripe_live_mode_activation": "ARC_STRIPE_LIVE_MODE_ENABLED=true",
+    "verified_attestations": []
   },
   "analytics": {
     "status": "pending-live-verification",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,15 +27,35 @@ function safePublicFile(urlPath) {
   return absolute.startsWith(`${root}${path.sep}`) ? absolute : null;
 }
 
+const claimRequests = [];
 const server = http.createServer(async (request, response) => {
+  if (request.method === 'GET' && request.url?.split('?')[0] === '/api/intake/readiness') {
+    response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ schema: 'arc-intake-readiness-v1', intake_enabled: true }));
+    return;
+  }
   if (request.method === 'POST' && request.url?.split('?')[0] === '/api/analytics/event') {
     response.writeHead(202, { 'cache-control': 'no-store' }).end();
+    return;
+  }
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/api/arc2/claim') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    claimRequests.push({ method: request.method, url: request.url, headers: request.headers, body: Buffer.concat(chunks).toString('utf8') });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      .end(JSON.stringify({ claim_url: 'https://app.netlify.com/claim#header.payload.signature' }));
     return;
   }
   try {
     const file = safePublicFile(request.url || '/');
     if (!file || !(await stat(file)).isFile()) throw new Error('Not found');
     response.writeHead(200, { 'content-type': contentTypes[path.extname(file)] || 'application/octet-stream' });
+    if (file === path.join(root, 'index.html')) {
+      // Build-contract proves the deploy is compiled closed. The browser harness
+      // opts into the separately gated activation variant to exercise the full UI.
+      response.end((await readFile(file, 'utf8')).replace('data-intake-build-enabled="false"', 'data-intake-build-enabled="true"'));
+      return;
+    }
     createReadStream(file).pipe(response);
   } catch {
     response.writeHead(404).end('Not found');
@@ -200,6 +220,49 @@ try {
     assert.ok(scopeNavigation, 'Payment-success scope navigation was not observed.');
     assert.ok(!scopeNavigation.headers.referer, 'Payment-success navigation leaked a Referer header.');
     await paymentPage.close();
+
+    const claimPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await claimPage.route('https://app.netlify.com/claim*', (route) => route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><title>Netlify claim test destination</title>',
+    }));
+    const handoffId = 'a'.repeat(64);
+    const claimBearer = 'B'.repeat(43);
+    const claimRequestObserved = claimPage.waitForRequest((request) => new URL(request.url()).pathname === '/api/arc2/claim');
+    await claimPage.goto(`${baseUrl}/claim/#arc2.${handoffId}.${claimBearer}`, { waitUntil: 'domcontentloaded' });
+    await claimRequestObserved;
+    const scrubbedClaimState = await claimPage.evaluate(() => ({
+      pathname: location.pathname,
+      search: location.search,
+      hash: location.hash,
+      body: document.body.textContent,
+      localValues: Object.values(localStorage),
+      sessionValues: Object.values(sessionStorage),
+    }));
+    assert.equal(scrubbedClaimState.pathname, '/claim/', 'Claim wrapper changed path while scrubbing its fragment.');
+    assert.equal(scrubbedClaimState.search, '', 'Claim wrapper retained a query string.');
+    assert.equal(scrubbedClaimState.hash, '', 'Claim wrapper did not immediately scrub its bearer fragment.');
+    assert.doesNotMatch(scrubbedClaimState.body, new RegExp(`${handoffId}|${claimBearer}`), 'Claim credential entered rendered DOM text.');
+    assert.doesNotMatch(JSON.stringify([...scrubbedClaimState.localValues, ...scrubbedClaimState.sessionValues]), new RegExp(`${handoffId}|${claimBearer}`), 'Claim credential entered browser storage.');
+    await claimPage.waitForURL('https://app.netlify.com/claim#header.payload.signature');
+    assert.equal(claimRequests.length, 1, 'Valid claim wrapper did not exchange exactly once.');
+    assert.equal(claimRequests[0].method, 'POST');
+    assert.equal(claimRequests[0].url, '/api/arc2/claim');
+    assert.equal(claimRequests[0].headers.authorization, `Bearer ${claimBearer}`);
+    assert.equal(claimRequests[0].headers['x-arc-handoff-id'], handoffId);
+    assert.equal(claimRequests[0].headers.referer, undefined, 'Claim exchange leaked a Referer header.');
+    assert.equal(claimRequests[0].body, '', 'Claim exchange unexpectedly put credentials in its body.');
+    await claimPage.close();
+
+    const invalidClaimPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await invalidClaimPage.goto(`${baseUrl}/claim/?token=forbidden#invalid`, { waitUntil: 'networkidle' });
+    assert.equal(new URL(invalidClaimPage.url()).pathname, '/claim/');
+    assert.equal(new URL(invalidClaimPage.url()).search, '', 'Invalid claim query was not scrubbed.');
+    assert.equal(new URL(invalidClaimPage.url()).hash, '', 'Invalid claim fragment was not scrubbed.');
+    assert.match(await invalidClaimPage.locator('h1').textContent(), /invitation is unavailable/i);
+    assert.equal(claimRequests.length, 1, 'Invalid claim credential reached the exchange endpoint.');
+    await invalidClaimPage.close();
   }
 } finally {
   await browser.close();
