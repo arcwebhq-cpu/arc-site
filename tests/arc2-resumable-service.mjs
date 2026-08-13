@@ -40,19 +40,143 @@ const record = {
   payment_evidence_sha256: '1'.repeat(64), artifact_evidence_sha256: '2'.repeat(64), artifact_manifest_sha256: '3'.repeat(64),
   bundle_fingerprint: '4'.repeat(64), production_content_sha256: '5'.repeat(64), customer_email_sha256: '6'.repeat(64),
   lead_notification_email_sha256: sha256Hex('leads@example.test'), preview_folder: 'sample-roofing-a1b2c3d4',
+  lead_route_recipient_hmac_sha256: hmacHex(env.ARC_LEAD_ROUTE_EVIDENCE_SECRET, 'arc-lead-route-recipient-v1\nleads@example.test'),
   artifacts: [{ path: '_headers', sha256: '7'.repeat(64), size: 10 }, { path: 'index.html', sha256: '8'.repeat(64), size: 20 }],
   form_name: 'sample-lead', netlify_session_id: '11111111-1111-4111-8111-111111111111',
-  netlify_site_name: 'arc-' + 'b'.repeat(24), netlify_source_account_id: 'source-account-123', netlify_site_id: 'site-arc123',
-  site_created_at: now.toISOString(), preclaim_deploy_id: 'deploy-pre123', final_deploy_id: null,
-  preclaim_deploy_attempted_at: now.toISOString(), preclaim_deploy_candidate_id: 'deploy-pre123',
+  netlify_site_name: 'arc-lead-route-' + 'b'.repeat(24), netlify_source_account_id: 'source-account-123', netlify_site_id: 'c'.repeat(24),
+  site_created_at: now.toISOString(), preclaim_deploy_id: 'd'.repeat(24), final_deploy_id: null,
+  preclaim_deploy_attempted_at: now.toISOString(), preclaim_deploy_candidate_id: 'd'.repeat(24),
   final_deploy_attempted_at: null, final_deploy_candidate_id: null, email_hook_attempted_at: now.toISOString(),
-  form_id: 'form-arc123', hook_id: 'hook-arc123', destination_account_id: null,
+  form_id: 'e'.repeat(24), hook_id: 'f'.repeat(24), destination_account_id: null,
   lead_route_receipt_sha256: null, claim_token_hmac_sha256: null, claim_token_consumed_hmac_sha256: null,
   claim_token_expires_at: null, claim_token_used_at: null, claim_wrapper_consumed_at: null,
   claim_jwt_issued_at: null, claim_invitation_ready_at: null, lead_route_provider_message_id_sha256: null,
   claim_callback_received_at: null, claimed_verified_at: null, final_deploy_ready_at: null, production_url: null,
-  outbox_claim_status: null, outbox_claim_key_hmac_sha256: null, delivered_at: null,
+  outbox_claim_status: null, outbox_claim_key_hmac_sha256: null,
+  final_delivery_receipt_sha256: null, final_delivery_provider_message_id_sha256: null,
+  final_delivery_receipt_issued_at: null, delivered_at: null,
 };
+
+const producerEvidenceValue = {
+  version: leadRouteReceiptContract.producerVersion,
+  scope: leadRouteReceiptContract.producerScope,
+  preview_folder: record.preview_folder,
+  production_content_sha256: record.production_content_sha256,
+  artifact_manifest_sha256: record.artifact_manifest_sha256,
+  handoff_artifact_evidence_sha256: record.artifact_evidence_sha256,
+  bundle_fingerprint: record.bundle_fingerprint,
+  netlify_account_id: record.netlify_source_account_id,
+  staging_site_id: record.netlify_site_id,
+  staging_site_url: `https://${record.netlify_site_name}.netlify.app/`,
+  staging_deploy_id: record.preclaim_deploy_id,
+  staging_deploy_url: `https://${record.preclaim_deploy_id}--${record.netlify_site_name}.netlify.app/`,
+  deploy_file_manifest_sha256: sha256Hex('producer-deploy-file-manifest'),
+  served_html_sha256: sha256Hex('producer-served-html'),
+  staging_robots_header_sha256: sha256Hex('producer-staging-robots-header'),
+  staging_form_id: record.form_id,
+  notification_hook_id: record.hook_id,
+  form_name: record.form_name,
+  recipient_hmac_sha256: record.lead_route_recipient_hmac_sha256,
+  synthetic_submission_id: '9'.repeat(24),
+  synthetic_probe_sha256: sha256Hex('producer-synthetic-probe'),
+  netlify_submission_timestamp: new Date(now.getTime() - 60_000).toISOString(),
+  inbox_provider: 'gmail',
+  inbox_account_hmac_sha256: sha256Hex('producer-inbox-account'),
+  inbox_message_id_hmac_sha256: sha256Hex('producer-inbox-message'),
+  inbox_received_timestamp: new Date(now.getTime() - 30_000).toISOString(),
+  inbox_receipt_evidence_sha256: sha256Hex('producer-inbox-receipt-evidence'),
+};
+const signProducerEvidence = (raw) => hmacHex(
+  env.ARC_LEAD_ROUTE_EVIDENCE_SECRET,
+  `${leadRouteReceiptContract.producerSignaturePrefix}${raw}`,
+);
+const producerEvidence = JSON.stringify(producerEvidenceValue);
+const producerSignature = signProducerEvidence(producerEvidence);
+
+const legacyPreclaimRecord = {
+  ...record,
+  netlify_site_name: `arc-${'b'.repeat(24)}`,
+};
+delete legacyPreclaimRecord.lead_route_recipient_hmac_sha256;
+const legacyPreclaimStore = new FakeStore();
+await createEntry(legacyPreclaimStore, `handoffs/${handoffId}`, legacyPreclaimRecord);
+const migratedLegacyPreclaim = await readEntry(legacyPreclaimStore, `handoffs/${handoffId}`);
+assert.equal(migratedLegacyPreclaim.record.schema, 'arc2-netlify-handoff-v2');
+assert.equal(migratedLegacyPreclaim.record.netlify_site_name, `arc-${'b'.repeat(24)}`);
+assert.equal(migratedLegacyPreclaim.record.lead_route_recipient_hmac_sha256, null);
+const legacyProducerEvidenceValue = {
+  ...producerEvidenceValue,
+  staging_site_url: `https://${legacyPreclaimRecord.netlify_site_name}.netlify.app/`,
+  staging_deploy_url: `https://${record.preclaim_deploy_id}--${legacyPreclaimRecord.netlify_site_name}.netlify.app/`,
+};
+const legacyProducerEvidence = JSON.stringify(legacyProducerEvidenceValue);
+const legacyPreclaimSnapshot = JSON.stringify([...legacyPreclaimStore.values.entries()]);
+await assert.rejects(markClaimInvitationReady(
+  handoffId,
+  legacyProducerEvidence,
+  signProducerEvidence(legacyProducerEvidence),
+  env,
+  { store: legacyPreclaimStore, clock: () => new Date(now) },
+), /ARC2_LEGACY_SITE_NAMESPACE_QUARANTINED/,
+'Even exact signed producer evidence must not advance an old-namespace pre-invitation record.');
+await assert.rejects(markClaimInvitationReady(
+  handoffId,
+  'not-json',
+  'not-a-signature',
+  env,
+  { store: legacyPreclaimStore, clock: () => new Date(now) },
+), /ARC2_LEGACY_SITE_NAMESPACE_QUARANTINED/,
+'Old-namespace quarantine must run before invitation evidence parsing or signature verification.');
+assert.equal(JSON.stringify([...legacyPreclaimStore.values.entries()]), legacyPreclaimSnapshot,
+  'Rejected invitation evidence must not mutate a quarantined legacy record or create an outbox.');
+
+const producerStore = new FakeStore();
+await createEntry(producerStore, `handoffs/${handoffId}`, record);
+const producerIssued = await markClaimInvitationReady(handoffId, producerEvidence, producerSignature, env, {
+  store: producerStore, clock: () => new Date(now),
+});
+assert.equal(producerIssued.record.state, 'INVITATION_READY');
+assert.equal(producerIssued.record.lead_route_receipt_sha256, sha256Hex(producerEvidence), 'Receipt digest must bind the exact signed producer source.');
+assert.equal(producerIssued.record.lead_route_provider_message_id_sha256, sha256Hex(producerEvidenceValue.inbox_message_id_hmac_sha256));
+const producerReplay = await markClaimInvitationReady(handoffId, producerEvidence, producerSignature, env, {
+  store: producerStore, clock: () => new Date(now.getTime() + 11 * 60_000),
+});
+assert.equal(producerReplay.claimBearer, producerIssued.claimBearer, 'Exact producer evidence must remain resumable after first-observation freshness.');
+
+const staleProducerStore = new FakeStore();
+await createEntry(staleProducerStore, `handoffs/${handoffId}`, record);
+await assert.rejects(markClaimInvitationReady(handoffId, producerEvidence, producerSignature, env, {
+  store: staleProducerStore, clock: () => new Date(now.getTime() + 11 * 60_000),
+}), /stale or out of order/i, 'Stale producer evidence must not authorize a first invitation.');
+const mismatchedProducerValue = { ...producerEvidenceValue, staging_form_id: 'a'.repeat(24) };
+const mismatchedProducerEvidence = JSON.stringify(mismatchedProducerValue);
+const mismatchedProducerStore = new FakeStore();
+await createEntry(mismatchedProducerStore, `handoffs/${handoffId}`, record);
+await assert.rejects(markClaimInvitationReady(handoffId, mismatchedProducerEvidence, signProducerEvidence(mismatchedProducerEvidence), env, {
+  store: mismatchedProducerStore, clock: () => new Date(now),
+}), /binding mismatch/i, 'A validly signed producer receipt for another form must fail its durable source binding.');
+const badSignatureProducerStore = new FakeStore();
+await createEntry(badSignatureProducerStore, `handoffs/${handoffId}`, record);
+await assert.rejects(markClaimInvitationReady(handoffId, producerEvidence, '0'.repeat(64), env, {
+  store: badSignatureProducerStore, clock: () => new Date(now),
+}), /signature mismatch/i);
+const reorderedProducerEvidence = canonicalJson(producerEvidenceValue);
+const reorderedProducerStore = new FakeStore();
+await createEntry(reorderedProducerStore, `handoffs/${handoffId}`, record);
+await assert.rejects(markClaimInvitationReady(handoffId, reorderedProducerEvidence, signProducerEvidence(reorderedProducerEvidence), env, {
+  store: reorderedProducerStore, clock: () => new Date(now),
+}), /fields are invalid/i, 'Producer evidence must retain its exact signed field order and serialization.');
+const outOfOrderProducerValue = {
+  ...producerEvidenceValue,
+  inbox_received_timestamp: new Date(now.getTime() - 90_000).toISOString(),
+};
+const outOfOrderProducerEvidence = JSON.stringify(outOfOrderProducerValue);
+const outOfOrderProducerStore = new FakeStore();
+await createEntry(outOfOrderProducerStore, `handoffs/${handoffId}`, record);
+await assert.rejects(markClaimInvitationReady(handoffId, outOfOrderProducerEvidence, signProducerEvidence(outOfOrderProducerEvidence), env, {
+  store: outOfOrderProducerStore, clock: () => new Date(now),
+}), /stale or out of order/i, 'Inbox receipt time must not precede the Netlify submission.');
+
 const store = new FakeStore();
 await createEntry(store, `handoffs/${handoffId}`, record);
 
@@ -87,6 +211,40 @@ const twentyNineMinuteReplay = await markClaimInvitationReady(handoffId, evidenc
   ...adapters, clock: () => new Date(now.getTime() + 29 * 60_000),
 });
 assert.equal(twentyNineMinuteReplay.claimBearer, issued.claimBearer, 'READY recovery must recover the original bearer through its TTL.');
+
+const legacyInvitationStore = new FakeStore();
+const legacyInvitationRecord = {
+  ...issued.record,
+  schema: 'arc2-netlify-handoff-v1',
+  netlify_site_name: `arc-${'c'.repeat(24)}`,
+};
+delete legacyInvitationRecord.lead_route_recipient_hmac_sha256;
+for (const field of [
+  'final_delivery_receipt_sha256',
+  'final_delivery_provider',
+  'final_delivery_provider_account_hmac_sha256',
+  'final_delivery_provider_event_id_hmac_sha256',
+  'final_delivery_provider_message_id_hmac_sha256',
+  'final_delivery_event_type',
+  'final_delivery_status',
+  'final_delivery_receipt_issued_at',
+]) delete legacyInvitationRecord[field];
+await createEntry(legacyInvitationStore, `handoffs/${handoffId}`, legacyInvitationRecord);
+const legacyInvitationStatus = await getHandoffStatus(handoffId, env, {
+  store: legacyInvitationStore,
+  clock: () => new Date(now.getTime() + 60_000),
+});
+assert.equal(legacyInvitationStatus.claim_available, true,
+  'An old-namespace record already at INVITATION_READY must remain available for downstream migration.');
+const legacyExchanged = await exchangeClaimBearer(handoffId, issued.claimBearer, env, {
+  store: legacyInvitationStore,
+  clock: () => new Date(now.getTime() + 60_000),
+});
+assert.equal(legacyExchanged.record.state, 'CLAIM_WRAPPER_CONSUMED');
+assert.equal(legacyExchanged.record.schema, 'arc2-netlify-handoff-v2');
+assert.equal(legacyExchanged.record.netlify_site_name, `arc-${'c'.repeat(24)}`,
+  'Downstream migration must preserve the already-created legacy Netlify site name.');
+
 await assert.rejects(markClaimInvitationReady(handoffId, evidence, signature, env, {
   ...adapters, clock: () => new Date(now.getTime() + 30 * 60_000),
 }), /BEARER_EXPIRED/, 'READY recovery must stop exactly at expiry.');

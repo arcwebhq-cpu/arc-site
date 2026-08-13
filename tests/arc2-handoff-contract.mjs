@@ -14,6 +14,7 @@ import {
   normalizeStartPayload,
   PAYMENT_SIGNATURE_PREFIX,
   netlifyClaimUrl,
+  resolveHandoffEnvironment,
   sha256Hex,
   transitionRecord,
   validateExpectedBindings,
@@ -41,6 +42,8 @@ const secrets = Object.fromEntries([
   'ARC_CLAIM_TOKEN_SECRET',
   'ARC_CLAIM_STATE_EVIDENCE_SECRET',
   'ARC_EMAIL_CLAIM_BINDING_SECRET',
+  'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
+  'ARC_FINAL_DELIVERY_ACK_SECRET',
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
 ].map((name, index) => [name, `${name.toLowerCase()}-${String(index).padStart(2, '0')}-unique-test-secret-0123456789`]));
@@ -71,6 +74,27 @@ const env = {
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
 };
 assert.deepEqual(configuredEnvironment(env), { enabled: true, missing: [], invalid: [] });
+const tokenAliasEnv = { ...env, NETLIFY_ACCESS_TOKEN: env.NETLIFY_ADMIN_PAT };
+delete tokenAliasEnv.NETLIFY_ADMIN_PAT;
+assert.equal(configuredEnvironment(tokenAliasEnv).enabled, true, 'Workflow-facing Netlify token alias must satisfy runtime readiness.');
+assert.equal(resolveHandoffEnvironment(tokenAliasEnv).environment.NETLIFY_ADMIN_PAT, env.NETLIFY_ADMIN_PAT);
+const taxCodeAliasEnv = { ...env, ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE: env.ARC_EXPECTED_PRODUCT_TAX_CODE };
+delete taxCodeAliasEnv.ARC_EXPECTED_PRODUCT_TAX_CODE;
+assert.equal(configuredEnvironment(taxCodeAliasEnv).enabled, true, 'Workflow-facing Stripe tax-code alias must satisfy runtime readiness.');
+assert.equal(resolveHandoffEnvironment(taxCodeAliasEnv).environment.ARC_EXPECTED_PRODUCT_TAX_CODE, env.ARC_EXPECTED_PRODUCT_TAX_CODE);
+assert.equal(configuredEnvironment({
+  ...env,
+  NETLIFY_ACCESS_TOKEN: env.NETLIFY_ADMIN_PAT,
+  ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE: env.ARC_EXPECTED_PRODUCT_TAX_CODE,
+}).enabled, true, 'Matching canonical and alias values must be accepted.');
+const conflictingAliases = configuredEnvironment({
+  ...env,
+  NETLIFY_ACCESS_TOKEN: `${env.NETLIFY_ADMIN_PAT}-different`,
+  ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE: 'txcd_99999999',
+});
+assert.equal(conflictingAliases.enabled, false, 'Conflicting canonical and alias values must fail closed.');
+assert.ok(conflictingAliases.invalid.includes('NETLIFY_ADMIN_PAT_NETLIFY_ACCESS_TOKEN_CONFLICT'));
+assert.ok(conflictingAliases.invalid.includes('ARC_EXPECTED_PRODUCT_TAX_CODE_ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE_CONFLICT'));
 assert.equal(configuredEnvironment({ ...env, ARC_CLAIM_TOKEN_SECRET: env.ARC_HANDOFF_STATE_SECRET }).enabled, false, 'Secrets must be distinct.');
 assert.equal(configuredEnvironment({ ...env, ARC_TAX_REGISTRATION_VERIFIED: 'false' }).enabled, false, 'Manual attestations must be exact and fail closed.');
 assert.equal(configuredEnvironment({ ...env, ARC_STRIPE_LIVE_MODE_ENABLED: 'yes' }).enabled, false, 'Stripe mode must be an explicit boolean string.');
@@ -152,6 +176,12 @@ const input = {
 const normalized = normalizeStartPayload(input, env, now);
 assert.equal(normalized.formName, 'sample-lead');
 assert.equal(normalized.leadEmail, leadEmail);
+assert.equal(normalized.leadRouteRecipientHmacSha256, input.lead_route_recipient_hmac_sha256);
+assert.doesNotThrow(() => normalizeStartPayload(input, taxCodeAliasEnv, now), 'Tax-code alias must be used by payment binding, not readiness alone.');
+assert.throws(() => normalizeStartPayload(input, {
+  ...env,
+  ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE: 'txcd_99999999',
+}, now), /environment aliases conflict/i);
 assert.throws(() => normalizeStartPayload({ ...input, lead_notification_email: 'attacker@example.test' }, env, now), /unbound/);
 const wrongPriceObject = { ...paymentEvidenceObject, price_id: 'price_1Wrong' };
 const wrongPrice = canonicalJson(wrongPriceObject);
@@ -245,14 +275,14 @@ const hookId = 'hook-arc123';
 const fetchCalls = [];
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const fakeFetch = async (url, options = {}) => {
-  fetchCalls.push({ url: String(url), method: options.method || 'GET' });
+  fetchCalls.push({ url: String(url), method: options.method || 'GET', authorization: options.headers?.Authorization });
   const parsed = new URL(url);
   const path = `${parsed.pathname}${parsed.search}`;
-  if (String(url) === `https://arc-${hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24)}.netlify.app/`) return new Response(html, { headers: { 'x-robots-tag': 'noindex, nofollow' } });
+  if (String(url) === `https://arc-lead-route-${hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24)}.netlify.app/`) return new Response(html, { headers: { 'x-robots-tag': 'noindex, nofollow' } });
   if (path.startsWith('/api/v1/sites?name=') && path.endsWith('&filter=owner')) return json([]);
   if (path === '/api/v1/sites' && options.method === 'POST') return json({
     id: siteId,
-    name: 'arc-' + hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24),
+    name: 'arc-lead-route-' + hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24),
     session_id: '11111111-1111-4111-8111-111111111111',
     account_id: env.NETLIFY_TEAM_ACCOUNT_ID,
     account_slug: env.NETLIFY_TEAM_SLUG,
@@ -270,7 +300,7 @@ const fakeFetch = async (url, options = {}) => {
   }, 201);
   if (path === `/api/v1/sites/${siteId}`) return json({
     id: siteId,
-    name: 'arc-' + hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24),
+    name: 'arc-lead-route-' + hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24),
     session_id: '11111111-1111-4111-8111-111111111111',
     account_id: env.NETLIFY_TEAM_ACCOUNT_ID,
     account_slug: env.NETLIFY_TEAM_SLUG,
@@ -296,12 +326,43 @@ const adapters = {
   uuid: () => '11111111-1111-4111-8111-111111111111',
   wait: () => Promise.resolve(),
 };
-const started = await startHandoff(input, env, adapters);
+const started = await startHandoff(input, tokenAliasEnv, adapters);
 assert.equal(started.record.state, 'PRECLAIM_DEPLOY_READY');
 assert.equal(started.record.claim_token_expires_at, null, 'Claim TTL must not begin before durable invitation acknowledgement.');
 assert.equal(started.record.lead_notification_email_sha256, sha256Hex(leadEmail));
+assert.equal(started.record.lead_route_recipient_hmac_sha256, input.lead_route_recipient_hmac_sha256);
+assert.ok(fetchCalls.some((call) => call.authorization === `Bearer ${env.NETLIFY_ADMIN_PAT}`), 'Netlify token alias must reach authenticated runtime requests.');
 assert.equal(JSON.stringify([...store.values.values()]).includes(leadEmail), false, 'Raw lead email must not enter handoff storage.');
 assert.equal(fetchCalls.some((call) => /attacker\.example|169\.254\.169\.254/.test(call.url)), false, 'Destination-controlled site URLs must never be fetched.');
+
+const legacyStartStore = new FakeStore();
+const legacyStartRecord = {
+  ...started.record,
+  schema: 'arc2-netlify-handoff-v1',
+  netlify_site_name: `arc-${'b'.repeat(24)}`,
+};
+delete legacyStartRecord.lead_route_recipient_hmac_sha256;
+for (const field of [
+  'final_delivery_receipt_sha256',
+  'final_delivery_provider',
+  'final_delivery_provider_account_hmac_sha256',
+  'final_delivery_provider_event_id_hmac_sha256',
+  'final_delivery_provider_message_id_hmac_sha256',
+  'final_delivery_event_type',
+  'final_delivery_status',
+  'final_delivery_receipt_issued_at',
+]) delete legacyStartRecord[field];
+await createEntry(legacyStartStore, handoffKeyFromId(started.handoffId), legacyStartRecord);
+const legacyStartSnapshot = JSON.stringify([...legacyStartStore.values.entries()]);
+const legacyStartFetchCount = fetchCalls.length;
+await assert.rejects(startHandoff(input, env, { ...adapters, store: legacyStartStore }),
+  /ARC2_LEGACY_SITE_NAMESPACE_QUARANTINED/,
+  'An exact authenticated start replay must quarantine an old-namespace pre-invitation record.');
+assert.equal(JSON.stringify([...legacyStartStore.values.entries()]), legacyStartSnapshot,
+  'Legacy namespace quarantine must happen before index creation or record repair.');
+assert.equal(fetchCalls.length, legacyStartFetchCount,
+  'Legacy namespace quarantine must happen before Netlify recovery or verification.');
+
 const callCount = fetchCalls.length;
 const replay = await startHandoff(input, env, adapters);
 assert.equal(replay.idempotentReplay, true);
@@ -400,7 +461,7 @@ const finalRecord = {
   state: 'FINAL_DEPLOY_READY',
   destination_account_id: 'account-customer-123',
   final_deploy_id: 'deploy-final-123',
-  production_url: `https://arc-${hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24)}.netlify.app/`,
+  production_url: `https://arc-lead-route-${hmacHex(env.ARC_HANDOFF_STATE_SECRET, `site-name-v1\n${paymentEvidenceObject.checkout_session_id}\n${paymentEvidenceObject.bundle_fingerprint}`).slice(0, 24)}.netlify.app/`,
   claim_callback_received_at: new Date(claimAt.getTime() + 30_000).toISOString(),
   claimed_verified_at: new Date(claimAt.getTime() + 60_000).toISOString(),
   final_deploy_ready_at: new Date(claimAt.getTime() + 120_000).toISOString(),

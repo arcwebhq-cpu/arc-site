@@ -1,6 +1,6 @@
 {
   "schema": "arc-operations-readiness-v1",
-  "reviewed_at": "2026-08-12",
+  "reviewed_at": "2026-08-13",
   "offer": {
     "currency": "USD",
     "subtotal_amount": 5000,
@@ -30,6 +30,24 @@
       "business-license-unverified",
       "sales-tax-registration-unverified",
       "destination-tax-configuration-unverified"
+    ],
+    "sandbox_evidence": [
+      {
+        "observed_at": "2026-08-13",
+        "environment": "stripe-test-mode",
+        "payment_link_id": "plink_1U3t07Gv1R7moOUqoaUjIIHI",
+        "payment_intent_id": "pi_3U3t38Gv1R7moOUq1qCOkiyV",
+        "currency": "USD",
+        "subtotal_amount_minor": 500000,
+        "tax_amount_minor": 0,
+        "total_amount_minor": 500000,
+        "payment_result": "succeeded",
+        "stripe_tax": "inactive",
+        "consent_ui_observed": "custom-dropdown",
+        "redirect_path_observed": "/payment-success/",
+        "handoff_created": false,
+        "scope": "sandbox-checkout-and-success-redirect-only"
+      }
     ]
   },
   "manual_activation_gates": {
@@ -45,7 +63,8 @@
       "ARC_POSTCLAIM_READBACK_VERIFIED=true",
       "ARC_DEVICE_QA_VERIFIED=true",
       "ARC_LEAD_ROUTE_VERIFIED=true",
-      "ARC_INTAKE_ENABLED=true"
+      "ARC_BUILD_INTAKE_ENABLED=true",
+      "ARC_INTAKE_READINESS_ATTESTATION=<complete arc-intake-readiness-attestation-v1 JSON with every required boolean true>"
     ],
     "stripe_live_mode_default": false,
     "stripe_live_mode_activation": "ARC_STRIPE_LIVE_MODE_ENABLED=true",
@@ -96,13 +115,47 @@
   },
   "intake_routing": {
     "status": "unverified",
-    "netlify_form": "arc-preview",
-    "workflow_route": "arc-preview-zapier",
+    "native_netlify_form_registered": false,
+    "submission_endpoint": "Netlify Function /api/intake/submit",
+    "private_store": "Netlify Blobs arc-intake-submissions",
+    "stored_schema": "arc-intake-function-submission-v1",
+    "workflow_route": "adapter-required-before-arc1",
+    "arc1_consumer_compatible": false,
     "verified_recipient": null,
+    "runtime_attestation": {
+      "required_build_runtime_gate": "ARC_BUILD_INTAKE_ENABLED=true",
+      "required_same_deploy_build_marker": "arc-intake-build-marker-v1 intake_enabled=true",
+      "environment_variable": "ARC_INTAKE_READINESS_ATTESTATION",
+      "schema": "arc-intake-readiness-attestation-v1",
+      "version": 1,
+      "default_enabled": false,
+      "reject_unknown_or_partial_records": true,
+      "required_exact_boolean_fields": [
+        "intake_enabled",
+        "route_verified",
+        "recipient_verified",
+        "dedupe_verified",
+        "failure_alert_verified",
+        "transactional_sender_verified",
+        "adult_operator_verified",
+        "legal_readiness_verified",
+        "tax_readiness_verified",
+        "payment_readiness_verified",
+        "arc1_consumer_adapter_verified",
+        "native_netlify_forms_disabled_verified",
+        "retention_verified",
+        "asset_pipeline_verified"
+      ]
+    },
     "verification_requirements": [
-      "production-form-detected-by-netlify",
-      "unique-live-submission-received",
-      "zapier-trigger-received-once",
+      "native-netlify-form-registration-absent",
+      "same-deploy-immutable-build-marker-enabled",
+      "provider-form-detection-disabled-and-legacy-direct-post-rejected-after-deploy",
+      "build-runtime-gate-blocks-before-body-parse-and-storage",
+      "revoked-attestation-blocks-before-storage",
+      "arc1-adapter-consumes-function-record-exactly-once",
+      "server-issued-submission-id-and-received-at-bound",
+      "zapier-trigger-received-once-after-adapter",
       "intended-recipient-confirms-message",
       "duplicate-and-failure-alerting-verified"
     ]
@@ -116,8 +169,8 @@
     "status": "pending-server-verification",
     "client_hidden_fields_are_authoritative": false,
     "required_pipeline_evidence": [
-      "provider-submission-id-used-for-folder-identity",
-      "provider-received-at-used-for-accepted-at",
+      "server-issued-submission-id-used-for-folder-identity",
+      "server-received-at-used-for-accepted-at",
       "exact-budget-and-terms-acceptance-required",
       "client-status-assertions-ignored",
       "provider-submission-replay-rejected",
@@ -126,6 +179,17 @@
   },
   "asset_uploads": {
     "status": "pending-server-verification",
+    "limits": {
+      "netlify_buffered_payload_bytes": 6000000,
+      "netlify_effective_binary_payload": "approximately-4.5-MB",
+      "request_max_bytes": 4000000,
+      "request_base64_bytes_at_max": 5333336,
+      "platform_buffer_headroom_bytes": 666664,
+      "per_file_max_bytes": 1250000,
+      "total_file_max_bytes": 3000000,
+      "text_max_bytes": 262144,
+      "multipart_headroom_after_max_files_and_text_bytes": 737856
+    },
     "client_allowlist": [
       "image/png",
       "image/jpeg",
@@ -134,6 +198,7 @@
     "required_pipeline_evidence": [
       "controlled-source-url",
       "per-file-and-total-byte-limits",
+      "exact-asset-permission-required-for-files-or-folder-link",
       "content-type-and-magic-byte-match",
       "successful-raster-decode",
       "svg-html-and-polyglot-rejection",
@@ -149,13 +214,36 @@
       "ninety-day-first-party-analytics-pruning"
     ],
     "unverified_stores": [
-      "netlify-forms-and-uploads",
+      "netlify-blobs-intake-records-and-assets",
       "zapier-tables",
       "gmail",
       "github-previews-and-deliveries",
       "stripe-and-backups"
     ],
     "live_compliance_claim_allowed": false
+  },
+  "final_delivery_acknowledgement": {
+    "status": "consumer-implemented-provider-producer-unverified",
+    "endpoint": "/internal/arc2/final-delivery-ack",
+    "required_distinct_secrets": [
+      "ARC_FINAL_DELIVERY_RECEIPT_SECRET",
+      "ARC_FINAL_DELIVERY_ACK_SECRET"
+    ],
+    "durable_protocol": [
+      "delivery-ack-pending-receipt-lock",
+      "create-only-global-provider-event-reservation",
+      "create-only-global-provider-message-reservation",
+      "terminal-delivered-outbox",
+      "delivered-handoff-cas"
+    ],
+    "external_activation_blockers": [
+      "native-provider-webhook-signature-and-account-verification-unimplemented",
+      "provider-delivered-event-adapter-unconfigured",
+      "create-only-send-attempt-unverified",
+      "provider-idempotency-key-unverified"
+    ],
+    "cross-key-atomicity_claimed": false,
+    "automation_must_remain_off": true
   },
   "legal_and_outreach_compliance": {
     "status": "blocked",

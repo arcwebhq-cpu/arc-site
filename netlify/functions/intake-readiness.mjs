@@ -1,3 +1,10 @@
+import { INTAKE_BUILD_MARKER } from '../lib/intake-build-marker.mjs';
+import {
+  INTAKE_READINESS_ENV,
+  intakeEnabledFromAttestation,
+  intakeEnabledFromBuildMarker,
+} from '../lib/intake-readiness-core.mjs';
+
 const ALLOWED_HOSTS = new Set(['arcweb.onl', 'arcsites.netlify.app']);
 
 function response(status, value) {
@@ -9,12 +16,17 @@ function response(status, value) {
   } });
 }
 
-export default async (request) => {
+export function createIntakeReadinessHandler(buildMarker = INTAKE_BUILD_MARKER) {
+  return async (request) => {
   if (request.method !== 'GET') return response(405, { error: 'method_not_allowed' });
   if (!ALLOWED_HOSTS.has(new URL(request.url).hostname)) return response(403, { error: 'forbidden' });
-  const enabled = process.env.ARC_INTAKE_ENABLED === 'true' && process.env.ARC_LEAD_ROUTE_VERIFIED === 'true';
+  const enabled = intakeEnabledFromBuildMarker(buildMarker) && process.env.ARC_BUILD_INTAKE_ENABLED === 'true' &&
+    intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]);
   return response(200, { schema: 'arc-intake-readiness-v1', intake_enabled: enabled });
-};
+  };
+}
+
+export default createIntakeReadinessHandler();
 
 export const config = {
   path: '/api/intake/readiness', method: 'GET',

@@ -13,6 +13,11 @@ invitation readiness and successful claim-wrapper exchange, not email delivery.
 Its issuance time is the immutable final-verification time; status reads must not
 refresh it. The email gate rejects it after the freshness window.
 
+After a provider sends the verified final-handoff email, ARC records delivery
+only through the signed receipt contract in
+`operations/final-delivery-receipt-contract.md`. A queued, accepted, or sent
+event is not delivery. The acknowledgement endpoint never sends an email.
+
 ## Preview ready
 
 **Subject:** Your ARC website preview is ready
@@ -84,6 +89,13 @@ delivery outbox were independently verified:
 
 This final email must not include a claim URL, OAuth credential, Netlify access
 token, or other bearer secret.
+
+`FINAL_DEPLOY_READY` remains the durable state until the email provider returns
+an exact, signed delivered receipt bound to this handoff, recipient, production
+URL, final Netlify site/deploy, and claimed outbox. Only that resumable receipt
+protocol may set `DELIVERED`: it first locks the outbox to the exact receipt,
+reserves the provider event/message identities, terminalizes the outbox, and
+then converges the handoff. It returns success only after every step completes.
 
 Follow the handoff steps, connect the final domain, then submit one real lead-form
 test before advertising the site. Your 30-day launch-bug support period begins

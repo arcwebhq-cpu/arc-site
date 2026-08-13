@@ -257,8 +257,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
       </div>
       <div class="form-card reveal" id="formCard">
         <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 3</span></div><div class="bar" id="formProgress" role="progressbar" aria-label="Preview request progress" aria-valuemin="1" aria-valuemax="4" aria-valuenow="1"><span id="barFill"></span></div><div class="form-save" id="saveStatus" role="status" aria-live="polite">Answers save on this device for 7 days.</div><div class="intake-status" id="intakeStatus" role="status" aria-live="polite">Preview requests are temporarily paused while delivery routing is verified.</div></div>
-        <form action="/thank-you/" aria-disabled="true" data-intake-build-enabled="true" data-intake-enabled="false" data-netlify="true" enctype="multipart/form-data" id="projectForm" inert method="POST" name="arc-preview" netlify-honeypot="bot-field" novalidate>
-          <input type="hidden" name="form-name" value="arc-preview">
+        <form action="/api/intake/submit" aria-disabled="true" data-intake-build-enabled="true" data-intake-enabled="false" enctype="multipart/form-data" id="projectForm" inert method="POST" name="arc-preview" novalidate>
           <input type="hidden" name="intake_version" value="arc-intake-v7">
           <input type="hidden" name="landing_path" id="landingPath" value="">
           <input type="hidden" name="referrer_host" id="referrerHost" value="">
@@ -394,12 +393,12 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
               <label><input type="checkbox" name="assets" value="Reviews"> Reviews</label><label><input type="checkbox" name="assets" value="Brand guide"> Brand guide</label>
               <label><input type="checkbox" name="assets" value="Social links"> Social links</label><label><input type="checkbox" name="assets" value="None yet" data-none> None yet</label>
             </div>
-            <div class="upload-note" id="uploadNote" hidden>One file per field. Maximum 2.5 MB per file and 7.5 MB total. Use the asset-folder link for multiple or larger files.</div>
+            <div class="upload-note" id="uploadNote" hidden>One file per field. Maximum 1.25 MB per file and 3 MB total. Use the asset-folder link for multiple or larger files.</div>
             <div class="conditional-panel" id="logoUploadPanel" hidden>
-              <div class="field"><label for="logoFile">Logo file</label><input id="logoFile" name="logo_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"><p class="hint">PNG, JPG, or WEBP. Transparent PNG preferred.</p></div>
+              <div class="field"><label for="logoFile">Logo file</label><input id="logoFile" name="logo_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">PNG, JPG, or WEBP. Transparent PNG preferred.</p></div>
             </div>
             <div class="conditional-panel" id="photoUploadPanel" hidden>
-              <div class="upload-grid"><div class="field"><label for="heroFile">Best hero photo</label><input id="heroFile" name="hero_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"><p class="hint">Choose a wide, sharp photo that instantly shows your best work.</p></div><div class="field"><label for="supportFile">Best supporting photo</label><input id="supportFile" name="supporting_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-mb="2.5"><p class="hint">A team, process, location, or second project photo works well.</p></div></div>
+              <div class="upload-grid"><div class="field"><label for="heroFile">Best hero photo</label><input id="heroFile" name="hero_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">Choose a wide, sharp photo that instantly shows your best work.</p></div><div class="field"><label for="supportFile">Best supporting photo</label><input id="supportFile" name="supporting_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">A team, process, location, or second project photo works well.</p></div></div>
             </div>
             <div class="conditional-panel" id="assetLinkPanel" hidden>
               <div class="field"><label for="assetLink">Full asset folder link</label><input id="assetLink" name="asset_folder_link" type="url" inputmode="url" placeholder="Public Drive, Dropbox, or OneDrive folder"><p class="hint">Add 5–10 project, team, or location photos plus any brand guide. Make the link viewable by anyone with the link.</p></div>
@@ -681,16 +680,17 @@ function updateProofPanel(){
 const fileInputs=[...form.querySelectorAll('input[type="file"]')];
 const allowedRasterTypes=new Set(['image/png','image/jpeg','image/webp']);
 const allowedRasterExtension=/\.(?:png|jpe?g|webp)$/i;
+const uploadMaxFileBytes=1250000,uploadMaxTotalBytes=3000000;
 function isAllowedRaster(file){
   return allowedRasterExtension.test(file.name)&&(!file.type||allowedRasterTypes.has(file.type));
 }
 fileInputs.forEach(input=>input.addEventListener('change',()=>{
-  const file=input.files[0];const maxMb=parseFloat(input.dataset.maxMb||'2.5');
+  const file=input.files[0];const maxBytes=Number(input.dataset.maxBytes||uploadMaxFileBytes);
   clearFieldError(input);
   if(file&&!isAllowedRaster(file)){input.value='';markFieldError(input);err.textContent=`${file.name} is not an accepted image. Upload a PNG, JPG, or WEBP file.`;return}
-  if(file&&file.size>maxMb*1024*1024){input.value='';markFieldError(input);err.textContent=`${file.name} is larger than ${maxMb} MB. Use the asset-folder link instead.`;return}
+  if(file&&file.size>maxBytes){input.value='';markFieldError(input);err.textContent=`${file.name} is larger than 1.25 MB. Use the asset-folder link instead.`;return}
   const total=fileInputs.reduce((sum,el)=>sum+[...el.files].reduce((n,f)=>n+f.size,0),0);
-  if(total>7.5*1024*1024){input.value='';markFieldError(input);err.textContent='Uploads exceed the 7.5 MB total. Use the asset-folder link instead.'}else err.textContent='';
+  if(total>uploadMaxTotalBytes){input.value='';markFieldError(input);err.textContent='Uploads exceed the 3 MB total. Use the asset-folder link instead.'}else err.textContent='';
 }));
 
 const reviewLabels={
@@ -836,9 +836,9 @@ function validateUploads(){
       input.scrollIntoView({behavior:'smooth',block:'center'});
       return false;
     }
-    const maxMb=parseFloat(input.dataset.maxMb||'2.5');
-    if(file.size>maxMb*1024*1024){
-      err.textContent=`${file.name} is larger than ${maxMb} MB. Use the asset-folder link instead.`;
+    const maxBytes=Number(input.dataset.maxBytes||uploadMaxFileBytes);
+    if(file.size>maxBytes){
+      err.textContent=`${file.name} is larger than 1.25 MB. Use the asset-folder link instead.`;
       markFieldError(input);
       showStep(steps.indexOf(input.closest('.form-step')));
       openAncestorDetails(input);
@@ -847,15 +847,15 @@ function validateUploads(){
     }
     total+=file.size;
   }
-  if(total>7.5*1024*1024){
-    err.textContent='Uploads exceed the 7.5 MB total. Use the asset-folder link instead.';
+  if(total>uploadMaxTotalBytes){
+    err.textContent='Uploads exceed the 3 MB total. Use the asset-folder link instead.';
     showStep(steps.findIndex(step=>step.contains(document.getElementById('assetChoices'))));
     openAncestorDetails(document.getElementById('assetChoices'));
     return false;
   }
   return true;
 }
-form.addEventListener('submit',event=>{
+form.addEventListener('submit',async event=>{
   event.preventDefault();
   if(form.dataset.intakeEnabled!=='true'){err.textContent='Preview requests are temporarily paused while delivery routing is verified.';return}
   if(submitting)return;
@@ -868,16 +868,26 @@ form.addEventListener('submit',event=>{
   }
   if(!validateUploads())return;
 
-  try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
-    event:'arc_preview_request',event_id:randomId(),
-    session_id:analyticsFields.analyticsSessionId.value,path:'/thank-you/',expires_at:Date.now()+30*60*1000
-  }))}catch(error){}
   submitting=true;
   submit.disabled=true;
   submit.textContent='Sending...';
   form.setAttribute('aria-busy','true');
-
-  requestAnimationFrame(()=>HTMLFormElement.prototype.submit.call(form));
+  try{
+    const response=await fetch('/api/intake/submit',{method:'POST',body:new FormData(form),credentials:'omit',redirect:'error',referrerPolicy:'same-origin'});
+    const value=await response.json();
+    const accepted=response.status===201&&value&&Object.keys(value).sort().join(',')==='accepted,schema,submission_id'&&value.schema==='arc-intake-submission-accepted-v1'&&value.accepted===true&&/^[0-9a-f-]{36}$/i.test(value.submission_id);
+    if(!accepted)throw new Error(response.status===503?'INTAKE_DISABLED':'INTAKE_REJECTED');
+    try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
+      event:'arc_preview_request',event_id:randomId(),
+      session_id:analyticsFields.analyticsSessionId.value,path:'/thank-you/',expires_at:Date.now()+30*60*1000
+    }))}catch(error){}
+    location.assign('/thank-you/');
+  }catch(error){
+    submitting=false;form.removeAttribute('aria-busy');submit.textContent='Submit Preview Request';
+    const paused=error.message==='INTAKE_DISABLED';
+    err.textContent=paused?'Preview requests are temporarily paused while delivery routing is verified.':'Your request was not stored. Please try again later.';
+    if(paused)setIntakeAvailability(false);else submit.disabled=false;
+  }
 });
 function setIntakeAvailability(enabled){
   form.dataset.intakeEnabled=enabled?'true':'false';form.setAttribute('aria-disabled',String(!enabled));form.toggleAttribute('inert',!enabled);

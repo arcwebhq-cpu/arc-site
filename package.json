@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "node scripts/build-site.mjs",
-    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs"
+    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/arc2-final-delivery-ack.mjs && node tests/arc2-producer-compatibility.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "10.7.12"

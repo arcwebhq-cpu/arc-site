@@ -13,7 +13,7 @@ Status: **not active across every provider**. This document is an operational re
 ## Activation evidence required
 
 1. Name the accountable adult operator before live payment.
-2. Inventory the exact Netlify Forms/uploads, Zapier Tables, Gmail, GitHub, Stripe, and backup locations.
+2. Inventory the exact first-party Netlify Function/Blobs intake records and uploads, Zapier Tables, Gmail, GitHub, Stripe, and backup locations.
 3. Configure automated deletion where the provider supports it.
 4. Create a monthly deletion task for every remaining store, with an immutable completion record that contains counts but no customer data.
 5. Run one synthetic expired-record test through each store and prove the intended record is deleted without deleting an in-scope record.

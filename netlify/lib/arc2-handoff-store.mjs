@@ -29,3 +29,15 @@ export async function readIndex(store, key) {
   const entry = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
   return entry?.data || null;
 }
+
+export async function readIndexEntry(store, key) {
+  const entry = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+  return entry ? { value: entry.data, etag: entry.etag } : null;
+}
+
+export async function replaceIndex(store, key, entry, value) {
+  if (!entry?.etag) throw new TypeError('CAS index entry must include an ETag.');
+  const result = await store.setJSON(key, value, { onlyIfMatch: entry.etag });
+  if (!result?.modified || !result.etag) throw new Error('ARC2_STATE_CONTENTION');
+  return { value, etag: result.etag };
+}

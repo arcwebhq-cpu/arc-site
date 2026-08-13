@@ -6,7 +6,8 @@ import {
 } from 'node:crypto';
 
 export const HANDOFF_STORE = 'arc2-handoffs';
-export const HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
+export const LEGACY_HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
+export const HANDOFF_SCHEMA = 'arc2-netlify-handoff-v2';
 export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v1';
 export const ARTIFACT_EVIDENCE_SCOPE = 'netlify-claimable-deploy-artifacts';
 export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v1\n';
@@ -18,6 +19,11 @@ export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v2';
 export const CLAIM_STATE_EVIDENCE_SCOPE = 'netlify-deploy-and-claim-final-deploy';
 export const CLAIM_STATE_SIGNATURE_PREFIX = 'arc2-claim-state-evidence-signature-v2\n';
 export const OUTBOX_CLAIM_VERSION = 'arc2-final-delivery-outbox-v1';
+export const FINAL_DELIVERY_RECEIPT_VERSION = 'arc2-final-email-delivery-receipt-v1';
+export const FINAL_DELIVERY_RECEIPT_SCOPE = 'authoritative-final-email-provider-delivery';
+export const FINAL_DELIVERY_RECEIPT_SIGNATURE_PREFIX = 'arc2-final-email-delivery-receipt-signature-v1\n';
+export const FINAL_DELIVERY_PROVIDER_EVENT_ID_PREFIX = 'arc2-final-delivery-provider-event-id-v1\n';
+export const FINAL_DELIVERY_PROVIDER_MESSAGE_ID_PREFIX = 'arc2-final-delivery-provider-message-id-v1\n';
 export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
 
@@ -53,7 +59,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
 const PREVIEW_FOLDER_PATTERN = /^[a-z0-9][a-z0-9-]*-[a-f0-9]{8}$/;
 const NETLIFY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/;
-const SAFE_SITE_NAME_PATTERN = /^arc-[a-f0-9]{24}$/;
+const SAFE_SITE_NAME_PATTERN = /^arc-lead-route-[a-f0-9]{24}$/;
+const STORED_SITE_NAME_PATTERN = /^(?:arc-lead-route-|arc-)[a-f0-9]{24}$/;
 const SAFE_FORM_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const SAFE_PATH_PATTERN = /^(?:index\.html|_headers)$/;
 const PAYMENT_FIELDS = Object.freeze([
@@ -171,7 +178,41 @@ export function signJwtHS256(payload, secret) {
   return `${header}.${body}.${signature}`;
 }
 
+const HANDOFF_ENVIRONMENT_ALIASES = Object.freeze([
+  Object.freeze({
+    canonical: 'NETLIFY_ADMIN_PAT',
+    alias: 'NETLIFY_ACCESS_TOKEN',
+    conflict: 'NETLIFY_ADMIN_PAT_NETLIFY_ACCESS_TOKEN_CONFLICT',
+  }),
+  Object.freeze({
+    canonical: 'ARC_EXPECTED_PRODUCT_TAX_CODE',
+    alias: 'ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE',
+    conflict: 'ARC_EXPECTED_PRODUCT_TAX_CODE_ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE_CONFLICT',
+  }),
+]);
+
+export function resolveHandoffEnvironment(env = process.env) {
+  const source = env && typeof env === 'object' ? env : {};
+  const environment = { ...source };
+  const conflicts = [];
+  for (const { canonical, alias, conflict } of HANDOFF_ENVIRONMENT_ALIASES) {
+    const canonicalPresent = String(source[canonical] ?? '').length > 0;
+    const aliasPresent = String(source[alias] ?? '').length > 0;
+    if (canonicalPresent && aliasPresent && source[canonical] !== source[alias]) conflicts.push(conflict);
+    if (!canonicalPresent && aliasPresent) environment[canonical] = source[alias];
+  }
+  return { environment, conflicts };
+}
+
+function requireResolvedHandoffEnvironment(env) {
+  const resolved = resolveHandoffEnvironment(env);
+  if (resolved.conflicts.length) throw new TypeError('Handoff environment aliases conflict.');
+  return resolved.environment;
+}
+
 export function configuredEnvironment(env = process.env) {
+  const resolved = resolveHandoffEnvironment(env);
+  env = resolved.environment;
   const required = [
     'ARC_CHECKOUT_BINDING_SECRET',
     'ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET',
@@ -181,6 +222,8 @@ export function configuredEnvironment(env = process.env) {
     'ARC_CLAIM_TOKEN_SECRET',
     'ARC_CLAIM_STATE_EVIDENCE_SECRET',
     'ARC_EMAIL_CLAIM_BINDING_SECRET',
+    'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
+    'ARC_FINAL_DELIVERY_ACK_SECRET',
     'ARC_EXPECTED_PAYMENT_LINK_ID',
     'ARC_EXPECTED_PRICE_ID',
     'ARC_EXPECTED_PRODUCT_TAX_CODE',
@@ -244,10 +287,11 @@ export function configuredEnvironment(env = process.env) {
     runtimeOriginsValid = false;
   }
   return {
-    enabled: missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
+    enabled: resolved.conflicts.length === 0 && missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
       liveModeValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
     missing,
     invalid: [
+      ...resolved.conflicts,
       ...shortSecrets,
       ...(duplicateSecrets ? ['ARC_SECRETS_MUST_BE_DISTINCT'] : []),
       ...invalidAttestations,
@@ -348,6 +392,7 @@ export function normalizeDeployArtifacts(raw, expectedArtifacts) {
 }
 
 export function normalizePaymentEvidence(raw, signature, secret, artifactEvidence, env) {
+  env = requireResolvedHandoffEnvironment(env);
   const canonical = stringValue(raw, 'Payment evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Payment evidence');
   exactKeys(value, PAYMENT_FIELDS, 'Payment evidence');
@@ -448,7 +493,7 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
     throw new TypeError('Lead notification email is invalid or unbound.');
   }
   const formName = extractNetlifyFormName(production.bytes);
-  return { artifact, payment, deployArtifacts, leadEmail, formName };
+  return { artifact, payment, deployArtifacts, leadEmail, leadRouteRecipientHmacSha256: recipientHmac, formName };
 }
 
 export function handoffKey(paymentEvidence, stateSecret) {
@@ -458,7 +503,7 @@ export function handoffKey(paymentEvidence, stateSecret) {
 }
 
 export function deterministicSiteName(paymentEvidence, stateSecret) {
-  return `arc-${hmacHex(stateSecret, `site-name-v1\n${paymentEvidence.checkout_session_id}\n${paymentEvidence.bundle_fingerprint}`).slice(0, 24)}`;
+  return `arc-lead-route-${hmacHex(stateSecret, `site-name-v1\n${paymentEvidence.checkout_session_id}\n${paymentEvidence.bundle_fingerprint}`).slice(0, 24)}`;
 }
 
 export function createInitialRecord(normalized, env, key, now = new Date(), random = {}) {
@@ -479,6 +524,7 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     production_content_sha256: normalized.artifact.value.production_content_sha256,
     customer_email_sha256: normalized.payment.value.customer_email_sha256,
     lead_notification_email_sha256: sha256Hex(normalized.leadEmail),
+    lead_route_recipient_hmac_sha256: normalized.leadRouteRecipientHmacSha256,
     preview_folder: normalized.artifact.value.preview_folder,
     artifacts: normalized.artifact.artifacts,
     form_name: normalized.formName,
@@ -512,6 +558,14 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     production_url: null,
     outbox_claim_status: null,
     outbox_claim_key_hmac_sha256: null,
+    final_delivery_receipt_sha256: null,
+    final_delivery_provider: null,
+    final_delivery_provider_account_hmac_sha256: null,
+    final_delivery_provider_event_id_hmac_sha256: null,
+    final_delivery_provider_message_id_hmac_sha256: null,
+    final_delivery_event_type: null,
+    final_delivery_status: null,
+    final_delivery_receipt_issued_at: null,
     delivered_at: null,
   };
   if (!SAFE_SITE_NAME_PATTERN.test(record.netlify_site_name)) throw new TypeError('Deterministic site name is invalid.');
@@ -596,6 +650,7 @@ export function emptyResponse(status) {
 }
 
 async function netlifyRequest(path, options, env, fetchImpl = fetch) {
+  env = requireResolvedHandoffEnvironment(env);
   const url = `https://api.netlify.com/api/v1${path}`;
   const response = await fetchImpl(url, {
     ...options,
@@ -829,7 +884,7 @@ export function normalizeProductionUrl(value) {
 
 export function canonicalNetlifySiteUrl(siteName) {
   const value = stringValue(siteName, 'Netlify site name', 5, 63);
-  if (!SAFE_SITE_NAME_PATTERN.test(value)) throw new TypeError('Netlify site name is invalid.');
+  if (!STORED_SITE_NAME_PATTERN.test(value)) throw new TypeError('Netlify site name is invalid.');
   return `https://${value}.netlify.app/`;
 }
 
@@ -920,14 +975,38 @@ export function createClaimStateEvidence(record, env) {
   };
 }
 
-export function validateExpectedBindings(record) {
+const LEGACY_HANDOFF_DEFAULTS = Object.freeze({
+  lead_route_recipient_hmac_sha256: null,
+  final_delivery_receipt_sha256: null,
+  final_delivery_provider: null,
+  final_delivery_provider_account_hmac_sha256: null,
+  final_delivery_provider_event_id_hmac_sha256: null,
+  final_delivery_provider_message_id_hmac_sha256: null,
+  final_delivery_event_type: null,
+  final_delivery_status: null,
+  final_delivery_receipt_issued_at: null,
+});
+
+export function normalizeStoredHandoffRecord(value) {
+  const record = plainObject(value, 'Stored handoff record');
+  if (record.schema === HANDOFF_SCHEMA) return record;
+  if (record.schema !== LEGACY_HANDOFF_SCHEMA) throw new TypeError('Stored handoff record schema is invalid.');
+  if (record.state === 'DELIVERED' && (!record.final_delivery_receipt_sha256 || !record.final_delivery_receipt_issued_at)) {
+    throw new TypeError('Legacy delivered handoff lacks authoritative delivery evidence.');
+  }
+  return { ...LEGACY_HANDOFF_DEFAULTS, ...record, schema: HANDOFF_SCHEMA };
+}
+
+export function validateExpectedBindings(value) {
+  const record = normalizeStoredHandoffRecord(value);
   if (record.schema !== HANDOFF_SCHEMA || !HANDOFF_STATES.includes(record.state) || !Number.isSafeInteger(record.revision) || record.revision < 1 ||
-      !UUID_PATTERN.test(record.netlify_session_id) || !SAFE_SITE_NAME_PATTERN.test(record.netlify_site_name)) {
+      !UUID_PATTERN.test(record.netlify_session_id) || !STORED_SITE_NAME_PATTERN.test(record.netlify_site_name)) {
     throw new TypeError('Stored handoff record is invalid.');
   }
   for (const field of ['payment_evidence_sha256', 'artifact_evidence_sha256', 'artifact_manifest_sha256', 'bundle_fingerprint', 'production_content_sha256', 'customer_email_sha256', 'lead_notification_email_sha256']) {
     hex64(record[field], field);
   }
+  if (record.lead_route_recipient_hmac_sha256 !== null) hex64(record.lead_route_recipient_hmac_sha256, 'lead_route_recipient_hmac_sha256');
   if (record.claim_token_hmac_sha256 !== null) hex64(record.claim_token_hmac_sha256, 'claim_token_hmac_sha256');
   if (record.claim_token_consumed_hmac_sha256 !== null) hex64(record.claim_token_consumed_hmac_sha256, 'claim_token_consumed_hmac_sha256');
   if (record.lead_route_receipt_sha256 !== null) hex64(record.lead_route_receipt_sha256, 'lead_route_receipt_sha256');
@@ -1001,6 +1080,26 @@ export function validateExpectedBindings(record) {
   } else if (record.outbox_claim_status !== null || record.outbox_claim_key_hmac_sha256 !== null) {
     throw new TypeError('Delivery outbox must be null before final deploy verification.');
   }
+  if (record.state === 'DELIVERED') {
+    hex64(record.final_delivery_receipt_sha256, 'final_delivery_receipt_sha256');
+    if (typeof record.final_delivery_provider !== 'string' || !/^[a-z0-9][a-z0-9_.-]{1,63}$/.test(record.final_delivery_provider)) {
+      throw new TypeError('final_delivery_provider is invalid.');
+    }
+    hex64(record.final_delivery_provider_account_hmac_sha256, 'final_delivery_provider_account_hmac_sha256');
+    hex64(record.final_delivery_provider_event_id_hmac_sha256, 'final_delivery_provider_event_id_hmac_sha256');
+    hex64(record.final_delivery_provider_message_id_hmac_sha256, 'final_delivery_provider_message_id_hmac_sha256');
+    if (record.final_delivery_event_type !== 'message.delivered' || record.final_delivery_status !== 'delivered') {
+      throw new TypeError('Final delivery event type or status is invalid.');
+    }
+    const deliveredAt = Date.parse(record.delivered_at);
+    const receiptIssuedAt = Date.parse(isoTimestamp(record.final_delivery_receipt_issued_at, 'final_delivery_receipt_issued_at'));
+    if (receiptIssuedAt < deliveredAt) throw new TypeError('Final delivery receipt timestamps are out of order.');
+  } else if (record.final_delivery_receipt_sha256 !== null || record.final_delivery_provider !== null ||
+      record.final_delivery_provider_account_hmac_sha256 !== null || record.final_delivery_provider_event_id_hmac_sha256 !== null ||
+      record.final_delivery_provider_message_id_hmac_sha256 !== null || record.final_delivery_event_type !== null ||
+      record.final_delivery_status !== null || record.final_delivery_receipt_issued_at !== null) {
+    throw new TypeError('Final delivery receipt must be null before provider acknowledgement.');
+  }
   const orderedTimestamps = [
     record.created_at,
     record.site_created_at,
@@ -1010,6 +1109,7 @@ export function validateExpectedBindings(record) {
     record.claimed_verified_at,
     record.final_deploy_ready_at,
     record.delivered_at,
+    record.final_delivery_receipt_issued_at,
   ].filter(Boolean).map((value) => Date.parse(isoTimestamp(value, 'state timestamp')));
   if (orderedTimestamps.some((value, index) => index > 0 && value < orderedTimestamps[index - 1])) {
     throw new TypeError('Stored handoff timestamps are out of order.');

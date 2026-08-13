@@ -30,9 +30,13 @@ assert.ok(files.includes('claim/claim.js'));
 assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');
+const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
 assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/, 'Disabled production build must not register or expose a directly postable Netlify form.');
+assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
 assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
+assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
+assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
 
 for (const file of files.filter((name) => name.endsWith('.html'))) {
   const html = await readFile(path.join(dist, file), 'utf8');
