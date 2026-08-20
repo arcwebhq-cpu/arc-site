@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: arcwebhq-cpu/arc-previews
+          ref: 853da05025587418a19c14b06f3452b397c8a743
           path: .arc-previews-contract
       - uses: actions/setup-node@v4
         with:

@@ -48,6 +48,12 @@ assert.equal(aggregate[7].conversion_rate, 100, 'Request-only sessions must not 
 assert.equal(eventConfig.path, '/api/analytics/event');
 assert.deepEqual(eventConfig.rateLimit.aggregateBy, ['ip', 'domain']);
 assert.equal(dashboardConfig.path, '/internal/analytics');
+const savedCollectionEnabled = process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
+delete process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
+assert.equal((await analyticsEventHandler(new Request('https://arcweb.onl/api/analytics/event', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base),
+}))).status, 503, 'Analytics collection must be an exact default-off no-op.');
+process.env.ARC_ANALYTICS_COLLECTION_ENABLED = 'true';
 const wrongHost = await analyticsEventHandler(new Request('https://example.com/api/analytics/event', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base),
 }));
@@ -60,6 +66,21 @@ const badPayload = await analyticsEventHandler(new Request('https://arcweb.onl/a
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...base, email: 'person@example.com' }),
 }));
 assert.equal(badPayload.status, 400);
+let oversizedCancelled = false;
+const oversizedStream = new ReadableStream({
+  start(controller) {
+    controller.enqueue(new Uint8Array(2048));
+    controller.enqueue(new Uint8Array(1));
+  },
+  cancel() { oversizedCancelled = true; },
+});
+const oversizedChunked = await analyticsEventHandler(new Request('https://arcweb.onl/api/analytics/event', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: oversizedStream, duplex: 'half',
+}));
+assert.equal(oversizedChunked.status, 413, 'A headerless/chunked body must be capped while streaming.');
+assert.equal(oversizedCancelled, true, 'The oversized analytics stream must be cancelled immediately.');
+if (savedCollectionEnabled === undefined) delete process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
+else process.env.ARC_ANALYTICS_COLLECTION_ENABLED = savedCollectionEnabled;
 
 const savedUser = process.env.ARC_ANALYTICS_DASHBOARD_USER;
 const savedPassword = process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;

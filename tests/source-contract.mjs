@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
-const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status] = await Promise.all([
+const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status, intakeSubmissionCore, intakeSubmit] = await Promise.all([
   readFile(new URL('index.html', root), 'utf8'),
   readFile(new URL('thank-you/index.html', root), 'utf8'),
   readFile(new URL('payment-success/index.html', root), 'utf8'),
@@ -33,10 +33,14 @@ const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, r
   readFile(new URL('netlify/functions/arc2-claim-webhook.mjs', root), 'utf8'),
   readFile(new URL('netlify/functions/arc2-claim-invitation-ready.mjs', root), 'utf8'),
   readFile(new URL('netlify/functions/arc2-handoff-status.mjs', root), 'utf8'),
+  readFile(new URL('netlify/lib/intake-submission-core.mjs', root), 'utf8'),
+  readFile(new URL('netlify/functions/intake-submit.mjs', root), 'utf8'),
 ]);
 const readiness = JSON.parse(readinessText);
 const packageJson = JSON.parse(packageText);
 const imageSizePackage = JSON.parse(imageSizePackageText);
+const intakeBuildMarker = await readFile(new URL('netlify/lib/intake-build-marker.mjs', root), 'utf8');
+const buildScript = await readFile(new URL('scripts/build-site.mjs', root), 'utf8');
 
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
@@ -105,9 +109,13 @@ const fileInputs = [...home.matchAll(/<input\b[^>]*\btype="file"[^>]*>/g)].map((
 assert.equal(fileInputs.length, 3, 'Expected the logo and two photo inputs.');
 for (const input of fileInputs) {
   assert.match(input, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(input, /data-max-bytes="1250000"/);
+  assert.doesNotMatch(input, /data-max-mb=/);
   assert.doesNotMatch(input, /svg/i);
 }
 assert.match(home, /const allowedRasterTypes=new Set\(\['image\/png','image\/jpeg','image\/webp'\]\)/);
+assert.match(home, /const uploadMaxFileBytes=1250000,uploadMaxTotalBytes=3000000/);
+assert.match(home, /Maximum 1\.25 MB per file and 3 MB total/);
 assert.match(home, /if\(!isAllowedRaster\(file\)\)/);
 
 assert.match(home, /const draftKey='arc-preview-draft-v7'/);
@@ -118,6 +126,11 @@ assert.match(home, /id="projectForm" inert/);
 assert.match(home, /Preview requests are temporarily paused while delivery routing is verified/);
 assert.match(home, /fetch\('\/api\/intake\/readiness'/);
 assert.match(home, /ARC_INTAKE_ENABLED|intake_enabled/);
+assert.match(home, /<form action="\/api\/intake\/submit"/);
+assert.match(home, /fetch\('\/api\/intake\/submit',\{method:'POST',body:new FormData\(form\)/);
+assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=/,
+  'Even an enabled build must not register a native Netlify Form that bypasses runtime readiness.');
+assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
 assert.match(home, /const draftTtlMs=7\*24\*60\*60\*1000/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /freshConfirmationFields\.has\(field\.name\)/);
@@ -162,7 +175,8 @@ assert.match(thankYou, /fetch\('\/api\/analytics\/event'/);
 assert.match(thankYou, /if\(response\.ok\)sessionStorage\.removeItem\(pendingKey\)/);
 assert.match(privacy, /Netlify Function and Blobs store/i);
 assert.match(privacy, /does not store names, business names, emails, phone numbers, addresses, form answers, IP addresses, user agents, referrers, or UTM values/i);
-assert.match(privacy, /scheduled for deletion after 90 days/i);
+assert.match(privacy, /retention target for first-party analytics events is 90 days/i);
+assert.match(privacy, /deletion control is currently disabled pending operator approval/i);
 
 assert.match(home, /<b>3–4 minutes<\/b>/);
 assert.match(home, /Pay the \$5,000 service subtotal plus applicable sales tax only when you approve it/i);
@@ -240,29 +254,98 @@ assert.equal(readiness.checkout.status, 'blocked');
 assert.equal(readiness.checkout.allowed_mode, 'test-only');
 assert.ok(readiness.checkout.required_evidence.includes('adult-purchaser-affirmative-acceptance'));
 assert.ok(readiness.checkout.required_evidence.includes('automatic-tax-complete'));
+assert.equal(readiness.checkout.sandbox_evidence.length, 1);
+assert.deepEqual(readiness.checkout.sandbox_evidence[0], {
+  observed_at: '2026-08-13',
+  environment: 'stripe-test-mode',
+  payment_link_id: 'plink_1U3t07Gv1R7moOUqoaUjIIHI',
+  payment_intent_id: 'pi_3U3t38Gv1R7moOUq1qCOkiyV',
+  currency: 'USD',
+  subtotal_amount_minor: 500000,
+  tax_amount_minor: 0,
+  total_amount_minor: 500000,
+  payment_result: 'succeeded',
+  stripe_tax: 'inactive',
+  consent_ui_observed: 'custom-dropdown',
+  redirect_path_observed: '/payment-success/',
+  handoff_created: false,
+  scope: 'sandbox-checkout-and-success-redirect-only',
+});
 assert.equal(readiness.manual_activation_gates.status, 'blocked');
 assert.equal(readiness.manual_activation_gates.stripe_live_mode_default, false);
 assert.deepEqual(readiness.manual_activation_gates.verified_attestations, []);
+assert.ok(readiness.manual_activation_gates.required_exact_environment_attestations.includes('ARC_BUILD_INTAKE_ENABLED=true'));
+assert.ok(readiness.manual_activation_gates.required_exact_environment_attestations.some((value) => value.startsWith('ARC_INTAKE_READINESS_ATTESTATION=')));
+assert.equal(readiness.manual_activation_gates.required_exact_environment_attestations.includes('ARC_INTAKE_ENABLED=true'), false);
 assert.equal(readiness.analytics.status, 'pending-live-verification');
 assert.equal(readiness.analytics.receiver, 'Netlify Function /api/analytics/event');
 assert.equal(readiness.analytics.dashboard, 'Basic-auth Netlify Function /internal/analytics');
 assert.equal(readiness.analytics.storage, 'Netlify Blobs arc-analytics');
 assert.equal(readiness.analytics.retention_days, 90);
+assert.equal(readiness.analytics.automatic_retention_enforcement_active, false);
+assert.ok(readiness.analytics.environment_requirements.includes('ARC_BUILD_ANALYTICS_ENABLED=true'));
+assert.ok(readiness.analytics.environment_requirements.includes('ARC_ANALYTICS_COLLECTION_ENABLED=true'));
 assert.deepEqual(readiness.analytics.verified_live_events, []);
 assert.ok(readiness.analytics.environment_requirements.includes('ARC_ANALYTICS_DASHBOARD_PASSWORD'));
 assert.ok(readiness.analytics.activation_requirements.includes('live-event-receipt-verified'));
 assert.equal(readiness.intake_routing.status, 'unverified');
 assert.equal(readiness.intake_routing.verified_recipient, null);
+assert.deepEqual(readiness.intake_routing.runtime_attestation, {
+  required_build_runtime_gate: 'ARC_BUILD_INTAKE_ENABLED=true',
+  required_same_deploy_build_marker: 'arc-intake-build-marker-v1 intake_enabled=true',
+  environment_variable: 'ARC_INTAKE_READINESS_ATTESTATION',
+  schema: 'arc-intake-readiness-attestation-v1',
+  version: 1,
+  default_enabled: false,
+  reject_unknown_or_partial_records: true,
+  required_exact_boolean_fields: [
+    'intake_enabled',
+    'route_verified',
+    'recipient_verified',
+    'dedupe_verified',
+    'failure_alert_verified',
+    'transactional_sender_verified',
+    'adult_operator_verified',
+    'legal_readiness_verified',
+    'tax_readiness_verified',
+    'payment_readiness_verified',
+    'arc1_consumer_adapter_verified',
+    'native_netlify_forms_disabled_verified',
+    'retention_verified',
+    'asset_pipeline_verified',
+  ],
+});
 assert.equal(readiness.customer_lead_routing.must_block_production_when_unverified, true);
 assert.equal(readiness.intake_trust_boundary.status, 'pending-server-verification');
 assert.equal(readiness.intake_trust_boundary.client_hidden_fields_are_authoritative, false);
-assert.ok(readiness.intake_trust_boundary.required_pipeline_evidence.includes('provider-submission-id-used-for-folder-identity'));
+assert.equal(readiness.intake_routing.native_netlify_form_registered, false);
+assert.equal(readiness.intake_routing.submission_endpoint, 'Netlify Function /api/intake/submit');
+assert.equal(readiness.intake_routing.stored_schema, 'arc-intake-function-submission-v1');
+assert.equal(readiness.intake_routing.arc1_consumer_compatible, false);
+assert.ok(readiness.intake_routing.verification_requirements.includes('build-runtime-gate-blocks-before-body-parse-and-storage'));
+assert.ok(readiness.intake_routing.verification_requirements.includes('same-deploy-immutable-build-marker-enabled'));
+assert.ok(readiness.intake_routing.verification_requirements.includes('provider-form-detection-disabled-and-legacy-direct-post-rejected-after-deploy'));
+assert.ok(readiness.intake_trust_boundary.required_pipeline_evidence.includes('server-issued-submission-id-used-for-preview-identity'));
+assert.ok(readiness.asset_uploads.required_pipeline_evidence.includes('legacy-folder-link-field-rejected-until-private-provider-adapter-is-verified'));
 assert.equal(readiness.asset_uploads.status, 'pending-server-verification');
 assert.equal(readiness.asset_uploads.client_checks_are_security_boundary, false);
+assert.deepEqual(readiness.asset_uploads.limits, {
+  netlify_buffered_payload_bytes: 6000000,
+  netlify_effective_binary_payload: 'approximately-4.5-MB',
+  request_max_bytes: 4000000,
+  request_base64_bytes_at_max: 5333336,
+  platform_buffer_headroom_bytes: 666664,
+  per_file_max_bytes: 1250000,
+  total_file_max_bytes: 3000000,
+  text_max_bytes: 262144,
+  multipart_headroom_after_max_files_and_text_bytes: 737856,
+});
 assert.ok(readiness.asset_uploads.required_pipeline_evidence.includes('content-type-and-magic-byte-match'));
 assert.equal(readiness.data_retention.status, 'pending-provider-enforcement');
 assert.equal(readiness.data_retention.live_compliance_claim_allowed, false);
-assert.match(retentionControl, /Netlify Forms\/uploads, Zapier Tables, Gmail, GitHub, Stripe, and backup locations/);
+assert.ok(readiness.data_retention.unverified_stores.includes('netlify-blobs-intake-records-and-assets'));
+assert.equal(readiness.data_retention.unverified_stores.includes('netlify-forms-and-uploads'), false);
+assert.match(retentionControl, /first-party Netlify Function\/Blobs intake records and uploads, Zapier Tables, Gmail, GitHub, Stripe, and backup locations/);
 assert.match(retentionControl, /Apollo must remain off and live checkout must remain blocked/);
 assert.match(customerEmailContract, /checkout verification in progress/i);
 assert.match(customerEmailContract, /not confirmation that payment succeeded/i);
@@ -309,38 +392,77 @@ assert.match(imageSizeDisabled, /throw new Error\('Image parsing is intentionall
 assert.equal(packageJson.devDependencies['@sparticuz/chromium'], '149.0.0');
 assert.equal(packageJson.devDependencies.playwright, '1.62.0');
 assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
-assert.equal(packageJson.scripts.test, 'node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs');
+assert.deepEqual(packageJson.scripts.test.split(' && '), [
+  'node tests/source-contract.mjs',
+  'node tests/analytics-contract.mjs',
+  'node tests/intake-readiness-contract.mjs',
+  'node tests/intake-private-asset-contract.mjs',
+  'node tests/intake-arc1-bridge-contract.mjs',
+  'node tests/intake-arc1-dispatch-contract.mjs',
+  'node tests/stripe-reversal-contract.mjs',
+  'node tests/retention-control-contract.mjs',
+  'node tests/operations-audit-contract.mjs',
+  'node tests/arc2-handoff-contract.mjs',
+  'node tests/arc2-resumable-service.mjs',
+  'node tests/arc2-final-delivery-ack.mjs',
+  'node tests/arc2-producer-compatibility.mjs',
+  'node tests/showcase-contract.mjs',
+  'npm run build',
+  'node tests/build-contract.mjs',
+  'node tests/browser-contract.mjs',
+]);
 assert.match(analyticsCore, /const ALLOWED_KEYS = new Set\(\['event', 'event_id', 'session_id', 'path', 'cta', 'step', 'step_name'\]\)/);
 assert.match(analyticsCore, /STEP_LABELS = Object\.freeze\(\{ 1: 'Business', 2: 'Offer', 3: 'Details & consent', 4: 'Review' \}\)/);
 assert.match(analyticsCore, /Unexpected analytics field/);
 assert.match(analyticsEvent, /new Set\(\['arcweb\.onl', 'arcsites\.netlify\.app'\]\)/);
 assert.match(analyticsEvent, /onlyIfNew: true/);
+assert.match(analyticsEvent, /ARC_ANALYTICS_COLLECTION_ENABLED !== 'true'/,
+  'The analytics receiver must remain exact default-off while automation is disabled.');
 assert.match(analyticsEvent, /windowLimit: 60/);
 assert.doesNotMatch(analyticsEvent, /user-agent|x-forwarded|client-ip/i);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_USER/);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_PASSWORD/);
 assert.match(analyticsDashboard, /timingSafeEqual/);
 assert.match(analyticsDashboard, /X-Robots-Tag.*noindex/si);
-assert.match(analyticsPrune, /schedule: '17 4 \* \* \*'/);
+assert.match(analyticsDashboard, /retention target is \$\{RETENTION_DAYS\} days; deletion is manual until the separately approved pruning control is enabled and verified/i);
+assert.doesNotMatch(analyticsDashboard, /events expire after/i,
+  'The dashboard must not claim automatic expiry while analytics pruning is disabled.');
+assert.doesNotMatch(analyticsPrune, /\bschedule\s*:/,
+  'No analytics scheduled invocation may be registered while all automation is off.');
+assert.match(analyticsPrune, /ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED !== 'true'/,
+  'The analytics prune handler must remain an exact default-off no-op even if invoked manually.');
 assert.match(analyticsPrune, /isExpiredMetadata/);
 assert.match(arc2Core, /PAYMENT_FIELDS = Object\.freeze\(\[/);
 assert.match(arc2Core, /terms_of_service_consent/);
-assert.match(arc2Core, /ARC_EXPECTED_PAYMENT_LINK_ID/);
-assert.match(arc2Core, /ARC_EXPECTED_PRICE_ID/);
-assert.match(arc2Core, /ARC_EXPECTED_PRODUCT_TAX_CODE/);
+assert.doesNotMatch(arc2Core, /ARC_EXPECTED_(?:PAYMENT_LINK_ID|PRICE_ID|PRODUCT_TAX_CODE)/,
+  'V3 fulfillment must use the immutable private policy instead of mutable checkout singletons.');
+assert.match(arc2Core, /arc-private-checkout-policy-v1/);
 assert.match(arc2Core, /ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256/);
 assert.match(arc2Core, /ARC_EXPECTED_NETLIFY_SITE_ID/);
 assert.match(arc2Core, /ARC_PRODUCTION_SITE_BINDING/);
 assert.match(arc2Core, /ARC_PRODUCTION_ORIGIN_BINDING/);
 assert.match(arc2Core, /ARC_HANDOFF_ENABLED/);
+assert.match(arc2Core, /ARC_STRIPE_REVERSAL_CONTROL_REQUIRED/,
+  'Handoff readiness must require the reversal control instead of allowing an optional bypass.');
+assert.match(arc2Service, /assertProviderMutationAllowed/);
+assert.match(arc2Service, /create-site/);
+assert.match(arc2Service, /create-\$\{phase\}-deploy/);
+assert.match(arc2Service, /restore-deploy/);
+assert.match(arc2Service, /create-email-hook/);
 assert.match(arc2Core, /ARC_STRIPE_LIVE_MODE_ENABLED/);
+assert.match(arc2Core, /ARC_RUNTIME_ENVIRONMENT/,
+  'Function runtime identity must use an explicit deployment attestation instead of build-only Netlify CONTEXT.');
+assert.doesNotMatch(arc2Core, /env\.CONTEXT/,
+  'Build-only Netlify CONTEXT must not authorize Function runtime mutations.');
 assert.match(arc2Core, /subtotal_amount_minor_units/);
 assert.match(arc2Core, /tax_amount_minor_units/);
 assert.match(arc2Core, /automatic_tax_enabled/);
 assert.match(arc2Core, /tax_registration_status/);
 assert.match(arc2Core, /stripe_account_id_sha256/);
+assert.doesNotMatch(arc2Core, /payment_method_types|payment_methods/,
+  'Checkout policy must omit manual payment-method lists so Stripe can select eligible methods dynamically.');
 assert.match(arc2Core, /ARC_SECRETS_MUST_BE_DISTINCT/);
-assert.match(arc2Core, /arc2-claim-state-evidence-signature-v2\\n/);
+assert.match(arc2Core, /arc2-claim-state-evidence-signature-v3\\n/);
 assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
 assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
 assert.match(arc2Service, /filter: 'owner'/);
@@ -366,6 +488,26 @@ assert.doesNotMatch(arc2Invitation, /invitation[_ -]sent/i);
 assert.match(arc2Claim, /exchangeClaimBearer/);
 assert.match(arc2Webhook, /processClaimWebhook/);
 assert.match(arc2Status, /authenticateBearer\(request, process\.env\.ARC_HANDOFF_TRIGGER_SECRET\)/);
+assert.match(intakeSubmissionCore, /arc-intake-function-submission-v1/);
+assert.match(intakeSubmissionCore, /arc1_consumer_compatible: false/);
+assert.match(intakeSubmissionCore, /INTAKE_MAX_REQUEST_BYTES = 4_000_000/);
+assert.match(intakeSubmissionCore, /INTAKE_MAX_FILE_BYTES = 1_250_000/);
+assert.match(intakeSubmissionCore, /INTAKE_MAX_TOTAL_FILE_BYTES = 3_000_000/);
+assert.match(intakeSubmissionCore, /'primary_style'/);
+assert.match(intakeSubmissionCore, /values\.get\('asset_permission'\) !== 'Confirmed'/);
+assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
+assert.match(intakeBuildMarker, /intake_enabled: false/);
+assert.match(buildScript, /intakeBuildMarkerPath/);
+assert.match(buildScript, /intake_enabled: \$\{intakeBuildEnabled\}/);
+assert.match(intakeSubmit, /process\.env\.ARC_BUILD_INTAKE_ENABLED !== 'true'/);
+assert.match(intakeSubmit, /intakeEnabledFromBuildMarker\(buildMarker\)/);
+assert.match(intakeSubmit, /intakeEnabledFromAttestation\(process\.env\[INTAKE_READINESS_ENV\]\)/);
+assert.match(intakeSubmit, /Number\(contentLength\) > INTAKE_MAX_REQUEST_BYTES/);
+assert.match(intakeSubmit, /total > INTAKE_MAX_REQUEST_BYTES/);
+assert.match(intakeSubmit, /request\.body\?\.getReader/);
+assert.match(intakeSubmit, /getStore\(\{ name: INTAKE_STORE, consistency: 'strong' \}\)/);
+assert.match(intakeSubmit, /onlyIfNew: true/);
+assert.doesNotMatch(intakeSubmit, /fetch\(|Access-Control-Allow-Origin|console\.(?:log|error|warn)/i);
 
 for (const script of [...home.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]) {
   Function(script[1]);

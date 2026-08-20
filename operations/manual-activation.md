@@ -59,12 +59,22 @@ Record only the expected account-ID hash, Payment Link ID, Price ID, and terms
 version in runtime configuration. Run all five industry scenarios in Stripe test
 mode. Do not use a real card as a production smoke test.
 
+The handoff runtime accepts the product tax-code binding as either
+`ARC_EXPECTED_PRODUCT_TAX_CODE` or the workflow-facing alias
+`ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE`. Set only one. If both are present they
+must be byte-for-byte identical; a conflict keeps the handoff disabled.
+
 ## 3. Connect the ARC Netlify handoff account
 
 The adult account holder must supply the real ARC team slug/account ID, a
 least-privilege deployment credential, an OAuth client ID/secret, approved
 callback origin, and a separate destination test account. Secrets belong only in
 Netlify's encrypted environment-variable store.
+
+The handoff runtime accepts the deployment credential as either
+`NETLIFY_ADMIN_PAT` or the workflow-facing alias `NETLIFY_ACCESS_TOKEN`. Set only
+one. If both are present they must be byte-for-byte identical; a conflict keeps
+the handoff disabled.
 
 `ARC_HANDOFF_ENABLED` is the master kill switch and must remain absent or
 `false` until every handoff attestation and disposable end-to-end test below is
@@ -73,42 +83,123 @@ step; never commit it.
 
 Scope all handoff secrets to **Functions** and **Production** only in Netlify's
 Secrets Controller. Set `ARC_EXPECTED_NETLIFY_SITE_ID` to the production ARC site
-ID. Scope is the production-context boundary; at runtime the code additionally
+ID and set the explicit Function-scoped attestation
+`ARC_RUNTIME_ENVIRONMENT=production`. Scope is the production-context boundary;
+at runtime the code additionally
 requires exact `SITE_ID`, `SITE_NAME=arcsites`, and canonical `URL` origin equal
 to `ARC_PUBLIC_ORIGIN`. Netlify does not expose build-only `CONTEXT` or
 `DEPLOY_PRIME_URL` reliably to Functions, so they are not runtime identity gates.
-Probe these runtime values on a disposable disabled deploy before activation.
+The disabled test deployment must instead use `ARC_RUNTIME_ENVIRONMENT=sandbox`
+with the exact sandbox site identity. Probe these runtime values on a disposable
+disabled deploy before activation.
 
 Use a disposable synthetic site to prove: deterministic site recovery after an
 ambiguous API response, exact ZIP deploy, Netlify form detection, one enabled
 recipient hook, rendered-form submission, authoritative inbox receipt, claim
 transfer, destination-account verification, exact final redeploy, and cleanup.
+Every newly created handoff site uses the producer-compatible deterministic name
+`arc-lead-route-<24 lowercase hex>`; the committed cross-repository contract
+must pass against `ARC_PREVIEWS_DIR` before activation.
+Inventory stored handoffs before activation. Any old `arc-<24 lowercase hex>`
+record earlier than `INVITATION_READY` is deliberately quarantined: neither an
+exact start replay nor an invitation receipt can make that namespace satisfy the
+committed producer. Keep it untouched until a separately reviewed private
+migration is approved. Old-namespace records already at `INVITATION_READY` or
+later may continue through the downstream migration path without renaming their
+existing Netlify site.
 Confirm in writing whether the creator credential retains the API read/write
 capability required after claim; an unsigned claim callback alone is not proof.
+The customer invitation wrapper may remain available for 30 minutes, but each
+irreversible Netlify claim JWT issued after a fresh reversal guard expires after
+60 seconds. A reversal arriving after issuance cannot revoke an already issued
+external JWT; the guarded post-transfer readback must halt delivery and route
+the transferred site to adult review. Treat this narrow cross-provider window
+as a documented residual until Netlify offers revocation.
 
 The current local service is disabled preparation, not activation-ready. Before
 the master switch can change, engineering must also: unify the lead/inbox receipt
-producer and consumer against the actual handoff site; reserve provider/inbox
-receipt IDs globally; verify served bytes and zero snippets; split long work into
-bounded resumable steps with fetch timeouts and crash tests; recheck Stripe
-refund/dispute state before every irreversible transition; add provider delivery
-acknowledgement; and make outbox claims non-actionable until authoritative final
-state exists. Confirm the Netlify plan can enforce every configured rate-limit
-rule (or consolidate to the plan limit) and inspect deploy processing logs.
+producer and consumer against the actual handoff site; reserve all remaining
+provider/inbox receipt IDs globally; verify served bytes and zero snippets;
+split long work into bounded resumable steps with fetch timeouts and crash tests;
+and recheck Stripe refund/dispute state before every irreversible transition.
+The repository now has a fail-closed final-delivery acknowledgement consumer,
+but the chosen email provider's native signed-webhook adapter, create-only send
+attempt, and provider idempotency key are still external requirements. Configure
+`ARC_FINAL_DELIVERY_RECEIPT_SECRET` and the distinct endpoint bearer
+`ARC_FINAL_DELIVERY_ACK_SECRET` only when that producer is ready. Confirm the
+Netlify plan can enforce every configured rate-limit rule (or consolidate to the
+plan limit) and inspect deploy processing logs.
 
 Official implementation guide:
 https://developers.netlify.com/guides/deploying-sites-from-ai-tools/
 
 ## 4. Activate public intake only after routing proof
 
-The default production build strips Netlify form registration and the direct
-POST method, so a visitor cannot bypass the paused UI and create unmonitored PII
-submissions. Only after the real recipient, retention, notifications, provider
-usage, and one controlled submission are verified may a reviewed deploy set
-`ARC_BUILD_INTAKE_ENABLED=true`; the independent runtime variables
-`ARC_INTAKE_ENABLED=true` and `ARC_LEAD_ROUTE_VERIFIED=true` are still required.
-Before activation, inspect and delete any legacy retained test submissions under
-the approved retention policy.
+ARC no longer deploys a native Netlify Forms registration. Native form handling
+cannot be revoked at request time and therefore allowed direct POSTs around a
+paused browser UI. An enabled build posts only to the first-party
+`/api/intake/submit` Function, which rechecks readiness before a private Blob
+write. The default build still strips the POST method and endpoint.
+
+The existing ARC1 workflow reads authenticated native Netlify Forms records and
+is **not compatible** with the new `arc-intake-function-submission-v1` record.
+Public intake must remain disabled until a reviewed ARC1 adapter consumes the
+new server-issued ID, timestamp, data digest, and asset manifest without
+weakening its create-only claim. Only then may
+`arc1_consumer_adapter_verified` change to `true` and a reviewed deploy set
+`ARC_BUILD_INTAKE_ENABLED=true`. The build writes an immutable
+`arc-intake-build-marker-v1` literal into the same Function bundle and compiles
+the HTML from that same decision. The Function requires both that baked marker
+and the separately scoped runtime flag on every request, so a mutable runtime
+value cannot open a build compiled closed. It also checks the single
+`ARC_INTAKE_READINESS_ATTESTATION` record below; this deliberately non-ready
+example remains closed:
+
+```json
+{
+  "schema": "arc-intake-readiness-attestation-v1",
+  "version": 1,
+  "intake_enabled": true,
+  "route_verified": true,
+  "recipient_verified": true,
+  "dedupe_verified": true,
+  "failure_alert_verified": true,
+  "transactional_sender_verified": true,
+  "adult_operator_verified": true,
+  "legal_readiness_verified": true,
+  "tax_readiness_verified": true,
+  "payment_readiness_verified": true,
+  "arc1_consumer_adapter_verified": false,
+  "native_netlify_forms_disabled_verified": false,
+  "retention_verified": false,
+  "asset_pipeline_verified": false
+}
+```
+
+The runtime rejects a missing, malformed, partial, oversized, wrong-version, or
+unknown-field record. Every gate must be a JSON boolean and must be `true`, so
+the example above cannot activate intake. Removing form attributes from HTML
+does not prove a previously registered provider form stopped accepting direct
+POSTs. In Netlify, disable form detection, deploy the updated form-free build,
+then prove a controlled legacy `form-name=arc-preview` direct POST is rejected
+and no Forms record or hook is created. If that cannot be proven on the current
+site, migrate the production domain to a fresh project with Forms never enabled.
+Only then may `native_netlify_forms_disabled_verified` become `true`.
+
+The intake Function accepts at most 4,000,000 request bytes, 1,250,000 bytes per
+image, 3,000,000 image bytes total, and 262,144 text bytes. At the request cap,
+base64 transport is 5,333,336 bytes, leaving 666,664 bytes below Netlify's
+6,000,000-byte buffered payload limit; max files plus max text also leave
+737,856 raw request bytes for multipart framing. The browser enforces the same
+1.25 MB per-file and 3 MB total limits. Folder-link imports are unavailable and
+the server rejects that legacy field until a bounded, authenticated provider
+adapter is implemented and verified. The Function also requires
+`asset_permission` to equal exactly `Confirmed` whenever a file is submitted.
+Client visibility or checkbox state is not authority.
+Legacy `ARC_INTAKE_ENABLED` and `ARC_LEAD_ROUTE_VERIFIED` values do not open
+public intake. Remove the record immediately when any evidence fails or becomes
+stale. Before activation, inspect and delete any legacy retained test
+submissions under the approved retention policy.
 
 ## 5. Connect private workflow state and transactional email
 
@@ -137,7 +228,9 @@ CAN-SPAM source: https://www.ftc.gov/legal-library/browse/statutes/controlling-a
 - Verified lead-routing recipient and branded support sender.
 - Client-supplied production domain and privacy-policy URL for each project.
 - Content-addressed owned copies of uploaded and stock assets, plus license and
-  attribution records. Remote hotlinks are not final-delivery evidence.
+  attribution records. Remote hotlinks are not final-delivery evidence. The
+  code contract now bundles receipt-bound uploaded images into the customer
+  deploy, but its external ARC1-to-ARC2 wiring proof remains required and OFF.
 - Named retention owner, provider-by-provider deletion schedule, monthly deletion
   record, incident contact, refund/dispute owner, and bookkeeping owner.
 - Real Safari, Firefox, iPhone, and Android acceptance results.

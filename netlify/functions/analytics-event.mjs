@@ -9,6 +9,28 @@ import {
 const ALLOWED_HOSTS = new Set(['arcweb.onl', 'arcsites.netlify.app']);
 const MAX_BODY_BYTES = 2048;
 
+async function boundedBodyText(request) {
+  const reader = request.body?.getReader?.();
+  if (!reader) throw new TypeError('Analytics body is unavailable.');
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new TypeError('Analytics body chunk is invalid.');
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        try { await reader.cancel(); } catch {}
+        throw new RangeError('Analytics body is too large.');
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  if (total === 0) throw new TypeError('Analytics body is empty.');
+  return Buffer.concat(chunks, total).toString('utf8');
+}
+
 function response(status) {
   return new Response(null, {
     status,
@@ -20,6 +42,7 @@ function response(status) {
 }
 
 export default async (request) => {
+  if (process.env.ARC_ANALYTICS_COLLECTION_ENABLED !== 'true') return response(503);
   if (request.method !== 'POST') return response(405);
   const requestUrl = new URL(request.url);
   if (!ALLOWED_HOSTS.has(requestUrl.hostname)) return response(403);
@@ -30,8 +53,10 @@ export default async (request) => {
   const declaredLength = Number(request.headers.get('content-length') || 0);
   if (declaredLength > MAX_BODY_BYTES) return response(413);
 
-  const body = await request.text();
-  if (!body || new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) return response(413);
+  let body;
+  try { body = await boundedBodyText(request); } catch (error) {
+    return response(error instanceof RangeError ? 413 : 400);
+  }
   let event;
   try {
     event = normalizeAnalyticsEvent(JSON.parse(body), new Date());
