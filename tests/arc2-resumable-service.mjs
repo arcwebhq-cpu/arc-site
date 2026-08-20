@@ -6,6 +6,7 @@ import {
   getHandoffStatus,
   leadRouteReceiptContract,
   markClaimInvitationReady,
+  renewClaimInvitation,
 } from '../netlify/lib/arc2-handoff-service.mjs';
 
 class FakeStore {
@@ -32,6 +33,9 @@ const env = {
   ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-binding-secret-unique-0123456789abcdef',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
   NETLIFY_OAUTH_CLIENT_SECRET: 'oauth-client-secret-unique-0123456789abcdef',
+  NETLIFY_ADMIN_PAT: 'netlify-admin-pat-unique-0123456789abcdef',
+  NETLIFY_TEAM_ACCOUNT_ID: 'source-account-123',
+  NETLIFY_TEAM_SLUG: 'arc-team',
   ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
 };
 const record = {
@@ -245,9 +249,21 @@ assert.equal(legacyExchanged.record.schema, 'arc2-netlify-handoff-v2');
 assert.equal(legacyExchanged.record.netlify_site_name, `arc-${'c'.repeat(24)}`,
   'Downstream migration must preserve the already-created legacy Netlify site name.');
 
-await assert.rejects(markClaimInvitationReady(handoffId, evidence, signature, env, {
-  ...adapters, clock: () => new Date(now.getTime() + 30 * 60_000),
-}), /BEARER_EXPIRED/, 'READY recovery must stop exactly at expiry.');
+const renewalStore = new FakeStore();
+renewalStore.values = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
+renewalStore.sequence = store.sequence;
+const renewed = await markClaimInvitationReady(handoffId, evidence, signature, env, {
+  store: renewalStore, clock: () => new Date(now.getTime() + 30 * 60_000),
+});
+assert.notEqual(renewed.claimBearer, issued.claimBearer, 'An expired unconsumed invitation must rotate to a new bearer.');
+assert.equal(renewed.record.claim_invitation_generation, issued.record.claim_invitation_generation + 1);
+await assert.rejects(exchangeClaimBearer(handoffId, issued.claimBearer, env, {
+  store: renewalStore, clock: () => new Date(now.getTime() + 30 * 60_000 + 1000),
+}), /BEARER_INVALID/, 'Invitation rotation must invalidate the superseded bearer.');
+const renewedReplay = await markClaimInvitationReady(handoffId, evidence, signature, env, {
+  store: renewalStore, clock: () => new Date(now.getTime() + 30 * 60_000 + 1000),
+});
+assert.equal(renewedReplay.claimBearer, renewed.claimBearer, 'Lost renewal response must recover the current generation.');
 assert.equal((await getHandoffStatus(handoffId, env, adapters)).claim_available, true);
 
 const exchanged = await exchangeClaimBearer(handoffId, issued.claimBearer, env, adapters);
@@ -265,6 +281,51 @@ const consumedReceiptReplay = await markClaimInvitationReady(handoffId, evidence
 });
 assert.equal(consumedReceiptReplay.alreadyConsumed, true, 'Exact receipt replay after exchange must remain stable without refreshing issuance.');
 assert.equal(consumedReceiptReplay.claimBearer, null);
+const consumedSnapshot = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
+const sourceOwnedSiteResponse = () => new Response(JSON.stringify({
+  id: record.netlify_site_id,
+  name: record.netlify_site_name,
+  session_id: record.netlify_session_id,
+  account_id: record.netlify_source_account_id,
+  account_slug: env.NETLIFY_TEAM_SLUG,
+}), { headers: { 'content-type': 'application/json' } });
+const abandonedStore = new FakeStore();
+abandonedStore.values = new Map([...consumedSnapshot.entries()].map(([key, value]) => [key, structuredClone(value)]));
+abandonedStore.sequence = store.sequence;
+const renewalTime = new Date(Date.parse(issued.record.claim_token_expires_at) + 1);
+const [abandonedRenewed, abandonedRaced] = await Promise.all([
+  renewClaimInvitation(handoffId, env, { store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse }),
+  renewClaimInvitation(handoffId, env, { store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse }),
+]);
+assert.equal(abandonedRenewed.claimBearer, abandonedRaced.claimBearer,
+  'Concurrent abandoned-wrapper renewal must converge on one current generation.');
+assert.equal(abandonedRenewed.record.state, 'INVITATION_READY');
+assert.equal(abandonedRenewed.record.claim_invitation_generation, issued.record.claim_invitation_generation + 1);
+await assert.rejects(exchangeClaimBearer(handoffId, issued.claimBearer, env, {
+  store: abandonedStore, clock: () => new Date(renewalTime.getTime() + 1),
+}), /BEARER_INVALID/, 'Abandoned-wrapper renewal must invalidate the prior bearer and JWT authority.');
+const abandonedExchange = await exchangeClaimBearer(handoffId, abandonedRenewed.claimBearer, env, {
+  store: abandonedStore, clock: () => new Date(renewalTime.getTime() + 1),
+});
+assert.equal(abandonedExchange.record.state, 'CLAIM_WRAPPER_CONSUMED');
+
+const claimedProviderStore = new FakeStore();
+claimedProviderStore.values = new Map([...consumedSnapshot.entries()].map(([key, value]) => [key, structuredClone(value)]));
+claimedProviderStore.sequence = store.sequence;
+const claimedSnapshot = JSON.stringify([...claimedProviderStore.values.entries()]);
+await assert.rejects(renewClaimInvitation(handoffId, env, {
+  store: claimedProviderStore,
+  clock: () => renewalTime,
+  fetch: async () => new Response(JSON.stringify({
+    id: record.netlify_site_id,
+    name: record.netlify_site_name,
+    session_id: record.netlify_session_id,
+    account_id: 'destination-account-456',
+    account_slug: 'customer-team',
+  }), { headers: { 'content-type': 'application/json' } }),
+}), /SOURCE_ACCOUNT_MISMATCH/, 'A provider-claimed destination must never receive a replacement invitation.');
+assert.equal(JSON.stringify([...claimedProviderStore.values.entries()]), claimedSnapshot,
+  'Rejected post-claim renewal must not mutate state or invitation authority.');
 const boundaryStore = new FakeStore();
 await createEntry(boundaryStore, `handoffs/${handoffId}`, record);
 const boundaryIssued = await markClaimInvitationReady(handoffId, evidence, signature, env, { store: boundaryStore, clock: () => new Date(now) });

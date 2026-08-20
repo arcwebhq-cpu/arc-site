@@ -97,6 +97,13 @@ protocol may set `DELIVERED`: it first locks the outbox to the exact receipt,
 reserves the provider event/message identities, terminalizes the outbox, and
 then converges the handoff. It returns success only after every step completes.
 
+The sender must request private send authority immediately before its provider
+call. ARC2 releases that authority only after a Stripe no-reversal observation
+that does not predate final-deploy readiness and is no more than 60 seconds old,
+then guards again after the final Netlify readback. The sender must reject
+authority more than 60 seconds past its signed `issued_at`, then obtain a new
+Stripe observation and authority.
+
 Follow the handoff steps, connect the final domain, then submit one real lead-form
 test before advertising the site. Your 30-day launch-bug support period begins
 when the verified ownership handoff is completed. This is not a claim that the

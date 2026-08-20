@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import handler, { config, createIntakeReadinessHandler } from '../netlify/functions/intake-readiness.mjs';
 import submitHandler, { config as submitConfig, createIntakeSubmitHandler } from '../netlify/functions/intake-submit.mjs';
+import {
+  INTAKE_ARC1_ADAPTER_PROOF_ENV,
+  INTAKE_ARC1_ADAPTER_PROOF_SCHEMA,
+  INTAKE_ARC1_BRIDGE_EVIDENCE_SCHEMA,
+  INTAKE_ARC1_CONSUMER_SCHEMA,
+  INTAKE_ARC1_CONTRACT_SHA256,
+  createAdapterAttestation,
+  intakeArc1AdapterAttested,
+} from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import {
   INTAKE_BUILD_MARKER_SCHEMA,
   INTAKE_BUILD_MARKER_VERSION,
@@ -11,6 +21,7 @@ import {
   INTAKE_READINESS_VERSION,
   intakeEnabledFromAttestation,
   intakeEnabledFromBuildMarker,
+  intakeArc1RuntimeReady,
 } from '../netlify/lib/intake-readiness-core.mjs';
 import {
   BUDGET_CONFIRMATION,
@@ -64,10 +75,36 @@ const actualNamedControlFields = [...new Set(
 assert.deepEqual(actualNamedControlFields, [...INTAKE_ALLOWED_FIELDS].sort(),
   'Every distinct named public form control must have an exact server allowlist entry, with no server-only drift.');
 
-const pngBlob = (size = 8) => {
+const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+const pngCrcTable = Array.from({ length: 256 }, (_, value) => {
+  let current = value;
+  for (let bit = 0; bit < 8; bit += 1) current = current & 1 ? 0xedb88320 ^ (current >>> 1) : current >>> 1;
+  return current >>> 0;
+});
+const pngCrc32 = (bytes) => {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = pngCrcTable[(value ^ byte) & 255] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+};
+const pngBlob = (size) => {
+  if (size === undefined) return new Blob([validPng], { type: 'image/png' });
+  if (size >= 57 && size <= INTAKE_MAX_FILE_BYTES) {
+    const data = Buffer.alloc(size - 57);
+    const idat = Buffer.alloc(12 + data.length);
+    idat.writeUInt32BE(data.length, 0); idat.write('IDAT', 4, 4, 'ascii'); data.copy(idat, 8);
+    idat.writeUInt32BE(pngCrc32(idat.subarray(4, 8 + data.length)), 8 + data.length);
+    return new Blob([validPng.subarray(0, 33), idat, validPng.subarray(-12)], { type: 'image/png' });
+  }
   const bytes = new Uint8Array(size);
   bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
   return new Blob([bytes], { type: 'image/png' });
+};
+const pngWithChunk = (type, data = Buffer.from('metadata')) => {
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  chunk.write(type, 4, 4, 'ascii');
+  data.copy(chunk, 8);
+  return Buffer.concat([validPng.subarray(0, -12), chunk, validPng.subarray(-12)]);
 };
 
 const allNamedControlForm = () => {
@@ -100,8 +137,9 @@ const enabledBuildMarker = Object.freeze({
   version: INTAKE_BUILD_MARKER_VERSION,
   intake_enabled: true,
 });
-const enabledReadinessHandler = createIntakeReadinessHandler(enabledBuildMarker);
-const enabledSubmitHandler = createIntakeSubmitHandler(enabledBuildMarker);
+let simulatedFutureRuntimeReady = false;
+const enabledReadinessHandler = createIntakeReadinessHandler(enabledBuildMarker, () => simulatedFutureRuntimeReady);
+const enabledSubmitHandler = createIntakeSubmitHandler(enabledBuildMarker, () => simulatedFutureRuntimeReady);
 assert.equal(intakeEnabledFromBuildMarker(enabledBuildMarker), true);
 for (const invalidMarker of [
   null,
@@ -123,7 +161,7 @@ assert.deepEqual(
   actualNamedControlFields.filter((field) => field !== 'bot-field' && !INTAKE_FILE_FIELDS.includes(field)).sort(),
   'A form assembled from every actual named control must survive normalization without dropping fields.',
 );
-assert.deepEqual(normalizedRealForm.record.asset_manifest.map(({ field }) => field).sort(), [...INTAKE_FILE_FIELDS].sort());
+assert.deepEqual(normalizedRealForm.record.asset_manifest.map(({ role }) => role).sort(), [...INTAKE_FILE_FIELDS].sort());
 
 const tooLargeFileForm = validForm();
 tooLargeFileForm.append('asset_permission', 'Confirmed');
@@ -148,12 +186,60 @@ const completeAttestation = Object.freeze({
   ...Object.fromEntries(INTAKE_READINESS_BOOLEAN_FIELDS.map((field) => [field, true])),
 });
 const encodedCompleteAttestation = JSON.stringify(completeAttestation);
+const adapterProofSecret = 'arc-intake-adapter-proof-secret-unique-0123456789';
+const adapterProofNow = new Date();
+const adapterEndpoint = 'https://hooks.example.test/arc1/intake';
+const adapterAssetEndpoint = 'https://arcweb.onl/internal/intake/arc1/assets/retrieve';
+const adapterSiteId = '8f9d462c-952f-42fc-a3a0-50a2529e8f5d';
+const adapterProofValue = Object.freeze({
+  schema: INTAKE_ARC1_ADAPTER_PROOF_SCHEMA,
+  version: 1,
+  source_schema: INTAKE_SUBMISSION_SCHEMA,
+  bridge_schema: INTAKE_ARC1_BRIDGE_EVIDENCE_SCHEMA,
+  consumer_schema: INTAKE_ARC1_CONSUMER_SCHEMA,
+  bridge_contract_sha256: INTAKE_ARC1_CONTRACT_SHA256,
+  endpoint_sha256: createHash('sha256').update(adapterEndpoint).digest('hex'),
+  asset_retrieval_endpoint_sha256: createHash('sha256').update(adapterAssetEndpoint).digest('hex'),
+  site_id_sha256: createHash('sha256').update(adapterSiteId).digest('hex'),
+  asset_producer_consumer_tests_sha256: 'a'.repeat(64),
+  asset_pipeline_verified: true,
+  tests_passed: true,
+  default_off_verified: true,
+  verified_at: new Date(adapterProofNow.getTime() - 1_000).toISOString(),
+  expires_at: new Date(adapterProofNow.getTime() + 60 * 60_000).toISOString(),
+});
+const encodedAdapterProof = createAdapterAttestation(adapterProofValue, adapterProofSecret);
+assert.equal(intakeArc1AdapterAttested(encodedAdapterProof, adapterProofSecret, adapterProofNow,
+  adapterEndpoint, adapterAssetEndpoint, adapterSiteId), true);
+assert.equal(intakeArc1AdapterAttested(encodedAdapterProof, adapterProofSecret, adapterProofNow,
+  'https://attacker.example/arc1/intake', adapterAssetEndpoint, adapterSiteId), false,
+  'The signed proof must bind the exact reviewed PII destination.');
 const saved = {
   attestation: process.env[INTAKE_READINESS_ENV],
   buildIntake: process.env.ARC_BUILD_INTAKE_ENABLED,
   legacyIntake: process.env.ARC_INTAKE_ENABLED,
   legacyRoute: process.env.ARC_LEAD_ROUTE_VERIFIED,
+  adapterProof: process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV],
+  adapterProofSecret: process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET,
 };
+const bridgeRuntimeEnv = {
+  ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
+  ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
+  ARC_INTAKE_ARC1_ENDPOINT: adapterEndpoint,
+  ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefgh',
+  ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdef',
+  ARC_INTAKE_ARC1_DESTINATION_BEARER: 'destination-bearer-unique-0123456789',
+  ARC_INTAKE_ARC1_EVIDENCE_SECRET: 'evidence-secret-unique-0123456789-abcdef',
+  ARC_INTAKE_ARC1_ACK_SECRET: 'ack-secret-unique-0123456789-abcdefghij',
+  ARC_INTAKE_ARC1_STATE_SECRET: 'state-secret-unique-0123456789-abcdefgh',
+  ARC_INTAKE_ASSET_RETRIEVAL_SECRET: 'asset-retrieval-secret-unique-0123456789',
+  ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
+  SITE_ID: adapterSiteId,
+  ARC_EXPECTED_NETLIFY_SITE_ID: adapterSiteId,
+  SITE_NAME: 'arcsites',
+  URL: 'https://arcweb.onl',
+};
+const bridgeRuntimeSaved = Object.fromEntries(Object.keys(bridgeRuntimeEnv).map((key) => [key, process.env[key]]));
 
 const request = (selectedHandler = enabledReadinessHandler) => selectedHandler(new Request('https://arcweb.onl/api/intake/readiness'));
 const responseBody = async (selectedHandler = enabledReadinessHandler) => {
@@ -173,6 +259,8 @@ try {
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
   process.env.ARC_BUILD_INTAKE_ENABLED = 'true';
+  delete process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV];
+  delete process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET;
   assert.equal((await responseBody(handler)).intake_enabled, false,
     'A complete runtime attestation and mutable runtime flag cannot override the same-deploy build marker.');
   const compiledClosed = await submitHandler(submitRequest(), {
@@ -187,6 +275,37 @@ try {
   });
   assert.equal(runtimeClosed.status, 503);
   process.env.ARC_BUILD_INTAKE_ENABLED = 'true';
+  assert.deepEqual(await responseBody(), { schema: 'arc-intake-readiness-v1', intake_enabled: false },
+    'A boolean self-attestation cannot replace an exact signed ARC1 adapter proof.');
+  const unproved = await enabledSubmitHandler(submitRequest(), {
+    get intakeStore() { throw new Error('Unproved ARC1 compatibility must block before storage.'); },
+  });
+  assert.equal(unproved.status, 503);
+  process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV] = encodedAdapterProof;
+  process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET = adapterProofSecret;
+  Object.assign(process.env, bridgeRuntimeEnv);
+  const readinessRequest = new Request('https://arcweb.onl/api/intake/readiness');
+  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
+    'Private retrieval alone cannot open readiness before bound preview publication wiring is proven.');
+  simulatedFutureRuntimeReady = true;
+  for (const field of ['ARC_INTAKE_ARC1_BRIDGE_ENABLED', 'ARC_INTAKE_ARC1_DISPATCH_ENABLED']) {
+    const previous = process.env[field];
+    delete process.env[field];
+    assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, `${field} must block readiness.`);
+    process.env[field] = previous;
+  }
+  const savedAckSecret = process.env.ARC_INTAKE_ARC1_ACK_SECRET;
+  process.env.ARC_INTAKE_ARC1_ACK_SECRET = process.env.ARC_INTAKE_ARC1_EVIDENCE_SECRET;
+  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, 'Duplicate bridge secrets must block readiness.');
+  process.env.ARC_INTAKE_ARC1_ACK_SECRET = savedAckSecret;
+
+  for (const invalidProof of [
+    '',
+    encodedAdapterProof.replace(INTAKE_ARC1_CONTRACT_SHA256, '0'.repeat(64)),
+    createAdapterAttestation({ ...adapterProofValue, tests_passed: false }, adapterProofSecret),
+    createAdapterAttestation({ ...adapterProofValue, expires_at: new Date(adapterProofNow.getTime() - 1).toISOString() }, adapterProofSecret),
+  ]) assert.equal(intakeArc1AdapterAttested(invalidProof, adapterProofSecret, adapterProofNow,
+    adapterEndpoint, adapterAssetEndpoint, adapterSiteId), false);
 
   const malformedOrIncomplete = [
     '',
@@ -237,7 +356,10 @@ try {
   }, null, 2)), true, 'Key order and insignificant whitespace must not affect a valid attestation.');
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
-  assert.deepEqual(await responseBody(), { schema: 'arc-intake-readiness-v1', intake_enabled: true });
+  assert.deepEqual(await responseBody(), { schema: 'arc-intake-readiness-v1', intake_enabled: true },
+    'Injected future-compatible runtime proof keeps lower-level intake tests reachable.');
+  assert.deepEqual(await responseBody(handler), { schema: 'arc-intake-readiness-v1', intake_enabled: false },
+    'The compiled production marker remains OFF even when a simulated exact runtime proof is present.');
 
   assert.equal((await handler(new Request('https://arcsites.netlify.app/api/intake/readiness'))).status, 200);
   assert.equal((await handler(new Request('https://example.com/api/intake/readiness'))).status, 403);
@@ -268,6 +390,15 @@ try {
   }
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
+  const metadataFile = validForm();
+  metadataFile.append('asset_permission', 'Confirmed');
+  metadataFile.append('logo_file', new Blob([pngWithChunk('tEXt')], { type: 'image/png' }), 'metadata.png');
+  const metadataResponse = await enabledSubmitHandler(submitRequest(metadataFile), {
+    get intakeStore() { throw new Error('Metadata-bearing uploads must be rejected before storage.'); },
+  });
+  assert.equal(metadataResponse.status, 400);
+  assert.deepEqual(await metadataResponse.json(), { error: 'invalid_intake' });
+
   const unpermittedFile = validForm();
   unpermittedFile.append('logo_file', pngBlob(), 'logo.png');
   const unpermittedFileResponse = await enabledSubmitHandler(submitRequest(unpermittedFile), {
@@ -277,9 +408,11 @@ try {
   const unpermittedFolder = validForm();
   unpermittedFolder.append('asset_folder_link', 'https://files.example.test/assets');
   const unpermittedFolderResponse = await enabledSubmitHandler(submitRequest(unpermittedFolder), {
-    get intakeStore() { throw new Error('Unpermitted folder links must be rejected before storage.'); },
+    get intakeStore() { throw new Error('Disabled legacy folder links must be rejected before storage.'); },
   });
   assert.equal(unpermittedFolderResponse.status, 400);
+  assert.deepEqual(await unpermittedFolderResponse.json(), { error: 'invalid_intake' });
+  await assert.rejects(normalizeIntakeForm(unpermittedFolder), /unexpected intake field/i);
 
   const accepted = await enabledSubmitHandler(submitRequest(allNamedControlForm()), {
     intakeStore: store,
@@ -295,6 +428,10 @@ try {
   assert.equal(stored.source, 'first-party-netlify-function');
   assert.equal(stored.form_name, 'arc-preview-function-v1');
   assert.equal(stored.arc1_consumer_compatible, false, 'Storage must not impersonate a native Netlify Forms submission.');
+  assert.equal(stored.arc1_delivery.status, 'PENDING');
+  assert.equal(stored.arc1_delivery.attempt_count, 0);
+  assert.equal(stored.arc1_dispatch.status, 'PENDING');
+  assert.equal(stored.arc1_dispatch.attempt_count, 0, 'Default-OFF dispatch must not invoke a background function.');
   assert.equal(stored.data.primary_style, 'Modern');
   assert.match(stored.submission_data_sha256, /^[a-f0-9]{64}$/);
   assert.equal(store.calls, 1);
@@ -358,6 +495,14 @@ try {
   else process.env.ARC_INTAKE_ENABLED = saved.legacyIntake;
   if (saved.legacyRoute === undefined) delete process.env.ARC_LEAD_ROUTE_VERIFIED;
   else process.env.ARC_LEAD_ROUTE_VERIFIED = saved.legacyRoute;
+  if (saved.adapterProof === undefined) delete process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV];
+  else process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV] = saved.adapterProof;
+  if (saved.adapterProofSecret === undefined) delete process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET;
+  else process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET = saved.adapterProofSecret;
+  for (const [key, value] of Object.entries(bridgeRuntimeSaved)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 }
 
 console.log('ARC intake readiness attestation contract passed.');

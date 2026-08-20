@@ -7,6 +7,7 @@ import {
   parseJsonBodyText,
 } from '../lib/arc2-handoff-core.mjs';
 import { acknowledgeFinalDelivery } from '../lib/arc2-handoff-service.mjs';
+import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 
 export default async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
@@ -16,7 +17,7 @@ export default async (request, context = {}) => {
     return jsonResponse(415, { error: 'json_required' });
   }
   try {
-    const body = parseJsonBodyText(await request.text(), 30_000);
+    const body = parseJsonBodyText(await readBoundedRequestText(request, 30_000), 30_000);
     if (typeof body.handoff_id !== 'string' || typeof body.delivery_receipt_evidence !== 'string' ||
         typeof body.delivery_receipt_evidence_hmac_sha256 !== 'string' || Object.keys(body).length !== 3) {
       return jsonResponse(400, { error: 'invalid_delivery_receipt' });
@@ -36,6 +37,9 @@ export default async (request, context = {}) => {
       delivered_at: result.record.delivered_at,
     });
   } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return jsonResponse(413, { error: 'delivery_receipt_too_large' });
+    }
     if (error instanceof TypeError || error?.name === 'SyntaxError') {
       return jsonResponse(400, { error: 'invalid_delivery_receipt' });
     }

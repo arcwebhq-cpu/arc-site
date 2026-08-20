@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { validateDecodableImageAsset } from './image-asset-validation.mjs';
 
 export const INTAKE_STORE = 'arc-intake-submissions';
 export const INTAKE_SUBMISSION_SCHEMA = 'arc-intake-function-submission-v1';
 export const INTAKE_RESPONSE_SCHEMA = 'arc-intake-submission-accepted-v1';
+export const INTAKE_ARC1_DELIVERY_SCHEMA = 'arc-intake-arc1-delivery-state-v1';
+export const INTAKE_ARC1_DISPATCH_SCHEMA = 'arc-intake-arc1-dispatch-state-v1';
+export const INTAKE_ASSET_REFERENCE_SCHEMA = 'arc-intake-private-asset-reference-v1';
 export const INTAKE_VERSION = 'arc-intake-v7';
 export const BUDGET_CONFIRMATION = 'Yes, understands the finished ARC website subtotal is $5,000 plus applicable sales tax only after preview approval';
 export const TERMS_CONFIRMATION = 'Accepted ARC preview terms, privacy policy, refund policy, and service scope dated 2026-08-12; separate adult checkout acceptance required';
@@ -14,7 +18,7 @@ export const INTAKE_MAX_TEXT_BYTES = 256 * 1024;
 export const INTAKE_FILE_FIELDS = Object.freeze(['hero_image_file', 'logo_file', 'supporting_image_file']);
 export const INTAKE_MULTI_FIELDS = Object.freeze(['assets', 'goals', 'lead_form_fields', 'proof', 'sections']);
 export const INTAKE_SINGLE_FIELDS = Object.freeze([
-  'asset_folder_link', 'asset_permission', 'brand_tone', 'budget_confirmed', 'business', 'business_hours',
+  'asset_permission', 'brand_tone', 'budget_confirmed', 'business', 'business_hours',
   'business_story', 'city', 'colors', 'competitor_sites', 'cta_destination', 'design_dislikes', 'domain_status',
   'email', 'faqs_and_objections', 'features', 'final_notes', 'first_cta', 'form_started_at', 'highest_profit_service',
   'industry', 'intake_version', 'landing_path', 'last_step_reached', 'lead_form_needed', 'lead_notification_email',
@@ -34,6 +38,45 @@ const REQUIRED_FIELDS = Object.freeze(['business', 'city', 'email', 'industry', 
 const MAX_VALUES_PER_MULTI_FIELD = 16;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function createInitialArc1DeliveryState(receivedAt) {
+  const nextAttemptAt = new Date(receivedAt);
+  if (!Number.isFinite(nextAttemptAt.getTime())) throw new TypeError('Server time is invalid.');
+  return {
+    schema: INTAKE_ARC1_DELIVERY_SCHEMA,
+    status: 'PENDING',
+    attempt_count: 0,
+    next_attempt_at: nextAttemptAt.toISOString(),
+    lease_hmac_sha256: null,
+    lease_expires_at: null,
+    last_attempt_at: null,
+    evidence_issued_at: null,
+    evidence_expires_at: null,
+    evidence_sha256: null,
+    acknowledged_at: null,
+    acknowledgement_sha256: null,
+    consumer_claim_key_hmac_sha256: null,
+    dead_lettered_at: null,
+    alert_status: 'NONE',
+    alert_code: null,
+    alert_updated_at: null,
+  };
+}
+
+export function createInitialArc1DispatchState() {
+  return {
+    schema: INTAKE_ARC1_DISPATCH_SCHEMA,
+    status: 'PENDING',
+    attempt_count: 0,
+    attempt_lease_hmac_sha256: null,
+    attempt_lease_expires_at: null,
+    last_attempt_at: null,
+    accepted_at: null,
+    alert_status: 'NONE',
+    alert_code: null,
+    alert_updated_at: null,
+  };
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -45,13 +88,6 @@ function canonicalJson(value) {
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const isFile = (value) => value && typeof value === 'object' && typeof value.arrayBuffer === 'function' &&
   typeof value.type === 'string' && typeof value.size === 'number';
-
-function validMagic(bytes, type) {
-  if (type === 'image/png') return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  if (type === 'image/jpeg') return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (type === 'image/webp') return bytes.length >= 12 && bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
-  return false;
-}
 
 function scalar(value, field) {
   if (typeof value !== 'string') throw new TypeError(`${field} must be text.`);
@@ -97,20 +133,33 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
     throw new TypeError('Intake email is invalid.');
   }
   if (!Array.isArray(values.get('goals')) || values.get('goals').filter(Boolean).length === 0) throw new TypeError('Intake goals are required.');
-  if ((files.size > 0 || Boolean(values.get('asset_folder_link'))) && values.get('asset_permission') !== 'Confirmed') {
+  if (files.size > 0 && values.get('asset_permission') !== 'Confirmed') {
     throw new TypeError('Exact asset permission is required for submitted assets.');
   }
 
   const assets = [];
   let totalFileBytes = 0;
-  for (const field of [...files.keys()].sort()) {
+  const sortedFileFields = [...files.keys()].sort();
+  for (const field of sortedFileFields) {
     const file = files.get(field);
     if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > INTAKE_MAX_FILE_BYTES) throw new TypeError('Intake file size is invalid.');
     totalFileBytes += file.size;
     if (totalFileBytes > INTAKE_MAX_TOTAL_FILE_BYTES) throw new TypeError('Intake files are too large.');
+  }
+  for (const field of sortedFileFields) {
+    const file = files.get(field);
     const bytes = Buffer.from(await file.arrayBuffer());
-    if (bytes.length !== file.size || !validMagic(bytes, file.type)) throw new TypeError('Intake file type does not match its bytes.');
-    assets.push({ field, content_type: file.type, size: bytes.length, sha256: sha256(bytes), content_base64: bytes.toString('base64') });
+    if (bytes.length !== file.size) throw new TypeError('Intake file type does not match its bytes.');
+    await validateDecodableImageAsset(bytes, file.type);
+    assets.push({
+      schema: INTAKE_ASSET_REFERENCE_SCHEMA,
+      kind: 'UPLOAD',
+      role: field,
+      content_type: file.type,
+      size: bytes.length,
+      sha256: sha256(bytes),
+      content_base64: bytes.toString('base64'),
+    });
   }
 
   const receivedAt = new Date(now);
@@ -118,7 +167,8 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
   const submissionId = uuid();
   if (!UUID_PATTERN.test(submissionId)) throw new TypeError('Secure submission identity is unavailable.');
   const data = Object.fromEntries([...values.entries()].sort(([left], [right]) => left.localeCompare(right)));
-  const manifest = assets.map(({ content_base64, ...asset }) => asset);
+  assets.sort((left, right) => left.role.localeCompare(right.role));
+  const manifest = assets.map(({ content_base64, content_utf8, ...asset }) => asset);
   const submissionDataSha256 = sha256(canonicalJson({ data, asset_manifest: manifest }));
   return {
     key: `submissions/${submissionId}`,
@@ -131,8 +181,12 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
       submission_data_sha256: submissionDataSha256,
       data,
       asset_manifest: manifest,
+      // Raw upload bytes stay only in this private source record. The bridge
+      // receives content-addressed retrieval grants, never inline bytes.
       assets,
       arc1_consumer_compatible: false,
+      arc1_delivery: createInitialArc1DeliveryState(receivedAt),
+      arc1_dispatch: createInitialArc1DispatchState(),
     },
   };
 }

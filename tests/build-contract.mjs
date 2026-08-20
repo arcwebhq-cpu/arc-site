@@ -37,6 +37,10 @@ assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
+assert.match(home, /data-analytics-build-enabled="false"/,
+  'Default production build must not invoke automatic analytics collection.');
+assert.match(await readFile(path.join(dist, 'thank-you/index.html'), 'utf8'), /data-analytics-build-enabled="false"/,
+  'The default thank-you build must not flush automatic analytics collection.');
 
 for (const file of files.filter((name) => name.endsWith('.html'))) {
   const html = await readFile(path.join(dist, file), 'utf8');

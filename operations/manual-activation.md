@@ -83,11 +83,15 @@ step; never commit it.
 
 Scope all handoff secrets to **Functions** and **Production** only in Netlify's
 Secrets Controller. Set `ARC_EXPECTED_NETLIFY_SITE_ID` to the production ARC site
-ID. Scope is the production-context boundary; at runtime the code additionally
+ID and set the explicit Function-scoped attestation
+`ARC_RUNTIME_ENVIRONMENT=production`. Scope is the production-context boundary;
+at runtime the code additionally
 requires exact `SITE_ID`, `SITE_NAME=arcsites`, and canonical `URL` origin equal
 to `ARC_PUBLIC_ORIGIN`. Netlify does not expose build-only `CONTEXT` or
 `DEPLOY_PRIME_URL` reliably to Functions, so they are not runtime identity gates.
-Probe these runtime values on a disposable disabled deploy before activation.
+The disabled test deployment must instead use `ARC_RUNTIME_ENVIRONMENT=sandbox`
+with the exact sandbox site identity. Probe these runtime values on a disposable
+disabled deploy before activation.
 
 Use a disposable synthetic site to prove: deterministic site recovery after an
 ambiguous API response, exact ZIP deploy, Netlify form detection, one enabled
@@ -105,6 +109,12 @@ later may continue through the downstream migration path without renaming their
 existing Netlify site.
 Confirm in writing whether the creator credential retains the API read/write
 capability required after claim; an unsigned claim callback alone is not proof.
+The customer invitation wrapper may remain available for 30 minutes, but each
+irreversible Netlify claim JWT issued after a fresh reversal guard expires after
+60 seconds. A reversal arriving after issuance cannot revoke an already issued
+external JWT; the guarded post-transfer readback must halt delivery and route
+the transferred site to adult review. Treat this narrow cross-provider window
+as a documented residual until Netlify offers revocation.
 
 The current local service is disabled preparation, not activation-ready. Before
 the master switch can change, engineering must also: unify the lead/inbox receipt
@@ -181,10 +191,11 @@ image, 3,000,000 image bytes total, and 262,144 text bytes. At the request cap,
 base64 transport is 5,333,336 bytes, leaving 666,664 bytes below Netlify's
 6,000,000-byte buffered payload limit; max files plus max text also leave
 737,856 raw request bytes for multipart framing. The browser enforces the same
-1.25 MB per-file and 3 MB total limits. Larger assets use the folder-link field.
-The Function also requires `asset_permission` to equal exactly `Confirmed`
-whenever a file or non-empty asset-folder link is submitted. Client visibility
-or checkbox state is not authority.
+1.25 MB per-file and 3 MB total limits. Folder-link imports are unavailable and
+the server rejects that legacy field until a bounded, authenticated provider
+adapter is implemented and verified. The Function also requires
+`asset_permission` to equal exactly `Confirmed` whenever a file is submitted.
+Client visibility or checkbox state is not authority.
 Legacy `ARC_INTAKE_ENABLED` and `ARC_LEAD_ROUTE_VERIFIED` values do not open
 public intake. Remove the record immediately when any evidence fails or becomes
 stale. Before activation, inspect and delete any legacy retained test
@@ -217,7 +228,9 @@ CAN-SPAM source: https://www.ftc.gov/legal-library/browse/statutes/controlling-a
 - Verified lead-routing recipient and branded support sender.
 - Client-supplied production domain and privacy-policy URL for each project.
 - Content-addressed owned copies of uploaded and stock assets, plus license and
-  attribution records. Remote hotlinks are not final-delivery evidence.
+  attribution records. Remote hotlinks are not final-delivery evidence. The
+  code contract now bundles receipt-bound uploaded images into the customer
+  deploy, but its external ARC1-to-ARC2 wiring proof remains required and OFF.
 - Named retention owner, provider-by-provider deletion schedule, monthly deletion
   record, incident contact, refund/dispute owner, and bookkeeping owner.
 - Real Safari, Firefox, iPhone, and Android acceptance results.

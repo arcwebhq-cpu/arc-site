@@ -175,7 +175,8 @@ assert.match(thankYou, /fetch\('\/api\/analytics\/event'/);
 assert.match(thankYou, /if\(response\.ok\)sessionStorage\.removeItem\(pendingKey\)/);
 assert.match(privacy, /Netlify Function and Blobs store/i);
 assert.match(privacy, /does not store names, business names, emails, phone numbers, addresses, form answers, IP addresses, user agents, referrers, or UTM values/i);
-assert.match(privacy, /scheduled for deletion after 90 days/i);
+assert.match(privacy, /retention target for first-party analytics events is 90 days/i);
+assert.match(privacy, /deletion control is currently disabled pending operator approval/i);
 
 assert.match(home, /<b>3–4 minutes<\/b>/);
 assert.match(home, /Pay the \$5,000 service subtotal plus applicable sales tax only when you approve it/i);
@@ -281,6 +282,9 @@ assert.equal(readiness.analytics.receiver, 'Netlify Function /api/analytics/even
 assert.equal(readiness.analytics.dashboard, 'Basic-auth Netlify Function /internal/analytics');
 assert.equal(readiness.analytics.storage, 'Netlify Blobs arc-analytics');
 assert.equal(readiness.analytics.retention_days, 90);
+assert.equal(readiness.analytics.automatic_retention_enforcement_active, false);
+assert.ok(readiness.analytics.environment_requirements.includes('ARC_BUILD_ANALYTICS_ENABLED=true'));
+assert.ok(readiness.analytics.environment_requirements.includes('ARC_ANALYTICS_COLLECTION_ENABLED=true'));
 assert.deepEqual(readiness.analytics.verified_live_events, []);
 assert.ok(readiness.analytics.environment_requirements.includes('ARC_ANALYTICS_DASHBOARD_PASSWORD'));
 assert.ok(readiness.analytics.activation_requirements.includes('live-event-receipt-verified'));
@@ -321,7 +325,8 @@ assert.equal(readiness.intake_routing.arc1_consumer_compatible, false);
 assert.ok(readiness.intake_routing.verification_requirements.includes('build-runtime-gate-blocks-before-body-parse-and-storage'));
 assert.ok(readiness.intake_routing.verification_requirements.includes('same-deploy-immutable-build-marker-enabled'));
 assert.ok(readiness.intake_routing.verification_requirements.includes('provider-form-detection-disabled-and-legacy-direct-post-rejected-after-deploy'));
-assert.ok(readiness.intake_trust_boundary.required_pipeline_evidence.includes('server-issued-submission-id-used-for-folder-identity'));
+assert.ok(readiness.intake_trust_boundary.required_pipeline_evidence.includes('server-issued-submission-id-used-for-preview-identity'));
+assert.ok(readiness.asset_uploads.required_pipeline_evidence.includes('legacy-folder-link-field-rejected-until-private-provider-adapter-is-verified'));
 assert.equal(readiness.asset_uploads.status, 'pending-server-verification');
 assert.equal(readiness.asset_uploads.client_checks_are_security_boundary, false);
 assert.deepEqual(readiness.asset_uploads.limits, {
@@ -387,38 +392,77 @@ assert.match(imageSizeDisabled, /throw new Error\('Image parsing is intentionall
 assert.equal(packageJson.devDependencies['@sparticuz/chromium'], '149.0.0');
 assert.equal(packageJson.devDependencies.playwright, '1.62.0');
 assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
-assert.equal(packageJson.scripts.test, 'node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/arc2-final-delivery-ack.mjs && node tests/arc2-producer-compatibility.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs');
+assert.deepEqual(packageJson.scripts.test.split(' && '), [
+  'node tests/source-contract.mjs',
+  'node tests/analytics-contract.mjs',
+  'node tests/intake-readiness-contract.mjs',
+  'node tests/intake-private-asset-contract.mjs',
+  'node tests/intake-arc1-bridge-contract.mjs',
+  'node tests/intake-arc1-dispatch-contract.mjs',
+  'node tests/stripe-reversal-contract.mjs',
+  'node tests/retention-control-contract.mjs',
+  'node tests/operations-audit-contract.mjs',
+  'node tests/arc2-handoff-contract.mjs',
+  'node tests/arc2-resumable-service.mjs',
+  'node tests/arc2-final-delivery-ack.mjs',
+  'node tests/arc2-producer-compatibility.mjs',
+  'node tests/showcase-contract.mjs',
+  'npm run build',
+  'node tests/build-contract.mjs',
+  'node tests/browser-contract.mjs',
+]);
 assert.match(analyticsCore, /const ALLOWED_KEYS = new Set\(\['event', 'event_id', 'session_id', 'path', 'cta', 'step', 'step_name'\]\)/);
 assert.match(analyticsCore, /STEP_LABELS = Object\.freeze\(\{ 1: 'Business', 2: 'Offer', 3: 'Details & consent', 4: 'Review' \}\)/);
 assert.match(analyticsCore, /Unexpected analytics field/);
 assert.match(analyticsEvent, /new Set\(\['arcweb\.onl', 'arcsites\.netlify\.app'\]\)/);
 assert.match(analyticsEvent, /onlyIfNew: true/);
+assert.match(analyticsEvent, /ARC_ANALYTICS_COLLECTION_ENABLED !== 'true'/,
+  'The analytics receiver must remain exact default-off while automation is disabled.');
 assert.match(analyticsEvent, /windowLimit: 60/);
 assert.doesNotMatch(analyticsEvent, /user-agent|x-forwarded|client-ip/i);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_USER/);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_PASSWORD/);
 assert.match(analyticsDashboard, /timingSafeEqual/);
 assert.match(analyticsDashboard, /X-Robots-Tag.*noindex/si);
-assert.match(analyticsPrune, /schedule: '17 4 \* \* \*'/);
+assert.match(analyticsDashboard, /retention target is \$\{RETENTION_DAYS\} days; deletion is manual until the separately approved pruning control is enabled and verified/i);
+assert.doesNotMatch(analyticsDashboard, /events expire after/i,
+  'The dashboard must not claim automatic expiry while analytics pruning is disabled.');
+assert.doesNotMatch(analyticsPrune, /\bschedule\s*:/,
+  'No analytics scheduled invocation may be registered while all automation is off.');
+assert.match(analyticsPrune, /ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED !== 'true'/,
+  'The analytics prune handler must remain an exact default-off no-op even if invoked manually.');
 assert.match(analyticsPrune, /isExpiredMetadata/);
 assert.match(arc2Core, /PAYMENT_FIELDS = Object\.freeze\(\[/);
 assert.match(arc2Core, /terms_of_service_consent/);
-assert.match(arc2Core, /ARC_EXPECTED_PAYMENT_LINK_ID/);
-assert.match(arc2Core, /ARC_EXPECTED_PRICE_ID/);
-assert.match(arc2Core, /ARC_EXPECTED_PRODUCT_TAX_CODE/);
+assert.doesNotMatch(arc2Core, /ARC_EXPECTED_(?:PAYMENT_LINK_ID|PRICE_ID|PRODUCT_TAX_CODE)/,
+  'V3 fulfillment must use the immutable private policy instead of mutable checkout singletons.');
+assert.match(arc2Core, /arc-private-checkout-policy-v1/);
 assert.match(arc2Core, /ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256/);
 assert.match(arc2Core, /ARC_EXPECTED_NETLIFY_SITE_ID/);
 assert.match(arc2Core, /ARC_PRODUCTION_SITE_BINDING/);
 assert.match(arc2Core, /ARC_PRODUCTION_ORIGIN_BINDING/);
 assert.match(arc2Core, /ARC_HANDOFF_ENABLED/);
+assert.match(arc2Core, /ARC_STRIPE_REVERSAL_CONTROL_REQUIRED/,
+  'Handoff readiness must require the reversal control instead of allowing an optional bypass.');
+assert.match(arc2Service, /assertProviderMutationAllowed/);
+assert.match(arc2Service, /create-site/);
+assert.match(arc2Service, /create-\$\{phase\}-deploy/);
+assert.match(arc2Service, /restore-deploy/);
+assert.match(arc2Service, /create-email-hook/);
 assert.match(arc2Core, /ARC_STRIPE_LIVE_MODE_ENABLED/);
+assert.match(arc2Core, /ARC_RUNTIME_ENVIRONMENT/,
+  'Function runtime identity must use an explicit deployment attestation instead of build-only Netlify CONTEXT.');
+assert.doesNotMatch(arc2Core, /env\.CONTEXT/,
+  'Build-only Netlify CONTEXT must not authorize Function runtime mutations.');
 assert.match(arc2Core, /subtotal_amount_minor_units/);
 assert.match(arc2Core, /tax_amount_minor_units/);
 assert.match(arc2Core, /automatic_tax_enabled/);
 assert.match(arc2Core, /tax_registration_status/);
 assert.match(arc2Core, /stripe_account_id_sha256/);
+assert.doesNotMatch(arc2Core, /payment_method_types|payment_methods/,
+  'Checkout policy must omit manual payment-method lists so Stripe can select eligible methods dynamically.');
 assert.match(arc2Core, /ARC_SECRETS_MUST_BE_DISTINCT/);
-assert.match(arc2Core, /arc2-claim-state-evidence-signature-v2\\n/);
+assert.match(arc2Core, /arc2-claim-state-evidence-signature-v3\\n/);
 assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
 assert.doesNotMatch(arc2Core, /arc_callback|ARC_CLAIM_WEBHOOK_SECRET/);
 assert.match(arc2Service, /filter: 'owner'/);

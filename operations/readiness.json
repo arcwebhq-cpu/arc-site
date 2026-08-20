@@ -54,6 +54,7 @@
     "status": "blocked",
     "required_exact_environment_attestations": [
       "ARC_HANDOFF_ENABLED=true",
+      "ARC_RUNTIME_ENVIRONMENT=production",
       "ARC_EXPECTED_NETLIFY_SITE_ID=8f9d462c-952f-42fc-a3a0-50a2529e8f5d",
       "ARC_ADULT_OPERATOR_VERIFIED=true",
       "ARC_BUSINESS_LICENSE_VERIFIED=true",
@@ -76,6 +77,7 @@
     "dashboard": "Basic-auth Netlify Function /internal/analytics",
     "storage": "Netlify Blobs arc-analytics",
     "retention_days": 90,
+    "automatic_retention_enforcement_active": false,
     "client_buffer": "window.dataLayer plus nonblocking first-party POST",
     "allowed_events": [
       "arc_page_view",
@@ -97,6 +99,8 @@
       "utm_parameters"
     ],
     "environment_requirements": [
+      "ARC_BUILD_ANALYTICS_ENABLED=true",
+      "ARC_ANALYTICS_COLLECTION_ENABLED=true",
       "ARC_ANALYTICS_DASHBOARD_USER",
       "ARC_ANALYTICS_DASHBOARD_PASSWORD"
     ],
@@ -169,12 +173,12 @@
     "status": "pending-server-verification",
     "client_hidden_fields_are_authoritative": false,
     "required_pipeline_evidence": [
-      "server-issued-submission-id-used-for-folder-identity",
+      "server-issued-submission-id-used-for-preview-identity",
       "server-received-at-used-for-accepted-at",
       "exact-budget-and-terms-acceptance-required",
       "client-status-assertions-ignored",
       "provider-submission-replay-rejected",
-      "folder-collision-rejected-before-build"
+      "preview-identity-collision-rejected-before-build"
     ]
   },
   "asset_uploads": {
@@ -198,11 +202,14 @@
     "required_pipeline_evidence": [
       "controlled-source-url",
       "per-file-and-total-byte-limits",
-      "exact-asset-permission-required-for-files-or-folder-link",
+      "exact-asset-permission-required-for-files",
+      "legacy-folder-link-field-rejected-until-private-provider-adapter-is-verified",
       "content-type-and-magic-byte-match",
+      "metadata-free-strict-image-container-validation-before-storage",
       "successful-raster-decode",
       "svg-html-and-polyglot-rejection",
-      "validated-content-sha256-bound-to-private-preview-state"
+      "validated-content-sha256-bound-to-private-preview-state",
+      "receipt-bound-self-contained-arc2-customer-deploy-assets"
     ],
     "client_checks_are_security_boundary": false
   },
@@ -210,8 +217,11 @@
     "status": "pending-provider-enforcement",
     "control_document": "operations/data-retention.md",
     "currently_automated": [
-      "seven-day-browser-draft-expiry",
-      "ninety-day-first-party-analytics-pruning"
+      "seven-day-browser-draft-expiry"
+    ],
+    "implemented_but_default_off": [
+      "ninety-day-first-party-analytics-pruning",
+      "adult-approved-unpaid-intake-cleanup"
     ],
     "unverified_stores": [
       "netlify-blobs-intake-records-and-assets",

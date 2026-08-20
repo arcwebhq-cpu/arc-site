@@ -100,10 +100,11 @@ deleted or reassigned.
 
 The outbox latch prevents new/retried workers from sending after acknowledgement
 starts. It cannot cancel a provider request already in flight. The external
-sender must additionally use a create-only send-attempt record and the outbox
-claim HMAC as the provider idempotency key. That producer invariant is not
-implemented by this acknowledgement endpoint and must be proven before email
-automation is enabled.
+sender must additionally reject private send authority more than 60 seconds
+past its signed `issued_at`, use a create-only send-attempt record, and use the
+outbox claim HMAC as the provider idempotency key. Those producer invariants are
+not implemented by this acknowledgement endpoint and must be proven before
+email automation is enabled.
 
 ## Legacy records
 

@@ -2,6 +2,7 @@ import { getStore } from '@netlify/blobs';
 import { INTAKE_BUILD_MARKER } from '../lib/intake-build-marker.mjs';
 import {
   INTAKE_READINESS_ENV,
+  intakeArc1RuntimeReady,
   intakeEnabledFromAttestation,
   intakeEnabledFromBuildMarker,
 } from '../lib/intake-readiness-core.mjs';
@@ -11,6 +12,7 @@ import {
   INTAKE_STORE,
   normalizeIntakeForm,
 } from '../lib/intake-submission-core.mjs';
+import { dispatchIntakeToArc1Background } from '../lib/intake-arc1-dispatch-core.mjs';
 
 const ALLOWED_ORIGINS = new Set(['https://arcweb.onl', 'https://arcsites.netlify.app']);
 
@@ -54,7 +56,7 @@ function response(status, value) {
   } });
 }
 
-export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER) {
+export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER, runtimeReady = intakeArc1RuntimeReady) {
   return async (request, context = {}) => {
   if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
   let requestOrigin;
@@ -69,7 +71,7 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER) {
   // The server rechecks the exact attestation at the irreversible storage
   // boundary. UI readiness is never authority, and revocation is immediate.
   if (!intakeEnabledFromBuildMarker(buildMarker) || process.env.ARC_BUILD_INTAKE_ENABLED !== 'true' ||
-      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV])) {
+      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) || !runtimeReady(request, process.env)) {
     return response(503, { error: 'intake_disabled' });
   }
   const contentType = request.headers.get('content-type') || '';
@@ -86,6 +88,14 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER) {
     const store = context.intakeStore || getStore({ name: INTAKE_STORE, consistency: 'strong' });
     const result = await store.setJSON(normalized.key, normalized.record, { onlyIfNew: true });
     if (!result?.modified) throw new Error('ARC_INTAKE_STORAGE_CONFLICT');
+    // A same-deploy background invocation is best-effort and separately gated.
+    // The accepted intake remains durable even if dispatch is paused or fails;
+    // dispatch state records the failure for an authenticated recovery run.
+    try {
+      await dispatchIntakeToArc1Background(normalized.record.submission_id, request, process.env, {
+        store, fetch: context.fetch, clock: context.clock,
+      });
+    } catch {}
     return response(201, { schema: INTAKE_RESPONSE_SCHEMA, accepted: true, submission_id: normalized.record.submission_id });
   } catch (error) {
     if (error instanceof IntakeRequestError) return response(error.status, { error: error.code });

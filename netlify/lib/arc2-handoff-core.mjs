@@ -4,20 +4,22 @@ import {
   randomUUID,
   timingSafeEqual,
 } from 'node:crypto';
+import { imageTypeForPath, validateImageAsset } from './image-asset-validation.mjs';
 
 export const HANDOFF_STORE = 'arc2-handoffs';
 export const LEGACY_HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
 export const HANDOFF_SCHEMA = 'arc2-netlify-handoff-v2';
-export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v1';
+export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v3';
 export const ARTIFACT_EVIDENCE_SCOPE = 'netlify-claimable-deploy-artifacts';
-export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v1\n';
-export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v2';
+export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v3\n';
+export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v3';
 export const PAYMENT_EVIDENCE_SCOPE = 'authoritative-stripe-checkout-session';
-export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v2\n';
+export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v3\n';
 export const LEAD_RECIPIENT_PREFIX = 'arc-lead-route-recipient-v1\n';
-export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v2';
+export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v3';
 export const CLAIM_STATE_EVIDENCE_SCOPE = 'netlify-deploy-and-claim-final-deploy';
-export const CLAIM_STATE_SIGNATURE_PREFIX = 'arc2-claim-state-evidence-signature-v2\n';
+export const CLAIM_STATE_SIGNATURE_PREFIX = 'arc2-claim-state-evidence-signature-v3\n';
+const FINAL_DELIVERY_AUTHORIZATION_PREFIX = 'arc2-final-delivery-authorization-v1\n';
 export const OUTBOX_CLAIM_VERSION = 'arc2-final-delivery-outbox-v1';
 export const FINAL_DELIVERY_RECEIPT_VERSION = 'arc2-final-email-delivery-receipt-v1';
 export const FINAL_DELIVERY_RECEIPT_SCOPE = 'authoritative-final-email-provider-delivery';
@@ -25,7 +27,10 @@ export const FINAL_DELIVERY_RECEIPT_SIGNATURE_PREFIX = 'arc2-final-email-deliver
 export const FINAL_DELIVERY_PROVIDER_EVENT_ID_PREFIX = 'arc2-final-delivery-provider-event-id-v1\n';
 export const FINAL_DELIVERY_PROVIDER_MESSAGE_ID_PREFIX = 'arc2-final-delivery-provider-message-id-v1\n';
 export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
+export const CLAIM_JWT_TTL_SECONDS = 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
+export const NETLIFY_REQUEST_TIMEOUT_MS = 10_000;
+export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = '2026-06-24.dahlia';
 
 export const HANDOFF_STATES = Object.freeze([
   'PAYMENT_VERIFIED',
@@ -48,7 +53,10 @@ const TRANSITIONS = Object.freeze({
   PRECLAIM_DEPLOY_READY: new Set(['LEAD_ROUTE_VERIFIED', 'INVITATION_READY']),
   LEAD_ROUTE_VERIFIED: new Set(['INVITATION_READY']),
   INVITATION_READY: new Set(['CLAIM_WRAPPER_CONSUMED']),
-  CLAIM_WRAPPER_CONSUMED: new Set(['CLAIM_CALLBACK_RECEIVED']),
+  // An expired, abandoned wrapper may return to READY only through the
+  // authenticated renewal service after authoritative source-account
+  // readback proves the provider claim never completed.
+  CLAIM_WRAPPER_CONSUMED: new Set(['INVITATION_READY', 'CLAIM_CALLBACK_RECEIVED']),
   CLAIM_CALLBACK_RECEIVED: new Set(['CLAIMED_VERIFIED']),
   CLAIMED_VERIFIED: new Set(['FINAL_DEPLOY_READY']),
   FINAL_DEPLOY_READY: new Set(['DELIVERED']),
@@ -62,35 +70,61 @@ const NETLIFY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/;
 const SAFE_SITE_NAME_PATTERN = /^arc-lead-route-[a-f0-9]{24}$/;
 const STORED_SITE_NAME_PATTERN = /^(?:arc-lead-route-|arc-)[a-f0-9]{24}$/;
 const SAFE_FORM_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const SAFE_PATH_PATTERN = /^(?:index\.html|_headers)$/;
+const ASSET_PATH_PATTERN = /^assets\/([a-f0-9]{64})\.(png|jpg|webp)$/;
+const SAFE_PATH_PATTERN = /^(?:index\.html|_headers|assets\/[a-f0-9]{64}\.(?:png|jpg|webp))$/;
+const MAX_ASSET_COUNT = 3;
+const MAX_ASSET_BYTES = 3_000_000;
+const MAX_ARTIFACT_BYTES = 3_510_000;
+const MAX_DEPLOY_ARTIFACTS_JSON_BYTES = 4_700_000;
+export const ARC2_CONTENT_SECURITY_POLICY = "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; connect-src 'none'; font-src 'self' data:; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+export const ARC2_PRODUCTION_HEADERS_FILE = `/*\n  Content-Security-Policy: ${ARC2_CONTENT_SECURITY_POLICY}\n  X-Content-Type-Options: nosniff\n  X-Frame-Options: DENY\n  Referrer-Policy: strict-origin-when-cross-origin\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n`;
+export const ARC2_PRECLAIM_HEADERS_FILE = `${ARC2_PRODUCTION_HEADERS_FILE}  X-Robots-Tag: noindex, nofollow, noarchive\n`;
 const PAYMENT_FIELDS = Object.freeze([
   'adult_purchaser_acknowledgement',
+  'approval_content_sha256',
   'amount_total_minor_units',
   'artifact_manifest_sha256',
   'automatic_tax_enabled',
   'automatic_tax_status',
+  'asset_publication_receipt_sha256',
   'bundle_fingerprint',
   'checkout_session_id',
+  'checkout_config_snapshot',
+  'checkout_config_snapshot_sha256',
+  'client_reference_id',
+  'client_reference_id_observation',
   'client_reference_id_sha256',
+  'client_reference_mismatch_review_hmac_sha256',
+  'client_reference_mismatch_review_record_key_hmac_sha256',
+  'client_reference_mismatch_review_required',
+  'client_reference_mismatch_review_sha256',
+  'client_reference_mismatch_review_state',
   'currency',
   'customer_address_country',
   'customer_address_sha256',
   'customer_address_state',
   'customer_address_status',
-  'customer_email_sha256',
+  'claim_recipient_email_sha256',
   'handoff_artifact_evidence_sha256',
   'livemode',
   'mode',
   'payment_link_id',
+  'payment_intent_id',
   'payment_status',
+  'payer_email_sha256',
   'preview_folder',
+  'preview_source_commit_sha',
+  'preview_source_repository',
+  'preview_source_tag_sha256',
   'price_id',
   'price_tax_behavior',
   'product_tax_code',
+  'product_id',
   'production_content_sha256',
   'quantity',
   'scope',
   'status',
+  'charge_id',
   'stripe_account_id_sha256',
   'subtotal_amount_minor_units',
   'tax_amount_minor_units',
@@ -184,11 +218,6 @@ const HANDOFF_ENVIRONMENT_ALIASES = Object.freeze([
     alias: 'NETLIFY_ACCESS_TOKEN',
     conflict: 'NETLIFY_ADMIN_PAT_NETLIFY_ACCESS_TOKEN_CONFLICT',
   }),
-  Object.freeze({
-    canonical: 'ARC_EXPECTED_PRODUCT_TAX_CODE',
-    alias: 'ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE',
-    conflict: 'ARC_EXPECTED_PRODUCT_TAX_CODE_ARC_EXPECTED_STRIPE_PRODUCT_TAX_CODE_CONFLICT',
-  }),
 ]);
 
 export function resolveHandoffEnvironment(env = process.env) {
@@ -215,6 +244,8 @@ export function configuredEnvironment(env = process.env) {
   env = resolved.environment;
   const required = [
     'ARC_CHECKOUT_BINDING_SECRET',
+    'ARC_CHECKOUT_BINDING_KEY_ID',
+    'ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON',
     'ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET',
     'ARC_LEAD_ROUTE_EVIDENCE_SECRET',
     'ARC_HANDOFF_STATE_SECRET',
@@ -224,10 +255,16 @@ export function configuredEnvironment(env = process.env) {
     'ARC_EMAIL_CLAIM_BINDING_SECRET',
     'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
     'ARC_FINAL_DELIVERY_ACK_SECRET',
-    'ARC_EXPECTED_PAYMENT_LINK_ID',
-    'ARC_EXPECTED_PRICE_ID',
-    'ARC_EXPECTED_PRODUCT_TAX_CODE',
+    'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+    'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+    'ARC_STRIPE_REVERSAL_BINDING_SECRET',
+    'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
+    'ARC_STRIPE_REVERSAL_RECHECK_SECRET',
+    'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
     'ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256',
+    'ARC_STRIPE_LIVE_MODE_ENABLED',
+    'ARC_ALLOW_TEST_MODE_EVENTS',
+    'ARC_RUNTIME_ENVIRONMENT',
     'ARC_EXPECTED_NETLIFY_SITE_ID',
     'ARC_HANDOFF_ENABLED',
     'ARC_ADULT_OPERATOR_VERIFIED',
@@ -238,6 +275,11 @@ export function configuredEnvironment(env = process.env) {
     'ARC_POSTCLAIM_READBACK_VERIFIED',
     'ARC_DEVICE_QA_VERIFIED',
     'ARC_LEAD_ROUTE_VERIFIED',
+    'ARC_STRIPE_REVERSAL_CONTROL_REQUIRED',
+    'ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED',
+    'ARC_STRIPE_REVERSAL_BINDING_ENABLED',
+    'ARC_STRIPE_REVERSAL_RECHECK_ENABLED',
+    'ARC_STRIPE_WEBHOOK_API_VERSION',
     'NETLIFY_ADMIN_PAT',
     'NETLIFY_TEAM_SLUG',
     'NETLIFY_TEAM_ACCOUNT_ID',
@@ -249,7 +291,6 @@ export function configuredEnvironment(env = process.env) {
   const shortSecrets = secretNames.filter((name) => String(env[name] || '').length < 32 || String(env[name] || '').length > 512);
   const duplicateSecrets = new Set(secretNames.map((name) => String(env[name] || '')).filter(Boolean)).size !== secretNames.filter((name) => env[name]).length;
   const attestations = [
-    'ARC_HANDOFF_ENABLED',
     'ARC_ADULT_OPERATOR_VERIFIED',
     'ARC_BUSINESS_LICENSE_VERIFIED',
     'ARC_TAX_REGISTRATION_VERIFIED',
@@ -258,14 +299,33 @@ export function configuredEnvironment(env = process.env) {
     'ARC_POSTCLAIM_READBACK_VERIFIED',
     'ARC_DEVICE_QA_VERIFIED',
     'ARC_LEAD_ROUTE_VERIFIED',
+    'ARC_STRIPE_REVERSAL_CONTROL_REQUIRED',
+    'ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED',
+    'ARC_STRIPE_REVERSAL_BINDING_ENABLED',
+    'ARC_STRIPE_REVERSAL_RECHECK_ENABLED',
   ];
   const invalidAttestations = attestations.filter((name) => env[name] !== 'true');
-  const liveModeSetting = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || 'false');
-  const liveModeValid = liveModeSetting === 'true' || liveModeSetting === 'false';
-  const identifiersValid = /^plink_[A-Za-z0-9]+$/.test(String(env.ARC_EXPECTED_PAYMENT_LINK_ID || '')) &&
-    /^price_[A-Za-z0-9]+$/.test(String(env.ARC_EXPECTED_PRICE_ID || '')) &&
-    /^txcd_\d{8}$/.test(String(env.ARC_EXPECTED_PRODUCT_TAX_CODE || '')) &&
-    HEX_64_PATTERN.test(String(env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 || '')) &&
+  const liveModeSetting = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || '');
+  const allowTestModeSetting = String(env.ARC_ALLOW_TEST_MODE_EVENTS || '');
+  const runtimeEnvironment = String(env.ARC_RUNTIME_ENVIRONMENT || '');
+  const productionMode = liveModeSetting === 'true' && allowTestModeSetting === 'false' && env.ARC_HANDOFF_ENABLED === 'true' && runtimeEnvironment === 'production';
+  const sandboxMode = liveModeSetting === 'false' && allowTestModeSetting === 'true' && env.ARC_HANDOFF_ENABLED === 'false' && runtimeEnvironment === 'sandbox';
+  const liveModeValid = productionMode || sandboxMode;
+  const checkoutKeyId = String(env.ARC_CHECKOUT_BINDING_KEY_ID || '').trim().toLowerCase();
+  const retiredRegistryRaw = String(env.ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON || '');
+  let retiredCheckoutKeys;
+  try { retiredCheckoutKeys = JSON.parse(retiredRegistryRaw); } catch {}
+  const retiredCheckoutKeyValues = retiredCheckoutKeys && typeof retiredCheckoutKeys === 'object' && !Array.isArray(retiredCheckoutKeys)
+    ? Object.values(retiredCheckoutKeys) : [];
+  const checkoutKeyRegistryValid = /^[a-f0-9]{2}$/.test(checkoutKeyId) && retiredCheckoutKeys &&
+    typeof retiredCheckoutKeys === 'object' && !Array.isArray(retiredCheckoutKeys) && canonicalJson(retiredCheckoutKeys) === retiredRegistryRaw &&
+    Object.entries(retiredCheckoutKeys).every(([id, value]) => /^[a-f0-9]{2}$/.test(id) && id !== checkoutKeyId &&
+      typeof value === 'string' && value.length >= 32 && value.length <= 256) &&
+    new Set(retiredCheckoutKeyValues).size === retiredCheckoutKeyValues.length &&
+    !retiredCheckoutKeyValues.includes(String(env.ARC_CHECKOUT_BINDING_SECRET || '')) &&
+    String(env.ARC_CHECKOUT_BINDING_SECRET || '').length <= 256;
+  const stripeWebhookApiVersionValid = env.ARC_STRIPE_WEBHOOK_API_VERSION === REQUIRED_STRIPE_WEBHOOK_API_VERSION;
+  const identifiersValid = HEX_64_PATTERN.test(String(env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 || '')) &&
     NETLIFY_ID_PATTERN.test(String(env.NETLIFY_TEAM_ACCOUNT_ID || '')) &&
     NETLIFY_ID_PATTERN.test(String(env.NETLIFY_OAUTH_CLIENT_ID || '')) &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(env.ARC_EXPECTED_NETLIFY_SITE_ID || '')) &&
@@ -278,7 +338,8 @@ export function configuredEnvironment(env = process.env) {
   } catch {
     originValid = false;
   }
-  const runtimeSiteValid = env.SITE_ID === env.ARC_EXPECTED_NETLIFY_SITE_ID && env.SITE_NAME === 'arcsites';
+  const runtimeSiteValid = env.SITE_ID === env.ARC_EXPECTED_NETLIFY_SITE_ID &&
+    (productionMode ? env.SITE_NAME === 'arcsites' : sandboxMode ? env.SITE_NAME === 'arc2-sandbox' : false);
   let runtimeOriginsValid = false;
   try {
     const expectedOrigin = new URL(publicOrigin).origin;
@@ -288,14 +349,16 @@ export function configuredEnvironment(env = process.env) {
   }
   return {
     enabled: resolved.conflicts.length === 0 && missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
-      liveModeValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
+      liveModeValid && checkoutKeyRegistryValid && stripeWebhookApiVersionValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
     missing,
     invalid: [
       ...resolved.conflicts,
       ...shortSecrets,
       ...(duplicateSecrets ? ['ARC_SECRETS_MUST_BE_DISTINCT'] : []),
       ...invalidAttestations,
-      ...(liveModeValid ? [] : ['ARC_STRIPE_LIVE_MODE_ENABLED']),
+      ...(liveModeValid ? [] : ['ARC_STRIPE_MODE_OR_TEST_SANDBOX_CONTEXT']),
+      ...(checkoutKeyRegistryValid ? [] : ['ARC_CHECKOUT_BINDING_KEY_REGISTRY']),
+      ...(stripeWebhookApiVersionValid ? [] : ['ARC_STRIPE_WEBHOOK_API_VERSION']),
       ...(identifiersValid ? [] : ['ARC_EXPECTED_IDS_OR_NETLIFY_IDS']),
       ...(originValid ? [] : ['ARC_PUBLIC_ORIGIN']),
       ...(runtimeSiteValid ? [] : ['ARC_PRODUCTION_SITE_BINDING']),
@@ -324,11 +387,22 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date(), options
   const value = plainObject(JSON.parse(canonical), 'Artifact evidence');
   if (canonicalJson(value) !== canonical) throw new TypeError('Artifact evidence is not canonical JSON.');
   exactKeys(value, [
+    'approval_content_sha256',
     'artifact_manifest_sha256',
     'artifacts',
+    'asset_publication_receipt_sha256',
     'bundle_fingerprint',
+    'checkout_binding_key_id',
+    'checkout_config_snapshot_sha256',
+    'checkout_reference_sha256',
     'issued_at',
+    'lead_route_form_name',
+    'lead_route_mode',
+    'lead_route_recipient_hmac_sha256',
     'preview_folder',
+    'preview_source_commit_sha',
+    'preview_source_repository',
+    'preview_source_tag_sha256',
     'production_content_sha256',
     'scope',
     'version',
@@ -336,24 +410,60 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date(), options
   if (value.version !== ARTIFACT_EVIDENCE_VERSION || value.scope !== ARTIFACT_EVIDENCE_SCOPE) {
     throw new TypeError('Artifact evidence version or scope is invalid.');
   }
+  const leadRouteMode = stringValue(value.lead_route_mode, 'Artifact lead route mode', 8, 32);
+  if (!['netlify_form', 'not_required'].includes(leadRouteMode) ||
+      (leadRouteMode === 'netlify_form'
+        ? (validateFormName(value.lead_route_form_name) !== value.lead_route_form_name ||
+          !HEX_64_PATTERN.test(value.lead_route_recipient_hmac_sha256))
+        : (value.lead_route_form_name !== '' || value.lead_route_recipient_hmac_sha256 !== ''))) {
+    throw new TypeError('Artifact lead route binding is invalid.');
+  }
   if (typeof value.preview_folder !== 'string' || !PREVIEW_FOLDER_PATTERN.test(value.preview_folder)) {
     throw new TypeError('Artifact preview folder is invalid.');
+  }
+  for (const [field, label] of [
+    ['approval_content_sha256', 'Artifact approval digest'],
+    ['asset_publication_receipt_sha256', 'Artifact publication receipt digest'],
+    ['checkout_config_snapshot_sha256', 'Artifact checkout configuration digest'],
+    ['checkout_reference_sha256', 'Artifact checkout reference digest'],
+    ['preview_source_tag_sha256', 'Artifact source tag digest'],
+  ]) hex64(value[field], label);
+  if (!/^[a-f0-9]{2}$/.test(value.checkout_binding_key_id) || !/^[a-f0-9]{40}$/.test(value.preview_source_commit_sha) || value.preview_source_repository !== 'arcwebhq-cpu/arc-previews') {
+    throw new TypeError('Artifact immutable preview source binding is invalid.');
   }
   const issuedAt = isoTimestamp(value.issued_at, 'Artifact issued_at');
   const issuedMs = Date.parse(issuedAt);
   const nowMs = new Date(now).getTime();
-  if (!Number.isFinite(nowMs) || issuedMs > nowMs + 5 * 60_000 || (options.enforceFreshness !== false && issuedMs < nowMs - 24 * 60 * 60_000)) {
+  if (!Number.isFinite(nowMs) || issuedMs > nowMs + 5 * 60_000) {
     throw new TypeError('Artifact evidence is stale or from the future.');
   }
-  if (!Array.isArray(value.artifacts) || value.artifacts.length !== 2) throw new TypeError('Exactly two deploy artifacts are required.');
+  if (!Array.isArray(value.artifacts) || value.artifacts.length < 2 || value.artifacts.length > 2 + MAX_ASSET_COUNT) {
+    throw new TypeError('Deploy artifact count is invalid.');
+  }
+  let totalArtifactBytes = 0;
+  let totalAssetBytes = 0;
   const artifacts = value.artifacts.map((artifact) => {
     plainObject(artifact, 'Artifact');
     exactKeys(artifact, ['path', 'sha256', 'size'], 'Artifact');
     if (!SAFE_PATH_PATTERN.test(artifact.path)) throw new TypeError('Artifact path is not allowlisted.');
-    if (!Number.isSafeInteger(artifact.size) || artifact.size < 1 || artifact.size > 1_000_000) throw new TypeError('Artifact size is invalid.');
+    const maximum = artifact.path === '_headers' ? 10_000 : artifact.path === 'index.html' ? 500_000 : 1_250_000;
+    if (!Number.isSafeInteger(artifact.size) || artifact.size < 1 || artifact.size > maximum) throw new TypeError('Artifact size is invalid.');
+    const assetMatch = artifact.path.match(ASSET_PATH_PATTERN);
+    if (assetMatch && artifact.sha256 !== assetMatch[1]) throw new TypeError('Asset path is not content-addressed by its signed digest.');
+    totalArtifactBytes += artifact.size;
+    if (assetMatch) totalAssetBytes += artifact.size;
     return { path: artifact.path, sha256: hex64(artifact.sha256, 'Artifact sha256'), size: artifact.size };
   });
-  if (artifacts[0].path !== '_headers' || artifacts[1].path !== 'index.html') throw new TypeError('Artifact paths must be sorted and exact.');
+  if (totalArtifactBytes > MAX_ARTIFACT_BYTES || totalAssetBytes > MAX_ASSET_BYTES) {
+    throw new TypeError('Deploy artifact aggregate size is invalid.');
+  }
+  const paths = artifacts.map(artifact => artifact.path);
+  const assetPaths = paths.slice(1, -1);
+  if (paths[0] !== '_headers' || paths.at(-1) !== 'index.html' ||
+      assetPaths.some(path => !ASSET_PATH_PATTERN.test(path)) ||
+      JSON.stringify(assetPaths) !== JSON.stringify([...assetPaths].sort()) || new Set(paths).size !== paths.length) {
+    throw new TypeError('Artifact paths must be sorted and exact.');
+  }
   const manifest = canonicalJson(artifacts);
   if (sha256Hex(manifest) !== hex64(value.artifact_manifest_sha256, 'Artifact manifest sha256')) {
     throw new TypeError('Artifact manifest digest mismatch.');
@@ -370,7 +480,7 @@ export function verifyArtifactSignature(evidence, signature, secret) {
 }
 
 export function normalizeDeployArtifacts(raw, expectedArtifacts) {
-  const canonical = stringValue(raw, 'Deploy artifacts', 2, 2_000_000);
+  const canonical = stringValue(raw, 'Deploy artifacts', 2, MAX_DEPLOY_ARTIFACTS_JSON_BYTES);
   const value = JSON.parse(canonical);
   if (!Array.isArray(value) || canonicalJson(value) !== canonical || value.length !== expectedArtifacts.length) {
     throw new TypeError('Deploy artifacts are invalid or not canonical.');
@@ -379,16 +489,83 @@ export function normalizeDeployArtifacts(raw, expectedArtifacts) {
     plainObject(artifact, 'Deploy artifact');
     exactKeys(artifact, ['content_base64', 'path'], 'Deploy artifact');
     const expected = expectedArtifacts[index];
-    if (artifact.path !== expected.path || typeof artifact.content_base64 !== 'string' || artifact.content_base64.length > 1_500_000) {
+    if (artifact.path !== expected.path || typeof artifact.content_base64 !== 'string' || artifact.content_base64.length > 1_700_000) {
       throw new TypeError('Deploy artifact path or content is invalid.');
     }
     const bytes = Buffer.from(artifact.content_base64, 'base64');
     if (bytes.toString('base64') !== artifact.content_base64 || bytes.length !== expected.size || sha256Hex(bytes) !== expected.sha256) {
       throw new TypeError('Deploy artifact bytes do not match signed evidence.');
     }
+    if (ASSET_PATH_PATTERN.test(artifact.path)) validateImageAsset(bytes, imageTypeForPath(artifact.path));
     return { path: artifact.path, bytes };
   });
   return artifacts;
+}
+
+function validateProductionAssetReferences(productionBytes, artifacts) {
+  let html;
+  try { html = new TextDecoder('utf-8', { fatal: true }).decode(productionBytes); } catch {
+    throw new TypeError('Production HTML must be valid UTF-8.');
+  }
+  if (/https:\/\/arcwebhq-cpu\.github\.io\/arc-previews(?:\/|["'?#]|$)/i.test(html)) {
+    throw new TypeError('Production HTML still references the ARC preview host.');
+  }
+  if (/<base\b/i.test(html)) throw new TypeError('Production HTML base elements are forbidden.');
+  const referenced = new Set(html.match(/assets\/[a-f0-9]{64}\.(?:png|jpg|webp)/gi)?.map(value => value.toLowerCase()) || []);
+  const included = new Set(artifacts.filter(entry => ASSET_PATH_PATTERN.test(entry.path)).map(entry => entry.path));
+  if (referenced.size !== included.size || [...referenced].some(path => !included.has(path)) || [...included].some(path => !referenced.has(path))) {
+    throw new TypeError('Production HTML asset references do not match the exact signed bundle.');
+  }
+  const suspicious = html.match(/(?:^|["'(=\s\/])assets\/[^"')\s?#]+/gi) || [];
+  if (suspicious.some(value => !/assets\/[a-f0-9]{64}\.(?:png|jpg|webp)$/i.test(value.trim().replace(/^["'(=\s\/]+/, 'assets/')))) {
+    throw new TypeError('Production HTML contains an unbound local asset reference.');
+  }
+}
+
+export function expectedNetlifyLiveHtml(sourceBytes, leadRouteMode) {
+  let html;
+  try { html = new TextDecoder('utf-8', { fatal: true }).decode(sourceBytes); } catch {
+    throw new TypeError('Production HTML must be valid UTF-8.');
+  }
+  if (/<base\b/i.test(html)) throw new TypeError('Production HTML base elements are forbidden.');
+  if (leadRouteMode === 'not_required') return Buffer.from(html, 'utf8');
+  if (leadRouteMode !== 'netlify_form') throw new TypeError('Production lead route mode is invalid.');
+  const dataNetlify = html.match(/\sdata-netlify="true"/gi) || [];
+  const honeypot = html.match(/\snetlify-honeypot="bot-field"/gi) || [];
+  if (dataNetlify.length !== 1 || honeypot.length !== 1) {
+    throw new TypeError('Production form postprocessing contract is invalid.');
+  }
+  return Buffer.from(html
+    .replace(/\sdata-netlify="true"/i, '')
+    .replace(/\snetlify-honeypot="bot-field"/i, ''), 'utf8');
+}
+
+function signedCspHeader(artifactBytes) {
+  const headers = artifactBytes.find(item => item.path === '_headers')?.bytes?.toString('utf8') || '';
+  const matches = [...headers.matchAll(/^\s*Content-Security-Policy:\s*(.+?)\s*$/gmi)].map(match => match[1]);
+  if (matches.length !== 1 || !/(?:^|;)\s*base-uri\s+'none'\s*(?:;|$)/i.test(matches[0])) {
+    throw new TypeError('Signed deploy headers lack an exact base-uri policy.');
+  }
+  return matches[0];
+}
+
+export function deployArtifactsForPhase(artifacts, phase) {
+  if (!Array.isArray(artifacts) || !['preclaim', 'final'].includes(phase)) {
+    throw new TypeError('Deploy artifact phase is invalid.');
+  }
+  const headersIndex = artifacts.findIndex(item => item.path === '_headers');
+  if (headersIndex !== 0 || !Buffer.isBuffer(artifacts[0].bytes)) throw new TypeError('Signed headers artifact is invalid.');
+  const signedHeaders = artifacts[0].bytes.toString('utf8');
+  if (phase === 'preclaim' && signedHeaders !== ARC2_PRODUCTION_HEADERS_FILE) {
+    throw new TypeError('Preclaim deploy must derive from exact signed production headers.');
+  }
+  if (phase === 'final' && ![ARC2_PRODUCTION_HEADERS_FILE, ARC2_PRECLAIM_HEADERS_FILE].includes(signedHeaders)) {
+    throw new TypeError('Final deploy headers are not an exact signed or preclaim variant.');
+  }
+  return artifacts.map((item, index) => index === 0 ? {
+    path: item.path,
+    bytes: Buffer.from(phase === 'preclaim' ? ARC2_PRECLAIM_HEADERS_FILE : ARC2_PRODUCTION_HEADERS_FILE, 'utf8'),
+  } : { path: item.path, bytes: Buffer.from(item.bytes) });
 }
 
 export function normalizePaymentEvidence(raw, signature, secret, artifactEvidence, env) {
@@ -399,11 +576,89 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   if (canonicalJson(value) !== canonical || value.version !== PAYMENT_EVIDENCE_VERSION || value.scope !== PAYMENT_EVIDENCE_SCOPE) {
     throw new TypeError('Payment evidence is invalid or not canonical.');
   }
-  if (!secret || secret.length < 32 || !safeEqual(hex64(signature, 'Payment evidence signature'), hmacHex(secret, `${PAYMENT_SIGNATURE_PREFIX}${canonical}`))) {
-    throw new TypeError('Payment evidence signature mismatch.');
+  if (!/^v3_[A-Za-z0-9_-]{135}$/.test(value.client_reference_id)) throw new TypeError('Checkout reference v3 is invalid.');
+  let referenceBytes;
+  try { referenceBytes = Buffer.from(value.client_reference_id.slice(3), 'base64url'); } catch {}
+  if (!referenceBytes || referenceBytes.length !== 101 || referenceBytes.toString('base64url') !== value.client_reference_id.slice(3)) {
+    throw new TypeError('Checkout reference v3 is not canonical.');
   }
-  const liveModeEnabled = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || 'false') === 'true';
-  const checkoutSessionPattern = liveModeEnabled ? /^cs_live_[A-Za-z0-9_]+$/ : /^cs_test_[A-Za-z0-9_]+$/;
+  const referencePayload = referenceBytes.subarray(0, 69);
+  const referenceKeyId = referencePayload.subarray(0, 1).toString('hex');
+  const currentKeyId = String(env.ARC_CHECKOUT_BINDING_KEY_ID || '').trim().toLowerCase();
+  const retiredKeysRaw = String(env.ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON || '');
+  let retiredKeys;
+  try { retiredKeys = JSON.parse(retiredKeysRaw); } catch {}
+  if (!/^[a-f0-9]{2}$/.test(currentKeyId) || !retiredKeys || typeof retiredKeys !== 'object' || Array.isArray(retiredKeys) ||
+      canonicalJson(retiredKeys) !== retiredKeysRaw || secret.length < 32 || secret.length > 256 ||
+      Object.keys(retiredKeys).some((id) => !/^[a-f0-9]{2}$/.test(id) || id === currentKeyId || typeof retiredKeys[id] !== 'string' ||
+        retiredKeys[id].length < 32 || retiredKeys[id].length > 256) ||
+      new Set(Object.values(retiredKeys)).size !== Object.values(retiredKeys).length || Object.values(retiredKeys).includes(secret)) {
+    throw new TypeError('Checkout binding key registry is invalid.');
+  }
+  const selectedSecret = referenceKeyId === currentKeyId ? secret : retiredKeys[referenceKeyId];
+  const expectedStripeMode = env.ARC_STRIPE_LIVE_MODE_ENABLED === 'true' ? 'live' : 'test';
+  if (!selectedSecret || !safeEqual(hex64(signature, 'Payment evidence signature'), hmacHex(selectedSecret, `${PAYMENT_SIGNATURE_PREFIX}${expectedStripeMode}\n${canonical}`))) {
+    throw new TypeError('Payment evidence signature mismatch or checkout key is not retained.');
+  }
+  const expectedMac = createHmac('sha256', selectedSecret)
+    .update(`arc-checkout-reference-v3\narcwebhq-cpu/arc-previews\narc-production\nstripe-${expectedStripeMode}\n`).update(referencePayload).digest();
+  if (!timingSafeEqual(referenceBytes.subarray(69), expectedMac)) throw new TypeError('Checkout reference v3 MAC mismatch.');
+  const referencePrefix = referencePayload.subarray(1, 5).toString('hex');
+  const referenceApprovalSha256 = referencePayload.subarray(5, 37).toString('hex');
+  const referenceConfigSha256 = referencePayload.subarray(37, 69).toString('hex');
+  if (!value.preview_folder.endsWith(`-${referencePrefix}`) || value.approval_content_sha256 !== referenceApprovalSha256 ||
+      value.checkout_config_snapshot_sha256 !== referenceConfigSha256 || value.client_reference_id_sha256 !== sha256Hex(value.client_reference_id)) {
+    throw new TypeError('Checkout reference v3 payload binding is invalid.');
+  }
+  const snapshotCanonical = stringValue(value.checkout_config_snapshot, 'Private checkout policy', 200, 24_000);
+  const snapshot = plainObject(JSON.parse(snapshotCanonical), 'Private checkout policy');
+  const snapshotFields = ['adult_acknowledgement_key','amount_subtotal_minor_units','approval_content_sha256','asset_publication_receipt_sha256','automatic_tax_enabled',
+    'checkout_binding_key_id','checkout_redirect_url','claim_recipient_email_sha256','completed_sessions_limit','content_sha256','currency','customer_address_source',
+    'lead_route_recipient_hmac_sha256','name_collection_required','offer_snapshot_sha256','preview_folder','preview_path','preview_source_repository',
+    'price_id','price_tax_behavior','product_id','product_tax_code','published_html_sha256','quantity','readiness_core_sha256','recipient_reservation_sha256','scope',
+    'source_commit_sha','source_tree_sha','stripe_account_id_sha256','stripe_api_version','stripe_mode','tax_contract_version','tax_registrations',
+    'tax_registrations_sha256','terms_document_sha256','terms_version','version'];
+  exactKeys(snapshot, snapshotFields, 'Private checkout policy');
+  if (canonicalJson(snapshot) !== snapshotCanonical || sha256Hex(snapshotCanonical) !== referenceConfigSha256 ||
+      snapshot.version !== 'arc-private-checkout-policy-v1' || snapshot.scope !== 'one-approved-preview-one-private-payment-link' ||
+      snapshot.checkout_binding_key_id !== referenceKeyId || snapshot.stripe_mode !== expectedStripeMode ||
+      snapshot.preview_folder !== value.preview_folder || !snapshot.preview_folder.endsWith(`-${referencePrefix}`) ||
+      snapshot.preview_path !== `${value.preview_folder}/index.html` || snapshot.preview_source_repository !== 'arcwebhq-cpu/arc-previews' ||
+      snapshot.approval_content_sha256 !== referenceApprovalSha256) throw new TypeError('Private checkout policy is invalid or unbound.');
+  const taxFields = ['country', 'id', 'state', 'type'];
+  if (!Array.isArray(snapshot.tax_registrations) ||
+      snapshot.tax_registrations.length < 1 || snapshot.tax_registrations.length > 100 ||
+      snapshot.tax_registrations.some((registration) => {
+        try { plainObject(registration, 'Checkout tax registration'); exactKeys(registration, taxFields, 'Checkout tax registration'); } catch { return true; }
+        return !/^taxreg_[A-Za-z0-9]+$/.test(registration.id) || !/^[A-Z]{2}$/.test(registration.country) ||
+          !/^[A-Z0-9-]{1,10}$/.test(registration.state) || !/^[a-z][a-z0-9_]{2,63}$/.test(registration.type);
+      }) || canonicalJson([...snapshot.tax_registrations].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) !== canonicalJson(snapshot.tax_registrations) ||
+      new Set(snapshot.tax_registrations.map((registration) => registration.id)).size !== snapshot.tax_registrations.length ||
+      sha256Hex(canonicalJson(snapshot.tax_registrations)) !== snapshot.tax_registrations_sha256 ||
+      !snapshot.tax_registrations.some((registration) => registration.country === 'US' && registration.state === 'WA' && registration.type === 'state_sales_tax')) {
+    throw new TypeError('Private checkout policy tax registry is invalid.');
+  }
+  const staticSnapshotChecks = {
+    price_id: /^price_[A-Za-z0-9]+$/.test(snapshot.price_id), product_id: /^prod_[A-Za-z0-9]+$/.test(snapshot.product_id),
+    product_tax_code: /^txcd_[0-9]{8}$/.test(snapshot.product_tax_code), account: HEX_64_PATTERN.test(snapshot.stripe_account_id_sha256),
+    subtotal: snapshot.amount_subtotal_minor_units === 500000, currency: snapshot.currency === 'usd', quantity: snapshot.quantity === 1,
+    terms: /^20\d\d-\d\d-\d\d$/.test(snapshot.terms_version) && HEX_64_PATTERN.test(snapshot.terms_document_sha256),
+    automatic_tax: snapshot.automatic_tax_enabled === true, address_source: snapshot.customer_address_source === 'stripe_checkout_customer_details.address',
+    tax_behavior: snapshot.price_tax_behavior === 'exclusive', tax_contract: snapshot.tax_contract_version === 'arc-tax-v1',
+    adult: snapshot.adult_acknowledgement_key === 'adultpurchaserack',
+    names: snapshot.name_collection_required === true, limit: snapshot.completed_sessions_limit === 1,
+    redirect: snapshot.checkout_redirect_url === 'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
+    api: snapshot.stripe_api_version === '2026-06-24.dahlia',
+    receipt: HEX_64_PATTERN.test(snapshot.asset_publication_receipt_sha256),
+    lead_recipient: /^(?:|[a-f0-9]{64})$/.test(snapshot.lead_route_recipient_hmac_sha256),
+    claim_recipient: HEX_64_PATTERN.test(snapshot.claim_recipient_email_sha256),
+    immutable_digests: ['content_sha256','published_html_sha256','readiness_core_sha256','offer_snapshot_sha256','recipient_reservation_sha256']
+      .every((field) => HEX_64_PATTERN.test(snapshot[field])),
+    immutable_commits: /^[a-f0-9]{40}$/.test(snapshot.source_commit_sha) && /^[a-f0-9]{40}$/.test(snapshot.source_tree_sha),
+  };
+  const failedSnapshotCheck = Object.entries(staticSnapshotChecks).find(([, valid]) => !valid)?.[0];
+  if (failedSnapshotCheck) throw new TypeError(`Checkout configuration snapshot fixed business semantics are invalid (${failedSnapshotCheck}).`);
+  const checkoutSessionPattern = expectedStripeMode === 'live' ? /^cs_live_[A-Za-z0-9_]+$/ : /^cs_test_[A-Za-z0-9_]+$/;
   const amountsValid = Number.isSafeInteger(value.subtotal_amount_minor_units) && value.subtotal_amount_minor_units === 500000 &&
     Number.isSafeInteger(value.tax_amount_minor_units) && value.tax_amount_minor_units >= 0 && value.tax_amount_minor_units <= 500000 &&
     Number.isSafeInteger(value.amount_total_minor_units) && value.amount_total_minor_units === value.subtotal_amount_minor_units + value.tax_amount_minor_units;
@@ -418,25 +673,67 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
       value.artifact_manifest_sha256 !== artifactEvidence.artifact_manifest_sha256 ||
       value.handoff_artifact_evidence_sha256 !== sha256Hex(canonicalJson(artifactEvidence)) ||
       value.bundle_fingerprint !== artifactEvidence.bundle_fingerprint ||
-      value.livemode !== liveModeEnabled || value.mode !== 'payment' || value.status !== 'complete' ||
+      value.livemode !== (expectedStripeMode === 'live') || value.mode !== 'payment' || value.status !== 'complete' ||
       value.payment_status !== 'paid' || value.currency !== 'usd' || !amountsValid ||
       value.automatic_tax_enabled !== true || value.automatic_tax_status !== 'complete' ||
-      value.price_tax_behavior !== 'exclusive' || value.product_tax_code !== env.ARC_EXPECTED_PRODUCT_TAX_CODE ||
+      value.price_tax_behavior !== 'exclusive' || value.product_tax_code !== snapshot.product_tax_code || value.product_id !== snapshot.product_id ||
       value.tax_contract_version !== 'arc-tax-v1' || !destinationValid || value.customer_address_status !== 'verified' ||
-      value.tax_registration_status !== 'verified' || value.quantity !== 1 ||
-      value.payment_link_id !== env.ARC_EXPECTED_PAYMENT_LINK_ID ||
-      value.price_id !== env.ARC_EXPECTED_PRICE_ID ||
-      !safeEqual(hex64(value.stripe_account_id_sha256, 'Stripe account id sha256'), env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256) ||
-      value.terms_of_service_consent !== 'accepted' || value.terms_version !== '2026-08-12' ||
+      value.tax_registration_status !== 'historical_precheckout_snapshot' || value.quantity !== 1 ||
+      !/^plink_[A-Za-z0-9]+$/.test(value.payment_link_id) || !/^pi_[A-Za-z0-9]+$/.test(value.payment_intent_id) || !/^ch_[A-Za-z0-9]+$/.test(value.charge_id) ||
+      value.price_id !== snapshot.price_id ||
+      !safeEqual(hex64(value.stripe_account_id_sha256, 'Stripe account id sha256'), snapshot.stripe_account_id_sha256) ||
+      value.terms_of_service_consent !== 'accepted' || value.terms_version !== snapshot.terms_version ||
       value.adult_purchaser_acknowledgement !== 'accepted' ||
       !checkoutSessionPattern.test(value.checkout_session_id)) {
     throw new TypeError('Payment evidence bindings are invalid.');
   }
-  hex64(value.customer_email_sha256, 'Customer email sha256');
+  hex64(value.claim_recipient_email_sha256, 'Claim recipient email sha256');
+  hex64(value.payer_email_sha256, 'Payer email sha256');
   hex64(value.client_reference_id_sha256, 'Client reference id sha256');
   hex64(value.customer_address_sha256, 'Customer address sha256');
   hex64(value.tax_registrations_sha256, 'Tax registrations sha256');
-  return { canonical, value, digest: sha256Hex(canonical) };
+  if (value.tax_registrations_sha256 !== snapshot.tax_registrations_sha256 ||
+      snapshot.asset_publication_receipt_sha256 !== value.asset_publication_receipt_sha256 ||
+      snapshot.checkout_binding_key_id !== artifactEvidence.checkout_binding_key_id ||
+      snapshot.lead_route_recipient_hmac_sha256 !== artifactEvidence.lead_route_recipient_hmac_sha256 ||
+      value.approval_content_sha256 !== artifactEvidence.approval_content_sha256 ||
+      value.asset_publication_receipt_sha256 !== artifactEvidence.asset_publication_receipt_sha256 ||
+      value.checkout_config_snapshot_sha256 !== artifactEvidence.checkout_config_snapshot_sha256 ||
+      value.client_reference_id_sha256 !== artifactEvidence.checkout_reference_sha256 ||
+      value.preview_source_commit_sha !== artifactEvidence.preview_source_commit_sha ||
+      value.preview_source_repository !== artifactEvidence.preview_source_repository ||
+      value.preview_source_tag_sha256 !== artifactEvidence.preview_source_tag_sha256 ||
+      value.claim_recipient_email_sha256 !== snapshot.claim_recipient_email_sha256 ||
+      !/^[a-f0-9]{40}$/.test(value.preview_source_commit_sha) || value.preview_source_repository !== 'arcwebhq-cpu/arc-previews') {
+    throw new TypeError('Payment evidence immutable source bindings are invalid.');
+  }
+  const mismatch = value.client_reference_id_observation === 'MISMATCH_REVIEW_REQUIRED';
+  if (!['ABSENT','MATCHED','MISMATCH_REVIEW_REQUIRED'].includes(value.client_reference_id_observation) || value.client_reference_mismatch_review_required !== mismatch) {
+    throw new TypeError('Client-reference observation is invalid.');
+  }
+  if (!mismatch) {
+    if ([value.client_reference_mismatch_review_record_key_hmac_sha256,value.client_reference_mismatch_review_state,
+      value.client_reference_mismatch_review_sha256,value.client_reference_mismatch_review_hmac_sha256].some(Boolean)) {
+      throw new TypeError('Unexpected client-reference mismatch review.');
+    }
+  } else {
+    const reviewCanonical = stringValue(value.client_reference_mismatch_review_state, 'Client-reference mismatch review', 2, 4096);
+    const review = plainObject(JSON.parse(reviewCanonical), 'Client-reference mismatch review');
+    exactKeys(review,['checkout_policy_sha256','checkout_session_id_hmac_sha256','expected_checkout_reference_sha256','link_id_hmac_sha256',
+      'link_receipt_sha256','observed_client_reference_sha256','record_key_hmac_sha256','scope','status','stripe_account_id_sha256','stripe_mode','version'],
+    'Client-reference mismatch review');
+    if (canonicalJson(review) !== reviewCanonical || review.version !== 'arc2-client-reference-mismatch-review-v1' ||
+        review.scope !== 'buyer-supplied-client-reference-anomaly' || review.status !== 'REVIEW_REQUIRED' || review.stripe_mode !== expectedStripeMode ||
+        review.record_key_hmac_sha256 !== value.client_reference_mismatch_review_record_key_hmac_sha256 || review.checkout_policy_sha256 !== referenceConfigSha256 ||
+        review.expected_checkout_reference_sha256 !== value.client_reference_id_sha256 || review.stripe_account_id_sha256 !== value.stripe_account_id_sha256 ||
+        !['checkout_session_id_hmac_sha256','link_id_hmac_sha256','link_receipt_sha256','observed_client_reference_sha256','record_key_hmac_sha256']
+          .every((field) => HEX_64_PATTERN.test(review[field])) || sha256Hex(reviewCanonical) !== value.client_reference_mismatch_review_sha256 ||
+        !safeEqual(hex64(value.client_reference_mismatch_review_hmac_sha256,'Client-reference mismatch review HMAC'),
+          hmacHex(selectedSecret, `arc2-client-reference-mismatch-review-signature-v1\n${expectedStripeMode}\n${reviewCanonical}`))) {
+      throw new TypeError('Client-reference mismatch review binding is invalid.');
+    }
+  }
+  return { canonical, value, digest: sha256Hex(canonical), selectedCheckoutBindingSecret: selectedSecret, stripeMode: expectedStripeMode };
 }
 
 export function extractNetlifyFormName(indexBytes) {
@@ -483,16 +780,33 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
   for (const artifactEntry of deployArtifacts) bundleHash.update(artifactEntry.path).update('\0').update(artifactEntry.bytes).update('\0');
   if (bundleHash.digest('hex') !== artifact.value.bundle_fingerprint) throw new TypeError('Deploy artifact bundle fingerprint mismatch.');
   const production = deployArtifacts.find((entry) => entry.path === 'index.html');
+  const headers = deployArtifacts.find((entry) => entry.path === '_headers');
+  if (!headers || !headers.bytes.equals(Buffer.from(ARC2_PRODUCTION_HEADERS_FILE, 'utf8'))) {
+    throw new TypeError('Signed production headers do not match the exact indexable security policy.');
+  }
   if (!production || sha256Hex(production.bytes) !== artifact.value.production_content_sha256) {
     throw new TypeError('Production content digest mismatch.');
   }
-  const leadEmail = stringValue(input.lead_notification_email, 'Lead notification email', 3, 254).toLowerCase();
-  const recipientHmac = hex64(input.lead_route_recipient_hmac_sha256, 'Lead recipient HMAC');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leadEmail) ||
-      !safeEqual(recipientHmac, hmacHex(env.ARC_LEAD_ROUTE_EVIDENCE_SECRET, `${LEAD_RECIPIENT_PREFIX}${leadEmail}`))) {
-    throw new TypeError('Lead notification email is invalid or unbound.');
+  validateProductionAssetReferences(production.bytes, deployArtifacts);
+  const leadRouteMode = artifact.value.lead_route_mode;
+  let leadEmail = '';
+  let recipientHmac = '';
+  let formName = '';
+  if (leadRouteMode === 'netlify_form') {
+    leadEmail = stringValue(input.lead_notification_email, 'Lead notification email', 3, 254).toLowerCase();
+    recipientHmac = hex64(input.lead_route_recipient_hmac_sha256, 'Lead recipient HMAC');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leadEmail) ||
+        !safeEqual(recipientHmac, hmacHex(payment.selectedCheckoutBindingSecret, `arc-checkout-lead-recipient-v1\n${payment.stripeMode}\n${leadEmail}`)) ||
+        recipientHmac !== artifact.value.lead_route_recipient_hmac_sha256) {
+      throw new TypeError('Lead notification email is invalid or unbound.');
+    }
+    formName = extractNetlifyFormName(production.bytes);
+    if (formName !== artifact.value.lead_route_form_name) throw new TypeError('Lead form is not bound to signed artifact evidence.');
+  } else {
+    if (input.lead_notification_email !== '' || input.lead_route_recipient_hmac_sha256 !== '' || /<form\b/i.test(production.bytes.toString('utf8'))) {
+      throw new TypeError('No-form handoff contains unexpected lead-route data.');
+    }
   }
-  const formName = extractNetlifyFormName(production.bytes);
   return { artifact, payment, deployArtifacts, leadEmail, leadRouteRecipientHmacSha256: recipientHmac, formName };
 }
 
@@ -522,9 +836,10 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     artifact_manifest_sha256: normalized.artifact.value.artifact_manifest_sha256,
     bundle_fingerprint: normalized.artifact.value.bundle_fingerprint,
     production_content_sha256: normalized.artifact.value.production_content_sha256,
-    customer_email_sha256: normalized.payment.value.customer_email_sha256,
+    customer_email_sha256: normalized.payment.value.claim_recipient_email_sha256,
     lead_notification_email_sha256: sha256Hex(normalized.leadEmail),
     lead_route_recipient_hmac_sha256: normalized.leadRouteRecipientHmacSha256,
+    lead_route_mode: normalized.artifact.value.lead_route_mode,
     preview_folder: normalized.artifact.value.preview_folder,
     artifacts: normalized.artifact.artifacts,
     form_name: normalized.formName,
@@ -545,6 +860,7 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     destination_account_id: null,
     lead_route_receipt_sha256: null,
     claim_token_hmac_sha256: null,
+    claim_invitation_generation: 0,
     claim_token_consumed_hmac_sha256: null,
     claim_token_expires_at: null,
     claim_token_used_at: null,
@@ -615,7 +931,8 @@ export function netlifyClaimUrl(record, env) {
   if (record.state !== 'CLAIM_WRAPPER_CONSUMED') throw new TypeError('Claim link is not available in the current state.');
   const claimWebhook = `${new URL(env.ARC_PUBLIC_ORIGIN).origin}/api/arc2/claim-webhook`;
   const issuedAt = record.claim_jwt_issued_at;
-  const expiresAt = Math.floor(Date.parse(record.claim_token_expires_at) / 1000);
+  const invitationExpiresAt = Math.floor(Date.parse(record.claim_token_expires_at) / 1000);
+  const expiresAt = Math.min(invitationExpiresAt, issuedAt + CLAIM_JWT_TTL_SECONDS);
   if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt) {
     throw new TypeError('Claim JWT lifetime is invalid.');
   }
@@ -649,23 +966,126 @@ export function emptyResponse(status) {
   return new Response(null, { status, headers: responseHeaders() });
 }
 
-async function netlifyRequest(path, options, env, fetchImpl = fetch) {
-  env = requireResolvedHandoffEnvironment(env);
-  const url = `https://api.netlify.com/api/v1${path}`;
-  const response = await fetchImpl(url, {
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${env.NETLIFY_ADMIN_PAT}`,
-      ...(options.headers || {}),
+function boundedNetlifyResponse(response, timer, timedOut) {
+  const finish = () => clearTimeout(timer);
+  let wrappedBody;
+  const consume = (method) => async (...args) => {
+    try {
+      return await response[method](...args);
+    } catch (error) {
+      if (timedOut()) throw new Error('Netlify response exceeded the bounded timeout.', { cause: error });
+      throw error;
+    } finally {
+      finish();
+    }
+  };
+  return new Proxy(response, {
+    get(target, property) {
+      if (property === 'body' && target.body) {
+        if (!wrappedBody) {
+          const reader = target.body.getReader();
+          wrappedBody = new ReadableStream({
+            async pull(controller) {
+              try {
+                const { done, value } = await reader.read();
+                if (done) { finish(); controller.close(); }
+                else controller.enqueue(value);
+              } catch (error) {
+                finish();
+                controller.error(timedOut() ? new Error('Netlify response exceeded the bounded timeout.', { cause: error }) : error);
+              }
+            },
+            async cancel(reason) {
+              finish();
+              try { await reader.cancel(reason); } catch {}
+            },
+          });
+        }
+        return wrappedBody;
+      }
+      if (['arrayBuffer', 'json', 'text'].includes(property) && typeof target[property] === 'function') {
+        return consume(property);
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
     },
-    redirect: 'error',
   });
-  if (!response.ok) throw new Error(`Netlify request failed with status ${response.status}.`);
-  return response;
 }
 
-export async function createClaimableSite(record, env, fetchImpl = fetch) {
+export async function netlifyRequest(path, options, env, fetchImpl = fetch, timeoutMs = NETLIFY_REQUEST_TIMEOUT_MS) {
+  env = requireResolvedHandoffEnvironment(env);
+  const url = `https://api.netlify.com/api/v1${path}`;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > NETLIFY_REQUEST_TIMEOUT_MS) {
+    throw new TypeError('Netlify request timeout is invalid.');
+  }
+  const controller = new AbortController();
+  let didTimeOut = false;
+  const timer = setTimeout(() => {
+    didTimeOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${env.NETLIFY_ADMIN_PAT}`,
+        ...(options.headers || {}),
+      },
+      redirect: 'error',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      clearTimeout(timer);
+      controller.abort();
+      throw new Error(`Netlify request failed with status ${response.status}.`);
+    }
+    return boundedNetlifyResponse(response, timer, () => didTimeOut);
+  } catch (error) {
+    clearTimeout(timer);
+    if (didTimeOut) throw new Error('Netlify request exceeded the bounded timeout.', { cause: error });
+    throw error;
+  }
+}
+
+export async function readNetlifyJsonBounded(response, maximumBytes, label = 'Netlify JSON response') {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 2 || maximumBytes > 2_000_000) {
+    throw new TypeError('Netlify JSON response cap is invalid.');
+  }
+  const declared = response.headers?.get?.('content-length');
+  if (declared && (!/^\d{1,9}$/.test(declared) || Number(declared) > maximumBytes)) {
+    try { await response.body?.cancel?.(); } catch {}
+    throw new Error(`${label} exceeds the bounded response size.`);
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error(`${label} requires a streaming response body.`);
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new Error(`${label} returned an invalid response chunk.`);
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        try { await reader.cancel(); } catch {}
+        throw new Error(`${label} exceeds the bounded response size.`);
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  try { return JSON.parse(Buffer.concat(chunks, total).toString('utf8')); } catch {
+    throw new Error(`${label} is not valid JSON.`);
+  }
+}
+
+function netlifyJsonCap(path) {
+  if (/\/files(?:\?|$)/.test(path)) return 2_000_000;
+  if (/\/(?:forms|hooks|deploys)(?:\?|$)/.test(path)) return 1_000_000;
+  return 256_000;
+}
+
+export async function createClaimableSite(record, env, fetchImpl = fetch, timeoutMs = NETLIFY_REQUEST_TIMEOUT_MS) {
   const response = await netlifyRequest('/sites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -675,8 +1095,8 @@ export async function createClaimableSite(record, env, fetchImpl = fetch) {
       name: record.netlify_site_name,
       session_id: record.netlify_session_id,
     }),
-  }, env, fetchImpl);
-  const site = await response.json();
+  }, env, fetchImpl, timeoutMs);
+  const site = await readNetlifyJsonBounded(response, 256_000, 'Netlify site creation response');
   if (!site || !identifier(site.id, 'Netlify site id') || site.name !== record.netlify_site_name ||
       site.session_id !== record.netlify_session_id || site.account_id !== env.NETLIFY_TEAM_ACCOUNT_ID ||
       site.account_slug !== env.NETLIFY_TEAM_SLUG) {
@@ -686,7 +1106,15 @@ export async function createClaimableSite(record, env, fetchImpl = fetch) {
 }
 
 export function createStoredZip(artifacts) {
-  if (!Array.isArray(artifacts) || artifacts.length !== 2) throw new TypeError('Exactly two ZIP artifacts are required.');
+  if (!Array.isArray(artifacts) || artifacts.length < 2 || artifacts.length > 2 + MAX_ASSET_COUNT) {
+    throw new TypeError('ZIP artifact count is invalid.');
+  }
+  const paths = artifacts.map(artifact => artifact?.path);
+  if (paths[0] !== '_headers' || paths.at(-1) !== 'index.html' ||
+      paths.slice(1, -1).some(path => !ASSET_PATH_PATTERN.test(path)) ||
+      JSON.stringify(paths.slice(1, -1)) !== JSON.stringify(paths.slice(1, -1).sort()) || new Set(paths).size !== paths.length) {
+    throw new TypeError('ZIP artifact paths are invalid.');
+  }
   const local = [];
   const central = [];
   let offset = 0;
@@ -744,14 +1172,14 @@ function crc32(buffer, table) {
   return (value ^ 0xffffffff) >>> 0;
 }
 
-export async function deployZip(siteId, zip, title, env, fetchImpl = fetch) {
+export async function deployZip(siteId, zip, title, env, fetchImpl = fetch, timeoutMs = NETLIFY_REQUEST_TIMEOUT_MS) {
   identifier(siteId, 'Netlify site id');
   const response = await netlifyRequest(`/sites/${encodeURIComponent(siteId)}/deploys?title=${encodeURIComponent(title)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/zip' },
     body: zip,
-  }, env, fetchImpl);
-  const deploy = await response.json();
+  }, env, fetchImpl, timeoutMs);
+  const deploy = await readNetlifyJsonBounded(response, 256_000, 'Netlify deploy creation response');
   if (!deploy || !identifier(deploy.id, 'Netlify deploy id') || deploy.site_id !== siteId) throw new Error('Netlify deploy response did not match the site.');
   return deploy;
 }
@@ -759,9 +1187,18 @@ export async function deployZip(siteId, zip, title, env, fetchImpl = fetch) {
 export async function pollDeployReady(siteId, deployId, env, fetchImpl = fetch, options = {}) {
   const attempts = options.attempts || MAX_DEPLOY_POLL_ATTEMPTS;
   const wait = options.wait || (() => Promise.resolve());
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const response = await netlifyRequest(`/deploys/${encodeURIComponent(deployId)}`, { method: 'GET' }, env, fetchImpl);
-    const deploy = await response.json();
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) throw new Error('Netlify deploy polling exceeded the operation deadline.');
+    const response = await netlifyRequest(
+      `/deploys/${encodeURIComponent(deployId)}`,
+      { method: 'GET' },
+      env,
+      fetchImpl,
+      Math.min(NETLIFY_REQUEST_TIMEOUT_MS, Math.max(1, Math.floor(remainingMs))),
+    );
+    const deploy = await readNetlifyJsonBounded(response, 256_000, 'Netlify deploy polling response');
     if (!deploy || deploy.id !== deployId || deploy.site_id !== siteId) throw new Error('Netlify deploy identity changed while polling.');
     if (deploy.state === 'ready') return deploy;
     if (deploy.state === 'error' || deploy.error_message) throw new Error('Netlify deploy failed.');
@@ -770,14 +1207,21 @@ export async function pollDeployReady(siteId, deployId, env, fetchImpl = fetch, 
   throw new Error('Netlify deploy did not become ready before the bounded timeout.');
 }
 
-export async function createEmailHook(siteId, formId, email, env, fetchImpl = fetch) {
+function deadlineTimeout(deadlineMs) {
+  if (!Number.isFinite(deadlineMs)) return NETLIFY_REQUEST_TIMEOUT_MS;
+  const remainingMs = Math.floor(deadlineMs - Date.now());
+  if (remainingMs <= 0) throw new Error('Netlify operation deadline exceeded.');
+  return Math.min(NETLIFY_REQUEST_TIMEOUT_MS, remainingMs);
+}
+
+export async function createEmailHook(siteId, formId, email, env, fetchImpl = fetch, timeoutMs = NETLIFY_REQUEST_TIMEOUT_MS) {
   const body = { site_id: siteId, form_id: formId, type: 'email', event: 'submission_created', data: { email } };
   const response = await netlifyRequest(`/hooks?site_id=${encodeURIComponent(siteId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, env, fetchImpl);
-  const hook = await response.json();
+  }, env, fetchImpl, timeoutMs);
+  const hook = await readNetlifyJsonBounded(response, 256_000, 'Netlify hook creation response');
   if (!hook || !identifier(hook.id, 'Netlify hook id') || hook.site_id !== siteId || hook.type !== 'email' ||
       hook.event !== 'submission_created' || hook.disabled === true || hook.data?.email !== email) {
     throw new Error('Netlify hook response did not match the requested recipient.');
@@ -785,8 +1229,9 @@ export async function createEmailHook(siteId, formId, email, env, fetchImpl = fe
   return hook;
 }
 
-async function netlifyJson(path, env, fetchImpl) {
-  return (await netlifyRequest(path, { method: 'GET' }, env, fetchImpl)).json();
+async function netlifyJson(path, env, fetchImpl, deadlineMs = Number.POSITIVE_INFINITY) {
+  const response = await netlifyRequest(path, { method: 'GET' }, env, fetchImpl, deadlineTimeout(deadlineMs));
+  return readNetlifyJsonBounded(response, netlifyJsonCap(path), `Netlify ${path} response`);
 }
 
 export async function findNetlifyForm(siteId, formName, env, fetchImpl = fetch, options = {}) {
@@ -794,8 +1239,18 @@ export async function findNetlifyForm(siteId, formName, env, fetchImpl = fetch, 
   validateFormName(formName);
   const attempts = options.attempts || 8;
   const wait = options.wait || (() => Promise.resolve());
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const forms = await netlifyJson(`/sites/${encodeURIComponent(siteId)}/forms`, env, fetchImpl);
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) throw new Error('Netlify form polling exceeded the operation deadline.');
+    const response = await netlifyRequest(
+      `/sites/${encodeURIComponent(siteId)}/forms`,
+      { method: 'GET' },
+      env,
+      fetchImpl,
+      Math.min(NETLIFY_REQUEST_TIMEOUT_MS, Math.max(1, Math.floor(remainingMs))),
+    );
+    const forms = await readNetlifyJsonBounded(response, 1_000_000, 'Netlify form listing response');
     const matches = (Array.isArray(forms) ? forms : []).filter((form) => form.site_id === siteId && form.name === formName);
     if (matches.length > 1) throw new Error('Netlify returned duplicate matching forms.');
     if (matches.length === 1) {
@@ -807,8 +1262,9 @@ export async function findNetlifyForm(siteId, formName, env, fetchImpl = fetch, 
   throw new Error('Netlify did not register the signed lead form before the bounded timeout.');
 }
 
-export async function ensureEmailHook(siteId, formId, email, env, fetchImpl = fetch) {
-  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(siteId)}`, env, fetchImpl);
+export async function ensureEmailHook(siteId, formId, email, env, fetchImpl = fetch, options = {}) {
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
+  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(siteId)}`, env, fetchImpl, deadlineMs);
   const forForm = (Array.isArray(hooks) ? hooks : []).filter((hook) => hook.site_id === siteId && hook.form_id === formId &&
     hook.type === 'email' && hook.event === 'submission_created' && hook.disabled !== true);
   if (forForm.some((hook) => String(hook.data?.email || '').trim().toLowerCase() !== email)) {
@@ -819,12 +1275,19 @@ export async function ensureEmailHook(siteId, formId, email, env, fetchImpl = fe
     identifier(forForm[0].id, 'Netlify hook id');
     return forForm[0];
   }
-  const hook = await createEmailHook(siteId, formId, email, env, fetchImpl);
+  if (typeof options.beforeMutation === 'function') await options.beforeMutation();
+  const timeoutMs = deadlineTimeout(deadlineMs);
+  const mutationFetch = (...args) => {
+    if (typeof options.onMutationFetch === 'function') options.onMutationFetch();
+    return fetchImpl(...args);
+  };
+  const hook = await createEmailHook(siteId, formId, email, env, mutationFetch, timeoutMs);
   if (hook.form_id !== formId) throw new Error('Netlify hook response did not bind the expected form.');
   return hook;
 }
 
-export async function downloadVerifiedArtifacts(siteId, artifacts, env, fetchImpl = fetch) {
+export async function downloadVerifiedArtifacts(siteId, artifacts, env, fetchImpl = fetch, options = {}) {
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
   const output = [];
   for (const artifact of artifacts) {
     const raw = await netlifyRequest(`/sites/${encodeURIComponent(siteId)}/files/${artifact.path}`, {
@@ -833,45 +1296,117 @@ export async function downloadVerifiedArtifacts(siteId, artifacts, env, fetchImp
         Accept: 'application/vnd.bitballoon.v1.raw',
         'Content-Type': 'application/vnd.bitballoon.v1.raw',
       },
-    }, env, fetchImpl);
-    const bytes = Buffer.from(await raw.arrayBuffer());
+    }, env, fetchImpl, deadlineTimeout(deadlineMs));
+    const bytes = await readResponseBytesBounded(raw, artifact.size);
     if (bytes.length !== artifact.size || sha256Hex(bytes) !== artifact.sha256) throw new Error('Netlify raw source bytes mismatch.');
     output.push({ path: artifact.path, bytes });
   }
   return output;
 }
 
-export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fetch) {
-  const site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
-  const account = await netlifyJson(`/accounts/${encodeURIComponent(expected.accountId)}`, env, fetchImpl);
+async function readResponseBytesBounded(response, maximumBytes) {
+  const declared = response.headers?.get?.('content-length');
+  if (declared && (!/^\d{1,9}$/.test(declared) || Number(declared) > maximumBytes)) throw new Error('Response body exceeds signed artifact size.');
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error('Streaming response body is required.');
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new Error('Response body chunk is invalid.');
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        try { await reader.cancel(); } catch {}
+        throw new Error('Response body exceeds signed artifact size.');
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  return Buffer.concat(chunks, total);
+}
+
+export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fetch, options = {}) {
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
+  const site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
+  const account = await netlifyJson(`/accounts/${encodeURIComponent(expected.accountId)}`, env, fetchImpl, deadlineMs);
   const deployId = expected.deployId;
-  const deploy = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}`, env, fetchImpl);
+  const deploy = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}`, env, fetchImpl, deadlineMs);
   if (site.id !== record.netlify_site_id || site.name !== record.netlify_site_name || site.session_id !== record.netlify_session_id || account.id !== expected.accountId ||
       site.account_id !== expected.accountId || deploy.id !== deployId || deploy.site_id !== record.netlify_site_id ||
       deploy.state !== 'ready' || site.published_deploy?.id !== deployId) {
     throw new Error('Netlify site, account, session, or deploy binding failed.');
   }
-  const files = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/files`, env, fetchImpl);
+  const files = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/files`, env, fetchImpl, deadlineMs);
   if (!Array.isArray(files) || files.length !== expected.artifacts.length) throw new Error('Netlify deploy file count mismatch.');
   for (const artifact of expected.artifacts) {
     const file = files.find((item) => item.path === `/${artifact.path}`);
     if (!file || Number(file.size) !== artifact.size) throw new Error('Netlify deploy file metadata mismatch.');
   }
-  const artifactBytes = await downloadVerifiedArtifacts(record.netlify_site_id, expected.artifacts, env, fetchImpl);
-  const forms = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/forms`, env, fetchImpl);
-  const matchingForms = (Array.isArray(forms) ? forms : []).filter((form) => form.id === expected.formId && form.site_id === record.netlify_site_id && form.name === expected.formName);
-  if (matchingForms.length !== 1) throw new Error('Netlify form binding failed.');
-  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
-  const matchingHooks = (Array.isArray(hooks) ? hooks : []).filter((hook) => hook.id === expected.hookId && hook.site_id === record.netlify_site_id &&
-    hook.form_id === expected.formId && hook.type === 'email' && hook.event === 'submission_created' && hook.disabled !== true &&
-    sha256Hex(String(hook.data?.email || '').trim().toLowerCase()) === expected.leadEmailSha256);
-  if (matchingHooks.length !== 1) throw new Error('Netlify hook binding failed.');
-  const productionUrl = canonicalNetlifySiteUrl(record.netlify_site_name);
-  const publicResponse = await fetchImpl(productionUrl, { method: 'GET', redirect: 'error' });
-  if (!publicResponse.ok || !(publicResponse.headers.get('x-robots-tag') || '').toLowerCase().includes('noindex')) {
-    throw new Error('Published handoff is unavailable or missing noindex protection.');
+  const artifactBytes = await downloadVerifiedArtifacts(record.netlify_site_id, expected.artifacts, env, fetchImpl, { deadlineMs });
+  const expectedLiveHtml = expectedNetlifyLiveHtml(
+    artifactBytes.find(item => item.path === 'index.html')?.bytes,
+    record.lead_route_mode,
+  );
+  const expectedCsp = signedCspHeader(artifactBytes);
+  let matchingForm = null;
+  let matchingHook = null;
+  if (record.lead_route_mode === 'netlify_form') {
+    const forms = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/forms`, env, fetchImpl, deadlineMs);
+    const matchingForms = (Array.isArray(forms) ? forms : []).filter((form) => form.id === expected.formId && form.site_id === record.netlify_site_id && form.name === expected.formName);
+    if (matchingForms.length !== 1) throw new Error('Netlify form binding failed.');
+    const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
+    const matchingHooks = (Array.isArray(hooks) ? hooks : []).filter((hook) => hook.id === expected.hookId && hook.site_id === record.netlify_site_id &&
+      hook.form_id === expected.formId && hook.type === 'email' && hook.event === 'submission_created' && hook.disabled !== true &&
+      sha256Hex(String(hook.data?.email || '').trim().toLowerCase()) === expected.leadEmailSha256);
+    if (matchingHooks.length !== 1) throw new Error('Netlify hook binding failed.');
+    [matchingForm] = matchingForms;
+    [matchingHook] = matchingHooks;
+  } else if (expected.formId !== null || expected.formName !== '' || expected.hookId !== null || expected.leadEmailSha256 !== sha256Hex('')) {
+    throw new Error('No-form Netlify handoff has unexpected lead-route bindings.');
   }
-  return { site, account, deploy, form: matchingForms[0], hook: matchingHooks[0], artifactBytes, productionUrl };
+  const productionUrl = canonicalNetlifySiteUrl(record.netlify_site_name);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deadlineTimeout(deadlineMs));
+  let publicResponse;
+  let publicHtml;
+  try {
+    publicResponse = await fetchImpl(productionUrl, { method: 'GET', redirect: 'error', signal: controller.signal });
+    const robots = (publicResponse.headers.get('x-robots-tag') || '').trim().toLowerCase();
+    const phase = expected.phase || 'preclaim';
+    if (!publicResponse.ok || (phase === 'preclaim'
+      ? robots !== 'noindex, nofollow, noarchive'
+      : robots !== '')) throw new Error('Published handoff indexing policy mismatch.');
+    if (publicResponse.url && publicResponse.url !== productionUrl) throw new Error('Published handoff redirected unexpectedly.');
+    if ((publicResponse.headers.get('content-security-policy') || '').trim() !== expectedCsp) {
+      throw new Error('Published handoff content security policy mismatch.');
+    }
+    publicHtml = await readResponseBytesBounded(publicResponse, expectedLiveHtml.length);
+    if (!publicHtml.equals(expectedLiveHtml)) {
+      throw new Error('Published production HTML bytes mismatch.');
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  validateProductionAssetReferences(publicHtml, expected.artifacts);
+  for (const artifact of expected.artifacts.filter(item => ASSET_PATH_PATTERN.test(item.path))) {
+    const assetUrl = new URL(artifact.path, productionUrl).toString();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deadlineTimeout(deadlineMs));
+    let response;
+    try {
+      response = await fetchImpl(assetUrl, { method: 'GET', redirect: 'error', signal: controller.signal });
+      if (!response.ok || (response.url && response.url !== assetUrl) ||
+          (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== imageTypeForPath(artifact.path)) {
+        throw new Error('Published production asset response mismatch.');
+      }
+      const bytes = await readResponseBytesBounded(response, artifact.size);
+      if (bytes.length !== artifact.size || sha256Hex(bytes) !== artifact.sha256) throw new Error('Published production asset bytes mismatch.');
+      validateImageAsset(bytes, imageTypeForPath(artifact.path));
+    } finally { clearTimeout(timer); }
+  }
+  return { site, account, deploy, form: matchingForm, hook: matchingHook, artifactBytes, productionUrl };
 }
 
 export function normalizeProductionUrl(value) {
@@ -935,10 +1470,22 @@ export function createOutboxClaim(record, env) {
   };
 }
 
-export function createClaimStateEvidence(record, env) {
+export function createClaimStateEvidence(record, env, authorizedAt = new Date()) {
   if (record.state !== 'FINAL_DEPLOY_READY' || record.outbox_claim_status !== 'CLAIMED') {
     throw new TypeError('Claim-state evidence is unavailable before final deploy and outbox claim.');
   }
+  const providerObservedAt = new Date(authorizedAt).toISOString();
+  if (Date.parse(providerObservedAt) < Date.parse(record.final_deploy_ready_at)) {
+    throw new TypeError('Final delivery authorization predates the final deploy.');
+  }
+  const authorizationBinding = {
+    bundle_fingerprint: record.bundle_fingerprint,
+    netlify_site_id_sha256: sha256Hex(record.netlify_site_id),
+    netlify_deploy_id_sha256: sha256Hex(record.final_deploy_id),
+    netlify_destination_account_id_sha256: sha256Hex(record.destination_account_id),
+    outbox_claim_key_hmac_sha256: hex64(record.outbox_claim_key_hmac_sha256, 'Outbox claim key HMAC'),
+    provider_observed_at: providerObservedAt,
+  };
   const value = {
     version: CLAIM_STATE_EVIDENCE_VERSION,
     scope: CLAIM_STATE_EVIDENCE_SCOPE,
@@ -949,21 +1496,23 @@ export function createClaimStateEvidence(record, env) {
     handoff_artifact_evidence_sha256: record.artifact_evidence_sha256,
     bundle_fingerprint: record.bundle_fingerprint,
     customer_email_sha256: record.customer_email_sha256,
-    netlify_site_id_sha256: sha256Hex(record.netlify_site_id),
-    netlify_deploy_id_sha256: sha256Hex(record.final_deploy_id),
-    netlify_destination_account_id_sha256: sha256Hex(record.destination_account_id),
+    netlify_site_id_sha256: authorizationBinding.netlify_site_id_sha256,
+    netlify_deploy_id_sha256: authorizationBinding.netlify_deploy_id_sha256,
+    netlify_destination_account_id_sha256: authorizationBinding.netlify_destination_account_id_sha256,
     production_url: normalizeProductionUrl(record.production_url),
     claim_invitation_ready_at: isoTimestamp(record.claim_invitation_ready_at, 'Claim invitation ready timestamp'),
     claim_callback_received_at: isoTimestamp(record.claim_callback_received_at, 'Claim callback timestamp'),
     claimed_verified_at: isoTimestamp(record.claimed_verified_at, 'Claim verification timestamp'),
     final_deploy_ready_at: isoTimestamp(record.final_deploy_ready_at, 'Final deploy timestamp'),
     outbox_claim_status: 'CLAIMED',
-    outbox_claim_key_hmac_sha256: hex64(record.outbox_claim_key_hmac_sha256, 'Outbox claim key HMAC'),
-    // Evidence is an immutable snapshot of the verification transition. Status
-    // reads must never make stale provider state look freshly re-verified.
-    issued_at: isoTimestamp(record.final_deploy_ready_at, 'Final deploy timestamp'),
+    outbox_claim_key_hmac_sha256: authorizationBinding.outbox_claim_key_hmac_sha256,
+    provider_observed_at: providerObservedAt,
+    authorization_nonce_sha256: hmacHex(env.ARC_CLAIM_STATE_EVIDENCE_SECRET,
+      `${FINAL_DELIVERY_AUTHORIZATION_PREFIX}${canonicalJson(authorizationBinding)}`),
+    issued_at: providerObservedAt,
   };
-  const orderedTimes = [value.claim_invitation_ready_at, value.claim_callback_received_at, value.claimed_verified_at, value.final_deploy_ready_at, value.issued_at]
+  const orderedTimes = [value.claim_invitation_ready_at, value.claim_callback_received_at, value.claimed_verified_at,
+    value.final_deploy_ready_at, value.provider_observed_at, value.issued_at]
     .map((timestamp) => Date.parse(timestamp));
   if (orderedTimes.some((timestamp, index) => index > 0 && timestamp < orderedTimes[index - 1])) {
     throw new TypeError('Claim-state timestamps are out of order.');
@@ -976,7 +1525,10 @@ export function createClaimStateEvidence(record, env) {
 }
 
 const LEGACY_HANDOFF_DEFAULTS = Object.freeze({
+  claim_invitation_generation: 0,
+  lead_route_mode: 'netlify_form',
   lead_route_recipient_hmac_sha256: null,
+  lead_route_migration: null,
   final_delivery_receipt_sha256: null,
   final_delivery_provider: null,
   final_delivery_provider_account_hmac_sha256: null,
@@ -989,12 +1541,38 @@ const LEGACY_HANDOFF_DEFAULTS = Object.freeze({
 
 export function normalizeStoredHandoffRecord(value) {
   const record = plainObject(value, 'Stored handoff record');
-  if (record.schema === HANDOFF_SCHEMA) return record;
+  if (record.schema === HANDOFF_SCHEMA) {
+    const withGeneration = Object.hasOwn(record, 'claim_invitation_generation')
+      ? record
+      : { ...record, claim_invitation_generation: 0 };
+    // Rows created before lead-route mode became a signed artifact field can be
+    // identified only when their existing form bindings are internally exact.
+    // Never infer no-form from missing fields: ambiguous rows fail closed.
+    if (!Object.hasOwn(withGeneration, 'lead_route_mode') || withGeneration.lead_route_mode === undefined) {
+      if (validateFormName(withGeneration.form_name) !== withGeneration.form_name ||
+          !HEX_64_PATTERN.test(withGeneration.lead_route_recipient_hmac_sha256 || '')) {
+        throw new TypeError('Stored handoff lead route mode is missing and cannot be inferred safely.');
+      }
+      return { ...withGeneration, lead_route_mode: 'netlify_form' };
+    }
+    return withGeneration;
+  }
   if (record.schema !== LEGACY_HANDOFF_SCHEMA) throw new TypeError('Stored handoff record schema is invalid.');
   if (record.state === 'DELIVERED' && (!record.final_delivery_receipt_sha256 || !record.final_delivery_receipt_issued_at)) {
     throw new TypeError('Legacy delivered handoff lacks authoritative delivery evidence.');
   }
-  return { ...LEGACY_HANDOFF_DEFAULTS, ...record, schema: HANDOFF_SCHEMA };
+  return {
+    ...LEGACY_HANDOFF_DEFAULTS,
+    ...record,
+    schema: HANDOFF_SCHEMA,
+    // v1 was form-only. Preserve that historical fact explicitly, but never
+    // infer it for an already-v2 row. The service quarantines this marker
+    // before invitation; downstream v1 rows may finish without rewriting the
+    // customer site namespace or fabricating a recipient binding.
+    lead_route_migration: record.lead_route_recipient_hmac_sha256
+      ? null
+      : 'legacy_v1_form_recipient_unbound',
+  };
 }
 
 export function validateExpectedBindings(value) {
@@ -1003,10 +1581,18 @@ export function validateExpectedBindings(value) {
       !UUID_PATTERN.test(record.netlify_session_id) || !STORED_SITE_NAME_PATTERN.test(record.netlify_site_name)) {
     throw new TypeError('Stored handoff record is invalid.');
   }
+  const legacyUnboundFormRoute = record.lead_route_migration === 'legacy_v1_form_recipient_unbound' &&
+    /^arc-[a-f0-9]{24}$/.test(record.netlify_site_name) && record.lead_route_mode === 'netlify_form' &&
+    record.lead_route_recipient_hmac_sha256 === null;
+  if (record.lead_route_migration !== null && record.lead_route_migration !== undefined && !legacyUnboundFormRoute) {
+    throw new TypeError('Stored handoff lead route migration marker is invalid.');
+  }
   for (const field of ['payment_evidence_sha256', 'artifact_evidence_sha256', 'artifact_manifest_sha256', 'bundle_fingerprint', 'production_content_sha256', 'customer_email_sha256', 'lead_notification_email_sha256']) {
     hex64(record[field], field);
   }
-  if (record.lead_route_recipient_hmac_sha256 !== null) hex64(record.lead_route_recipient_hmac_sha256, 'lead_route_recipient_hmac_sha256');
+  if (record.lead_route_recipient_hmac_sha256 !== null && record.lead_route_recipient_hmac_sha256 !== '') {
+    hex64(record.lead_route_recipient_hmac_sha256, 'lead_route_recipient_hmac_sha256');
+  }
   if (record.claim_token_hmac_sha256 !== null) hex64(record.claim_token_hmac_sha256, 'claim_token_hmac_sha256');
   if (record.claim_token_consumed_hmac_sha256 !== null) hex64(record.claim_token_consumed_hmac_sha256, 'claim_token_consumed_hmac_sha256');
   if (record.lead_route_receipt_sha256 !== null) hex64(record.lead_route_receipt_sha256, 'lead_route_receipt_sha256');
@@ -1019,13 +1605,16 @@ export function validateExpectedBindings(value) {
   if (record.preclaim_deploy_candidate_id !== null && record.preclaim_deploy_attempted_at === null) throw new TypeError('Preclaim deploy candidate lacks an attempt intent.');
   if (record.final_deploy_candidate_id !== null && record.final_deploy_attempted_at === null) throw new TypeError('Final deploy candidate lacks an attempt intent.');
   if (record.claim_invitation_ready_at === null) {
-    if (record.claim_token_hmac_sha256 !== null || record.claim_token_expires_at !== null || record.claim_token_used_at !== null ||
+    if (record.claim_invitation_generation !== 0 || record.claim_token_hmac_sha256 !== null || record.claim_token_expires_at !== null || record.claim_token_used_at !== null ||
         record.claim_token_consumed_hmac_sha256 !== null || record.claim_wrapper_consumed_at !== null ||
         record.lead_route_provider_message_id_sha256 !== null || record.lead_route_receipt_sha256 !== null ||
         ['INVITATION_READY', 'CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(record.state)) {
       throw new TypeError('Unissued claim token fields must be null.');
     }
   } else {
+    if (!Number.isSafeInteger(record.claim_invitation_generation) || record.claim_invitation_generation < 0 || record.claim_invitation_generation > 1_000_000) {
+      throw new TypeError('Claim invitation generation is invalid.');
+    }
     hex64(record.lead_route_provider_message_id_sha256, 'lead_route_provider_message_id_sha256');
     const readyAt = Date.parse(isoTimestamp(record.claim_invitation_ready_at, 'claim_invitation_ready_at'));
     const expiresAt = Date.parse(isoTimestamp(record.claim_token_expires_at, 'claim_token_expires_at'));
@@ -1042,8 +1631,15 @@ export function validateExpectedBindings(value) {
       throw new TypeError('Consumed claim token fields are invalid.');
     }
   }
-  if (!PREVIEW_FOLDER_PATTERN.test(record.preview_folder) || !Array.isArray(record.artifacts) || record.artifacts.length !== 2 ||
-      validateFormName(record.form_name) !== record.form_name) throw new TypeError('Stored artifact bindings are invalid.');
+  if (!PREVIEW_FOLDER_PATTERN.test(record.preview_folder) || !Array.isArray(record.artifacts) ||
+      record.artifacts.length < 2 || record.artifacts.length > 2 + MAX_ASSET_COUNT ||
+      !['netlify_form', 'not_required'].includes(record.lead_route_mode) ||
+      (record.lead_route_mode === 'netlify_form'
+        ? (validateFormName(record.form_name) !== record.form_name ||
+          (!HEX_64_PATTERN.test(record.lead_route_recipient_hmac_sha256 || '') && !legacyUnboundFormRoute))
+        : (record.form_name !== '' || record.lead_route_recipient_hmac_sha256 !== ''))) {
+    throw new TypeError('Stored artifact bindings are invalid.');
+  }
   const stateRank = HANDOFF_STATES.indexOf(record.state);
   const atLeast = (state) => stateRank >= HANDOFF_STATES.indexOf(state);
   const requireIdentifier = (field, required) => {
@@ -1058,6 +1654,11 @@ export function validateExpectedBindings(value) {
   requireIdentifier('netlify_site_id', atLeast('SITE_CREATED'));
   requireTimestamp('site_created_at', atLeast('SITE_CREATED'));
   requireIdentifier('preclaim_deploy_id', atLeast('PRECLAIM_DEPLOY_READY'));
+  for (const field of ['form_id', 'hook_id']) {
+    if (record.lead_route_mode === 'netlify_form') {
+      if (atLeast('INVITATION_READY') || record[field] !== null) identifier(record[field], field);
+    } else if (record[field] !== null) throw new TypeError(`${field} must be null for a no-form handoff.`);
+  }
   requireIdentifier('destination_account_id', atLeast('CLAIM_CALLBACK_RECEIVED'));
   requireTimestamp('claim_callback_received_at', atLeast('CLAIM_CALLBACK_RECEIVED'));
   requireTimestamp('claimed_verified_at', atLeast('CLAIMED_VERIFIED'));
@@ -1069,7 +1670,7 @@ export function validateExpectedBindings(value) {
   if (atLeast('CLAIM_WRAPPER_CONSUMED')) {
     if (!Number.isSafeInteger(record.claim_jwt_issued_at) || record.claim_jwt_issued_at < 1 ||
         record.claim_jwt_issued_at * 1000 < Date.parse(record.claim_invitation_ready_at) ||
-        record.claim_jwt_issued_at * 1000 > Date.parse(record.claim_token_used_at) + 1000) {
+        record.claim_jwt_issued_at * 1000 > Date.parse(record.claim_token_expires_at)) {
       throw new TypeError('claim_jwt_issued_at is invalid or out of order.');
     }
   } else if (record.claim_jwt_issued_at !== null) throw new TypeError('claim_jwt_issued_at must be null before claim exchange.');

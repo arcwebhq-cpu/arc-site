@@ -7,10 +7,11 @@
   },
   "scripts": {
     "build": "node scripts/build-site.mjs",
-    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/arc2-final-delivery-ack.mjs && node tests/arc2-producer-compatibility.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs"
+    "test": "node tests/source-contract.mjs && node tests/analytics-contract.mjs && node tests/intake-readiness-contract.mjs && node tests/intake-private-asset-contract.mjs && node tests/intake-arc1-bridge-contract.mjs && node tests/intake-arc1-dispatch-contract.mjs && node tests/stripe-reversal-contract.mjs && node tests/retention-control-contract.mjs && node tests/operations-audit-contract.mjs && node tests/arc2-handoff-contract.mjs && node tests/arc2-resumable-service.mjs && node tests/arc2-final-delivery-ack.mjs && node tests/arc2-producer-compatibility.mjs && node tests/showcase-contract.mjs && npm run build && node tests/build-contract.mjs && node tests/browser-contract.mjs"
   },
   "dependencies": {
-    "@netlify/blobs": "10.7.12"
+    "@netlify/blobs": "10.7.12",
+    "sharp": "0.35.3"
   },
   "overrides": {
     "image-size": "file:vendor/image-size-disabled"

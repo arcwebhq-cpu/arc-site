@@ -9,10 +9,18 @@ export default async (request, context = {}) => {
   const url = new URL(request.url);
   try {
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
-    const status = await getHandoffStatus(url.searchParams.get('handoff_id') || '', process.env, { store },
+    const status = await getHandoffStatus(url.searchParams.get('handoff_id') || '', process.env, {
+      store,
+      clock: context.clock,
+      fetch: context.fetch,
+    },
       { includePrivate: url.searchParams.get('include_private') === 'true' });
     return status ? jsonResponse(200, status) : jsonResponse(404, { error: 'handoff_not_found' });
-  } catch {
+  } catch (error) {
+    if (/ARC_STRIPE_REVERSAL_HALT/.test(error?.message || '')) return jsonResponse(409, { error: 'fulfillment_halted' });
+    if (/ARC_STRIPE_REVERSAL_(?:CONTROL_DISABLED|BINDING_REQUIRED|RECHECK_REQUIRED)/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'stripe_reversal_control_unavailable' });
+    }
     return jsonResponse(400, { error: 'invalid_handoff_id' });
   }
 };

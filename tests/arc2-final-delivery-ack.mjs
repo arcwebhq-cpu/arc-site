@@ -70,6 +70,12 @@ const secretNames = [
   'ARC_EMAIL_CLAIM_BINDING_SECRET',
   'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
   'ARC_FINAL_DELIVERY_ACK_SECRET',
+  'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+  'ARC_STRIPE_REVERSAL_BINDING_SECRET',
+  'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
+  'ARC_STRIPE_REVERSAL_RECHECK_SECRET',
+  'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
 ];
@@ -79,7 +85,9 @@ const secrets = Object.fromEntries(secretNames.map((name, index) => [
 ]));
 const env = {
   ...secrets,
-  ARC_HANDOFF_ENABLED: 'true',
+  ARC_HANDOFF_ENABLED: 'false',
+  ARC_CHECKOUT_BINDING_KEY_ID: '01',
+  ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON: '{}',
   ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   ARC_EXPECTED_PAYMENT_LINK_ID: 'plink_1ArcHandoffTest',
   ARC_EXPECTED_PRICE_ID: 'price_1ArcHandoffTest',
@@ -93,10 +101,17 @@ const env = {
   ARC_POSTCLAIM_READBACK_VERIFIED: 'true',
   ARC_DEVICE_QA_VERIFIED: 'true',
   ARC_LEAD_ROUTE_VERIFIED: 'true',
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
+  ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
+  ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
+  ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'true',
+  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-06-24.dahlia',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
+  ARC_ALLOW_TEST_MODE_EVENTS: 'true',
+  ARC_RUNTIME_ENVIRONMENT: 'sandbox',
   ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
-  SITE_NAME: 'arcsites',
+  SITE_NAME: 'arc2-sandbox',
   URL: 'https://arcweb.onl/',
   NETLIFY_TEAM_SLUG: 'arc-team',
   NETLIFY_TEAM_ACCOUNT_ID: 'account-source-123',
@@ -135,6 +150,7 @@ function makeRecord({
     customer_email_sha256: '6'.repeat(64),
     lead_notification_email_sha256: '7'.repeat(64),
     lead_route_recipient_hmac_sha256: '8'.repeat(64),
+    lead_route_mode: 'netlify_form',
     preview_folder: 'sample-roofing-a1b2c3d4',
     artifacts: [
       { path: '_headers', sha256: '9'.repeat(64), size: 10 },
@@ -480,6 +496,24 @@ assert.deepEqual(raced.map((result) => result.idempotentReplay).sort(), [false, 
 assert.equal((await readEntry(raceStore, `handoffs/${handoffId}`)).record.revision, record.revision + 1);
 assert.equal((await readIndex(raceStore, fixture.outbox.key)).status, 'DELIVERED');
 
+// Early v2 rows predate the explicit signed route-mode field. Only an exact
+// existing form name + recipient binding can be migrated to form mode; a row
+// that could also mean no-form is quarantined instead of being guessed.
+const preModeV2 = structuredClone(record);
+delete preModeV2.lead_route_mode;
+const preModeStore = new FakeStore();
+await seed(preModeStore, preModeV2, fixture.outbox);
+const migratedPreMode = await readEntry(preModeStore, `handoffs/${preModeV2.handoff_id}`);
+assert.equal(migratedPreMode.record.lead_route_mode, 'netlify_form');
+assert.doesNotThrow(() => validateExpectedBindings(migratedPreMode.record));
+const ambiguousPreMode = structuredClone(preModeV2);
+delete ambiguousPreMode.lead_route_recipient_hmac_sha256;
+const ambiguousPreModeStore = new FakeStore();
+await seed(ambiguousPreModeStore, ambiguousPreMode, fixture.outbox);
+await assert.rejects(readEntry(ambiguousPreModeStore, `handoffs/${ambiguousPreMode.handoff_id}`),
+  /lead route mode is missing and cannot be inferred safely/i,
+  'A v2 row without enough route bindings must remain quarantined.');
+
 // Existing v1 records that already reached the downstream delivery states
 // retain their original deterministic site name and are normalized on read.
 // Missing lead-recipient HMAC remains null; it is no longer needed after the
@@ -574,6 +608,19 @@ globalThis.fetch = async () => {
   throw new Error('External network calls are forbidden in delivery acknowledgement.');
 };
 try {
+  const oversized = new Request('https://arcweb.onl/internal/arc2/final-delivery-ack', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.ARC_FINAL_DELIVERY_ACK_SECRET}`, 'content-type': 'application/json' },
+    body: new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(30_001)); controller.close(); } }),
+    duplex: 'half',
+  });
+  const oversizedResponse = await deliveryAckHandler(oversized, {
+    get arc2Store() { throw new Error('Oversized delivery receipt must not touch storage.'); },
+  });
+  assert.equal(oversizedResponse.status, 413);
+  assert.deepEqual(await oversizedResponse.json(), { error: 'delivery_receipt_too_large' });
+  assert.equal(externalCalls, 0, 'Oversized delivery receipt must not perform provider access.');
+
   const request = (bearer = env.ARC_FINAL_DELIVERY_ACK_SECRET) => new Request('https://arcweb.onl/internal/arc2/final-delivery-ack', {
     method: 'POST',
     headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },

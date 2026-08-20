@@ -5,6 +5,7 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'dist');
 const intakeBuildEnabled = process.env.ARC_BUILD_INTAKE_ENABLED === 'true';
+const analyticsBuildEnabled = process.env.ARC_BUILD_ANALYTICS_ENABLED === 'true';
 const intakeBuildMarkerPath = path.join(root, 'netlify/lib/intake-build-marker.mjs');
 const publicEntries = Object.freeze([
   'index.html',
@@ -35,6 +36,18 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 for (const entry of publicEntries) {
   await cp(path.join(root, entry), path.join(output, entry), { recursive: true, errorOnExist: true });
+}
+
+if (!analyticsBuildEnabled) {
+  for (const relative of ['index.html', 'thank-you/index.html']) {
+    const file = path.join(output, relative);
+    const source = await readFile(file, 'utf8');
+    const closed = source.replace('data-analytics-build-enabled="true"', 'data-analytics-build-enabled="false"');
+    if (closed === source || !/data-analytics-build-enabled="false"/.test(closed)) {
+      throw new Error(`Analytics could not be compiled fail-closed: ${relative}`);
+    }
+    await writeFile(file, closed);
+  }
 }
 
 if (!intakeBuildEnabled) {

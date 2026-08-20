@@ -160,7 +160,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
 .mockup-big.thumb{min-height:0;aspect-ratio:1363/936;background:#050505}.work-thumb{width:100%;height:100%;object-fit:cover;object-position:top center;pointer-events:none;transition:transform .55s var(--ease)}.work-item:hover .work-thumb{transform:scale(1.02)}
 </style>
 </head>
-<body>
+<body data-analytics-build-enabled="true">
 <a class="skip-link" href="#top">Skip to main content</a>
 <div class="noise" aria-hidden="true"></div>
 <nav class="nav" aria-label="Primary navigation">
@@ -390,18 +390,14 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
             <p class="group-title" id="assetsLabel">Available assets <span class="optional">(optional)</span></p>
             <div class="choices" data-exclusive-group="assets" id="assetChoices" role="group" aria-labelledby="assetsLabel">
               <label><input type="checkbox" name="assets" value="Logo"> Logo</label><label><input type="checkbox" name="assets" value="Photos"> Project photos</label>
-              <label><input type="checkbox" name="assets" value="Reviews"> Reviews</label><label><input type="checkbox" name="assets" value="Brand guide"> Brand guide</label>
               <label><input type="checkbox" name="assets" value="Social links"> Social links</label><label><input type="checkbox" name="assets" value="None yet" data-none> None yet</label>
             </div>
-            <div class="upload-note" id="uploadNote" hidden>One file per field. Maximum 1.25 MB per file and 3 MB total. Use the asset-folder link for multiple or larger files.</div>
+            <div class="upload-note" id="uploadNote" hidden>One file per field. Maximum 1.25 MB per file and 3 MB total. Folder-link imports are unavailable until a private provider adapter is verified.</div>
             <div class="conditional-panel" id="logoUploadPanel" hidden>
               <div class="field"><label for="logoFile">Logo file</label><input id="logoFile" name="logo_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">PNG, JPG, or WEBP. Transparent PNG preferred.</p></div>
             </div>
             <div class="conditional-panel" id="photoUploadPanel" hidden>
               <div class="upload-grid"><div class="field"><label for="heroFile">Best hero photo</label><input id="heroFile" name="hero_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">Choose a wide, sharp photo that instantly shows your best work.</p></div><div class="field"><label for="supportFile">Best supporting photo</label><input id="supportFile" name="supporting_image_file" type="file" accept="image/png,image/jpeg,image/webp" data-max-bytes="1250000"><p class="hint">A team, process, location, or second project photo works well.</p></div></div>
-            </div>
-            <div class="conditional-panel" id="assetLinkPanel" hidden>
-              <div class="field"><label for="assetLink">Full asset folder link</label><input id="assetLink" name="asset_folder_link" type="url" inputmode="url" placeholder="Public Drive, Dropbox, or OneDrive folder"><p class="hint">Add 5–10 project, team, or location photos plus any brand guide. Make the link viewable by anyone with the link.</p></div>
             </div>
             <div class="conditional-panel" id="socialLinksPanel" hidden>
               <div class="field"><label for="socialLinks">Social links</label><textarea id="socialLinks" name="social_links" placeholder="Instagram, Facebook, LinkedIn, TikTok..."></textarea></div>
@@ -461,9 +457,11 @@ try{
   if(!existing)sessionStorage.setItem('arc-analytics-session',analyticsFields.analyticsSessionId.value);
 }catch(error){analyticsFields.analyticsSessionId.value=randomId()}
 window.dataLayer=window.dataLayer||[];
+const analyticsBuildEnabled=document.body.dataset.analyticsBuildEnabled==='true';
 const analyticsEndpoint='/api/analytics/event', pendingAnalyticsKey='arc-pending-preview-analytics';
 const sendAnalytics=payload=>fetch(analyticsEndpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true}).catch(()=>{});
 const track=(event,details={})=>{
+  if(!analyticsBuildEnabled)return;
   const payload={event,event_id:randomId(),session_id:analyticsFields.analyticsSessionId.value,path:location.pathname,...details};
   window.dataLayer.push({...payload,arc_session_id:payload.session_id});
   sendAnalytics(payload);
@@ -651,23 +649,20 @@ function updateCTA(){
 form.querySelectorAll('input[name="main_call_to_action"]').forEach(input=>input.addEventListener('change',updateCTA));
 form.querySelectorAll('input[name="lead_form_needed"]').forEach(input=>input.addEventListener('change',updateLeadPanel));
 
-const logoUploadPanel=document.getElementById('logoUploadPanel'), photoUploadPanel=document.getElementById('photoUploadPanel'), assetLinkPanel=document.getElementById('assetLinkPanel'), socialLinksPanel=document.getElementById('socialLinksPanel'), uploadNote=document.getElementById('uploadNote'), assetPermissionPanel=document.getElementById('assetPermissionPanel'), assetPermission=document.getElementById('assetPermission');
+const logoUploadPanel=document.getElementById('logoUploadPanel'), photoUploadPanel=document.getElementById('photoUploadPanel'), socialLinksPanel=document.getElementById('socialLinksPanel'), uploadNote=document.getElementById('uploadNote'), assetPermissionPanel=document.getElementById('assetPermissionPanel'), assetPermission=document.getElementById('assetPermission');
 function updateAssetPanels(){
   const selected=[...form.querySelectorAll('input[name="assets"]:checked')].map(el=>el.value);
-  const hasRealAssets=selected.some(value=>value!=='None yet');
   const hasLogo=selected.includes('Logo'),hasPhotos=selected.includes('Photos'),hasSocial=selected.includes('Social links');
   setPanel(logoUploadPanel,hasLogo);
   setPanel(photoUploadPanel,hasPhotos);
-  setPanel(assetLinkPanel,hasRealAssets);
   setPanel(socialLinksPanel,hasSocial);
-  setPanel(assetPermissionPanel,hasRealAssets);
-  assetPermission.required=hasRealAssets;
+  setPanel(assetPermissionPanel,hasLogo||hasPhotos);
+  assetPermission.required=hasLogo||hasPhotos;
   if(!hasLogo)document.getElementById('logoFile').value='';
   if(!hasPhotos){document.getElementById('heroFile').value='';document.getElementById('supportFile').value=''}
-  if(!hasRealAssets)document.getElementById('assetLink').value='';
   if(!hasSocial)document.getElementById('socialLinks').value='';
-  if(!hasRealAssets){assetPermission.checked=false;clearFieldError(assetPermission)}
-  uploadNote.hidden=!selected.some(value=>value==='Logo'||value==='Photos'||value==='Brand guide'||value==='Reviews');
+  if(!hasLogo&&!hasPhotos){assetPermission.checked=false;clearFieldError(assetPermission)}
+  uploadNote.hidden=!selected.some(value=>value==='Logo'||value==='Photos');
 }
 const proofDetailsPanel=document.getElementById('proofDetailsPanel'), proofDetails=document.getElementById('proofDetails');
 function updateProofPanel(){
@@ -688,16 +683,16 @@ fileInputs.forEach(input=>input.addEventListener('change',()=>{
   const file=input.files[0];const maxBytes=Number(input.dataset.maxBytes||uploadMaxFileBytes);
   clearFieldError(input);
   if(file&&!isAllowedRaster(file)){input.value='';markFieldError(input);err.textContent=`${file.name} is not an accepted image. Upload a PNG, JPG, or WEBP file.`;return}
-  if(file&&file.size>maxBytes){input.value='';markFieldError(input);err.textContent=`${file.name} is larger than 1.25 MB. Use the asset-folder link instead.`;return}
+  if(file&&file.size>maxBytes){input.value='';markFieldError(input);err.textContent=`${file.name} is larger than 1.25 MB. Choose a smaller image.`;return}
   const total=fileInputs.reduce((sum,el)=>sum+[...el.files].reduce((n,f)=>n+f.size,0),0);
-  if(total>uploadMaxTotalBytes){input.value='';markFieldError(input);err.textContent='Uploads exceed the 3 MB total. Use the asset-folder link instead.'}else err.textContent='';
+  if(total>uploadMaxTotalBytes){input.value='';markFieldError(input);err.textContent='Uploads exceed the 3 MB total. Remove an image or choose smaller files.'}else err.textContent='';
 }));
 
 const reviewLabels={
   name:'Name',email:'Email',business:'Business',website:'Current website',industry:'Industry',city:'Service area',public_phone:'Public phone',public_email:'Public email',
   main_services:'Services',highest_profit_service:'Priority service',target_customer:'Target customer',main_offer:'Offer / pricing',goals:'Goals',main_call_to_action:'Main CTA',cta_destination:'CTA destination',lead_form_needed:'Lead form',lead_notification_email:'Lead email',lead_form_fields:'Lead fields',
   primary_style:'Primary style',colors:'Colors',brand_tone:'Brand tone',competitor_sites:'Reference websites',reference_site_likes:'Reference likes',design_dislikes:'Avoid',sections:'Sections',features:'Features',faqs_and_objections:'FAQs / objections',
-  assets:'Assets',asset_permission:'Asset permission',logo_file:'Logo file',hero_image_file:'Hero photo',supporting_image_file:'Supporting photo',asset_folder_link:'Asset folder',social_links:'Social links',
+  assets:'Assets',asset_permission:'Asset permission',logo_file:'Logo file',hero_image_file:'Hero photo',supporting_image_file:'Supporting photo',social_links:'Social links',
   why_choose_you:'Strongest difference',business_story:'Business story',proof:'Proof',proof_details:'Proof details',domain_status:'Domain',public_address:'Address',business_hours:'Hours',final_notes:'Final notes',budget_confirmed:'Price confirmation',terms_accepted:'Terms acceptance'
 };
 function fieldValues(step){
@@ -838,7 +833,7 @@ function validateUploads(){
     }
     const maxBytes=Number(input.dataset.maxBytes||uploadMaxFileBytes);
     if(file.size>maxBytes){
-      err.textContent=`${file.name} is larger than 1.25 MB. Use the asset-folder link instead.`;
+      err.textContent=`${file.name} is larger than 1.25 MB. Choose a smaller image.`;
       markFieldError(input);
       showStep(steps.indexOf(input.closest('.form-step')));
       openAncestorDetails(input);
@@ -848,7 +843,7 @@ function validateUploads(){
     total+=file.size;
   }
   if(total>uploadMaxTotalBytes){
-    err.textContent='Uploads exceed the 3 MB total. Use the asset-folder link instead.';
+    err.textContent='Uploads exceed the 3 MB total. Remove an image or choose smaller files.';
     showStep(steps.findIndex(step=>step.contains(document.getElementById('assetChoices'))));
     openAncestorDetails(document.getElementById('assetChoices'));
     return false;
@@ -877,7 +872,7 @@ form.addEventListener('submit',async event=>{
     const value=await response.json();
     const accepted=response.status===201&&value&&Object.keys(value).sort().join(',')==='accepted,schema,submission_id'&&value.schema==='arc-intake-submission-accepted-v1'&&value.accepted===true&&/^[0-9a-f-]{36}$/i.test(value.submission_id);
     if(!accepted)throw new Error(response.status===503?'INTAKE_DISABLED':'INTAKE_REJECTED');
-    try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
+    if(analyticsBuildEnabled)try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
       event:'arc_preview_request',event_id:randomId(),
       session_id:analyticsFields.analyticsSessionId.value,path:'/thank-you/',expires_at:Date.now()+30*60*1000
     }))}catch(error){}

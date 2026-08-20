@@ -13,6 +13,7 @@ async function shouldDelete(store, key, metadata, now) {
 }
 
 export default async () => {
+  if (process.env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED !== 'true') return;
   const store = getStore({ name: ANALYTICS_STORE, consistency: 'strong' });
   const { blobs } = await store.list({ prefix: 'events/' });
   const now = new Date();
@@ -22,8 +23,4 @@ export default async () => {
     const deletions = await Promise.all(batch.map(({ key }, itemIndex) => shouldDelete(store, key, metadata[itemIndex]?.metadata, now)));
     await Promise.all(batch.map(({ key }, itemIndex) => deletions[itemIndex] ? store.delete(key) : null));
   }
-};
-
-export const config = {
-  schedule: '17 4 * * *',
 };

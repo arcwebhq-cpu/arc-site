@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import {
+  ARC2_PRECLAIM_HEADERS_FILE,
   CLAIM_TOKEN_TTL_SECONDS,
   FINAL_DELIVERY_PROVIDER_EVENT_ID_PREFIX,
   FINAL_DELIVERY_PROVIDER_MESSAGE_ID_PREFIX,
@@ -14,8 +15,8 @@ import {
   createInitialRecord,
   createOutboxClaim,
   createStoredZip,
+  deployArtifactsForPhase,
   deployZip,
-  downloadVerifiedArtifacts,
   ensureEmailHook,
   findNetlifyForm,
   handoffIdFromKey,
@@ -26,10 +27,11 @@ import {
   normalizeClaimWebhook,
   normalizeProductionUrl,
   normalizeStartPayload,
+  netlifyRequest,
   pollDeployReady,
   publicStatus,
+  readNetlifyJsonBounded,
   reviseRecord,
-  resolveHandoffEnvironment,
   safeEqual,
   sha256Hex,
   siteIndexKey,
@@ -46,8 +48,11 @@ import {
   replaceEntry,
   replaceIndex,
 } from './arc2-handoff-store.mjs';
+import {
+  STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+  assertHandoffFulfillmentAllowed,
+} from './stripe-reversal-core.mjs';
 
-const NETLIFY_API_ORIGIN = 'https://api.netlify.com/api/v1';
 const LEAD_ROUTE_RECEIPT_VERSION = 'arc2-lead-route-inbox-receipt-v1';
 const LEAD_ROUTE_RECEIPT_SCOPE = 'authoritative-lead-route-inbox-receipt';
 const LEAD_ROUTE_RECEIPT_PREFIX = 'arc2-lead-route-inbox-receipt-signature-v1\n';
@@ -56,7 +61,8 @@ const PRODUCER_LEAD_ROUTE_SCOPE = 'arc-controlled-netlify-staging';
 const PRODUCER_LEAD_ROUTE_PREFIX = 'arc-lead-route-evidence-signature-v1\n';
 const CLAIM_BEARER_DERIVATION_PREFIX = 'arc2-claim-bearer-derivation-v1\n';
 const CLAIM_BEARER_STORAGE_PREFIX = 'arc2-claim-bearer-at-rest-v1\n';
-const INVITATION_READY_OUTBOX_VERSION = 'arc2-claim-invitation-ready-outbox-v1';
+const INVITATION_READY_OUTBOX_VERSION = 'arc2-claim-invitation-ready-outbox-v2';
+const INVITATION_CURRENT_VERSION = 'arc2-claim-invitation-current-v1';
 const RECEIPT_FRESHNESS_MS = 10 * 60_000;
 const PRODUCER_SOURCE_FRESHNESS_MS = 30 * 60_000;
 const PRODUCER_EXTERNAL_ID_PATTERN = /^(?:[a-f0-9]{24}|[a-f0-9]{40}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5a-f][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/;
@@ -98,7 +104,23 @@ const PRE_INVITATION_STATES = new Set([
   'LEAD_ROUTE_VERIFIED',
 ]);
 
-const waitForNetlify = (attempt) => new Promise((resolve) => setTimeout(resolve, Math.min(250 * (2 ** attempt), 3000)));
+const PROVIDER_STAGE_BUDGET_MS = 8_000;
+
+function providerStageDeadline(adapters) {
+  if (Number.isFinite(adapters.providerStageDeadlineMs)) return adapters.providerStageDeadlineMs;
+  return Date.now() + PROVIDER_STAGE_BUDGET_MS;
+}
+
+function providerStageWait(adapters, deadlineMs) {
+  const custom = adapters.wait;
+  return async (attempt) => {
+    const nowMs = Date.now();
+    const delayMs = Math.min(250 * (2 ** attempt), 1000);
+    if (!Number.isFinite(nowMs) || nowMs + delayMs > deadlineMs) throw new Error('ARC2_PROVIDER_STAGE_DEADLINE');
+    if (custom) return custom(attempt);
+    return new Promise((resolve) => setTimeout(resolve, delayMs));
+  };
+}
 
 function exactReplay(record, normalized) {
   return record.payment_evidence_sha256 === normalized.payment.digest &&
@@ -107,7 +129,7 @@ function exactReplay(record, normalized) {
     record.lead_notification_email_sha256 === normalized.leadEmailHash &&
     (record.lead_route_recipient_hmac_sha256 === null ||
       record.lead_route_recipient_hmac_sha256 === normalized.leadRouteRecipientHmacSha256) &&
-    record.form_name === normalized.formName;
+    record.form_name === normalized.formName && record.lead_route_mode === normalized.artifact.value.lead_route_mode;
 }
 
 function rejectQuarantinedLegacyNamespace(record) {
@@ -128,6 +150,62 @@ function checkoutSessionIndexValue(handoffId, normalized) {
     payment_evidence_sha256: normalized.payment.digest,
     artifact_evidence_sha256: normalized.artifact.digest,
     bundle_fingerprint: normalized.artifact.value.bundle_fingerprint,
+  };
+}
+
+function checkoutReferenceIndexKey(paymentEvidence, env) {
+  const digest = hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+    `checkout-reference-index-v1\n${paymentEvidence.client_reference_id_sha256}`);
+  return `checkout-reference-index/${digest}`;
+}
+
+function checkoutReferenceIndexValue(handoffId, normalized) {
+  return {
+    schema: 'arc2-checkout-reference-index-v1',
+    client_reference_id_sha256: normalized.payment.value.client_reference_id_sha256,
+    winning_checkout_session_id: normalized.payment.value.checkout_session_id,
+    winning_payment_link_id_hmac_sha256: hmacHex(normalized.payment.selectedCheckoutBindingSecret,
+      `arc2-payment-link-review-id-v1\n${normalized.payment.stripeMode}\n${normalized.payment.value.payment_link_id}`),
+    handoff_id: handoffId,
+    preview_source_commit_sha: normalized.payment.value.preview_source_commit_sha,
+    payment_evidence_sha256: normalized.payment.digest,
+    artifact_evidence_sha256: normalized.artifact.digest,
+  };
+}
+
+function duplicateCheckoutSessionIdHmac(normalized, env) {
+  return hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+    `duplicate-payment-session-id-v1\n${normalized.payment.value.checkout_session_id}`);
+}
+
+export function duplicatePaymentReviewKey(normalized, env) {
+  const duplicateCheckoutSessionIdHmacSha256 = duplicateCheckoutSessionIdHmac(normalized, env);
+  const digest = hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+    `duplicate-payment-review-key-v1\n${normalized.payment.value.client_reference_id_sha256}\n${duplicateCheckoutSessionIdHmacSha256}`);
+  return `duplicate-payment-review/${digest}`;
+}
+
+export function duplicatePaymentReviewValue(winner, normalized, env) {
+  const unsigned = {
+    schema: 'arc2-duplicate-payment-review-v1',
+    status: 'CRITICAL_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED',
+    automatic_refund_requested: false,
+    checkout_reference_sha256: normalized.payment.value.client_reference_id_sha256,
+    winning_checkout_session_id_hmac_sha256: hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+      `duplicate-payment-session-id-v1\n${winner.winning_checkout_session_id}`),
+    duplicate_checkout_session_id_hmac_sha256: duplicateCheckoutSessionIdHmac(normalized, env),
+    winning_payment_link_id_hmac_sha256: winner.winning_payment_link_id_hmac_sha256,
+    duplicate_payment_link_id_hmac_sha256: hmacHex(normalized.payment.selectedCheckoutBindingSecret,
+      `arc2-payment-link-review-id-v1\n${normalized.payment.stripeMode}\n${normalized.payment.value.payment_link_id}`),
+    winning_handoff_id: winner.handoff_id,
+    winning_payment_evidence_sha256: winner.payment_evidence_sha256,
+    winning_artifact_evidence_sha256: winner.artifact_evidence_sha256,
+    duplicate_payment_evidence_sha256: normalized.payment.digest,
+  };
+  return {
+    ...unsigned,
+    review_hmac_sha256: hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+      `arc2-duplicate-payment-review-signature-v1\n${canonicalJson(unsigned)}`),
   };
 }
 
@@ -168,21 +246,41 @@ async function ensureImmutableIndex(store, key, value) {
   }
 }
 
-async function netlifyRequest(path, options, env, fetchImpl) {
-  const resolved = resolveHandoffEnvironment(env);
-  if (resolved.conflicts.length) throw new TypeError('Handoff environment aliases conflict.');
-  env = resolved.environment;
-  const response = await fetchImpl(`${NETLIFY_API_ORIGIN}${path}`, {
-    ...options,
-    headers: { Accept: 'application/json', Authorization: `Bearer ${env.NETLIFY_ADMIN_PAT}`, ...(options.headers || {}) },
-    redirect: 'error',
-  });
-  if (!response.ok) throw new Error(`ARC2_NETLIFY_HTTP_${response.status}`);
-  return response;
+function remainingStageTimeout(deadlineMs) {
+  if (!Number.isFinite(deadlineMs)) return undefined;
+  const remainingMs = Math.floor(deadlineMs - Date.now());
+  if (remainingMs <= 0) throw new Error('ARC2_PROVIDER_STAGE_DEADLINE');
+  return Math.min(10_000, remainingMs);
 }
 
-async function netlifyJson(path, env, fetchImpl) {
-  return (await netlifyRequest(path, { method: 'GET' }, env, fetchImpl)).json();
+async function netlifyJson(path, env, fetchImpl, deadlineMs) {
+  const timeoutMs = remainingStageTimeout(deadlineMs);
+  const response = await netlifyRequest(path, { method: 'GET' }, env, fetchImpl, timeoutMs);
+  const maximumBytes = /\/hooks(?:\?|$)|\/deploys(?:\?|$)/.test(path) ? 1_000_000 : 256_000;
+  return readNetlifyJsonBounded(response, maximumBytes, `Netlify ${path} response`);
+}
+
+async function assertProviderMutationAllowed(record, env, adapters, operation) {
+  if (typeof adapters.beforeProviderMutation === 'function') {
+    await adapters.beforeProviderMutation(operation, record);
+  }
+  const clock = adapters.clock || (() => new Date());
+  await assertHandoffFulfillmentAllowed(adapters.store, record.handoff_id, env, { now: clock() });
+}
+
+async function clearRetryableProviderIntent(adapters, key, entry, attemptedField, attemptedValue, completedField, clock) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (entry.record[completedField] || entry.record[attemptedField] === null) return entry;
+    if (entry.record[attemptedField] !== attemptedValue) throw new Error('ARC2_PROVIDER_INTENT_CONTENTION');
+    try {
+      return await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { [attemptedField]: null }, clock()));
+    } catch (error) {
+      if (error?.message !== 'ARC2_STATE_CONTENTION' || attempt === 2) throw error;
+      entry = await readEntry(adapters.store, key);
+      if (!entry) throw new Error('ARC2_PROVIDER_INTENT_CONTENTION');
+    }
+  }
+  throw new Error('ARC2_PROVIDER_INTENT_CONTENTION');
 }
 
 function validateSiteIntent(site, record, env, allowDestination = false) {
@@ -197,25 +295,29 @@ function validateSiteIntent(site, record, env, allowDestination = false) {
   return site;
 }
 
-async function recoverSiteByIntent(record, env, fetchImpl) {
+async function recoverSiteByIntent(record, env, fetchImpl, deadlineMs) {
   const query = new URLSearchParams({ name: record.netlify_site_name, filter: 'owner' });
-  const sites = await netlifyJson(`/sites?${query}`, env, fetchImpl);
+  const sites = await netlifyJson(`/sites?${query}`, env, fetchImpl, deadlineMs);
   const matches = (Array.isArray(sites) ? sites : []).filter((site) => site?.name === record.netlify_site_name);
   if (matches.length > 1) throw new Error('ARC2_DUPLICATE_DETERMINISTIC_SITE');
   if (matches.length === 0) return null;
-  const site = await netlifyJson(`/sites/${encodeURIComponent(identifier(matches[0].id, 'Netlify site id'))}`, env, fetchImpl);
+  const site = await netlifyJson(`/sites/${encodeURIComponent(identifier(matches[0].id, 'Netlify site id'))}`, env, fetchImpl, deadlineMs);
   return validateSiteIntent(site, record, env);
 }
 
-async function createOrRecoverSite(record, env, fetchImpl, wait) {
-  const existing = await recoverSiteByIntent(record, env, fetchImpl);
+async function createOrRecoverSite(record, env, adapters) {
+  const fetchImpl = adapters.fetch || fetch;
+  const deadlineMs = providerStageDeadline(adapters);
+  const wait = providerStageWait(adapters, deadlineMs);
+  const existing = await recoverSiteByIntent(record, env, fetchImpl, deadlineMs);
   if (existing) return existing;
+  await assertProviderMutationAllowed(record, env, adapters, 'create-site');
   try {
-    return await createClaimableSite(record, env, fetchImpl);
+    return await createClaimableSite(record, env, fetchImpl, remainingStageTimeout(deadlineMs));
   } catch (cause) {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await wait(attempt);
-      const recovered = await recoverSiteByIntent(record, env, fetchImpl);
+      const recovered = await recoverSiteByIntent(record, env, fetchImpl, deadlineMs);
       if (recovered) return recovered;
     }
     throw new Error('ARC2_SITE_CREATE_AMBIGUOUS', { cause });
@@ -226,10 +328,10 @@ function deployTitle(record, phase) {
   return `ARC ${phase} ${record.handoff_id.slice(0, 16)} ${record.bundle_fingerprint.slice(0, 12)}`;
 }
 
-async function recoverDeploy(record, phase, env, fetchImpl) {
+async function recoverDeploy(record, phase, env, fetchImpl, deadlineMs) {
   const candidateId = record[`${phase}_deploy_candidate_id`];
   if (candidateId) return { id: identifier(candidateId, 'Netlify deploy candidate id'), site_id: record.netlify_site_id };
-  const deploys = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys?per_page=100`, env, fetchImpl);
+  const deploys = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys?per_page=100`, env, fetchImpl, deadlineMs);
   const title = deployTitle(record, phase);
   const matches = (Array.isArray(deploys) ? deploys : []).filter((deploy) => deploy?.site_id === record.netlify_site_id && deploy?.title === title);
   if (matches.length > 1) throw new Error(`ARC2_DUPLICATE_${phase.toUpperCase()}_DEPLOY`);
@@ -238,44 +340,81 @@ async function recoverDeploy(record, phase, env, fetchImpl) {
   return matches[0];
 }
 
-async function ensurePublished(record, deployId, env, fetchImpl) {
-  let site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
+async function ensurePublished(record, deployId, env, adapters, deadlineMs) {
+  const fetchImpl = adapters.fetch || fetch;
+  let site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
   if (site?.published_deploy?.id === deployId) return;
+  await assertProviderMutationAllowed(record, env, adapters, 'restore-deploy');
   try {
-    await netlifyRequest(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}/restore`, { method: 'POST' }, env, fetchImpl);
+    const response = await netlifyRequest(
+      `/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}/restore`,
+      { method: 'POST' },
+      env,
+      fetchImpl,
+      remainingStageTimeout(deadlineMs),
+    );
+    // Consume even an empty success body so netlifyRequest can release its
+    // bounded response timer. Ignoring the Response would leave that timer
+    // armed until it aborted after the caller had already moved on.
+    await response.arrayBuffer();
   } catch (cause) {
-    site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
+    site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
     if (site?.published_deploy?.id !== deployId) throw new Error('ARC2_DEPLOY_RESTORE_AMBIGUOUS', { cause });
     return;
   }
-  site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
+  site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
   if (site?.published_deploy?.id !== deployId) throw new Error('ARC2_DEPLOY_RESTORE_UNVERIFIED');
 }
 
 async function ensureDeploy(entry, key, artifacts, phase, env, adapters) {
   const fetchImpl = adapters.fetch || fetch;
-  const wait = adapters.wait || waitForNetlify;
+  const deadlineMs = providerStageDeadline(adapters);
+  const wait = providerStageWait(adapters, deadlineMs);
   const clock = adapters.clock || (() => new Date());
   const attemptedField = `${phase}_deploy_attempted_at`;
   const candidateField = `${phase}_deploy_candidate_id`;
-  let candidate = await recoverDeploy(entry.record, phase, env, fetchImpl);
+  let candidate = await recoverDeploy(entry.record, phase, env, fetchImpl, deadlineMs);
   if (!candidate && entry.record[attemptedField]) {
     for (let attempt = 0; attempt < 5 && !candidate; attempt += 1) {
       await wait(attempt);
-      candidate = await recoverDeploy(entry.record, phase, env, fetchImpl);
+      candidate = await recoverDeploy(entry.record, phase, env, fetchImpl, deadlineMs);
     }
   }
   if (!candidate) {
     if (entry.record[attemptedField]) throw new Error(`ARC2_${phase.toUpperCase()}_DEPLOY_AMBIGUOUS`);
-    entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { [attemptedField]: clock().toISOString() }, clock()));
-    const zip = createStoredZip(artifacts);
+    await assertProviderMutationAllowed(entry.record, env, adapters, `preflight-create-${phase}-deploy`);
+    const attemptedValue = clock().toISOString();
+    entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { [attemptedField]: attemptedValue }, clock()));
+    const zip = createStoredZip(deployArtifactsForPhase(artifacts, phase));
     try {
-      candidate = await deployZip(entry.record.netlify_site_id, zip, deployTitle(entry.record, phase), env, fetchImpl);
+      await assertProviderMutationAllowed(entry.record, env, adapters, `create-${phase}-deploy`);
+    } catch (error) {
+      await clearRetryableProviderIntent(adapters, key, entry, attemptedField, attemptedValue, candidateField, clock);
+      throw error;
+    }
+    let providerMutationEntered = false;
+    const mutationFetch = (...args) => {
+      providerMutationEntered = true;
+      return fetchImpl(...args);
+    };
+    try {
+      candidate = await deployZip(
+        entry.record.netlify_site_id,
+        zip,
+        deployTitle(entry.record, phase),
+        env,
+        mutationFetch,
+        remainingStageTimeout(deadlineMs),
+      );
       entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { [candidateField]: candidate.id }, clock()));
     } catch (cause) {
+      if (!providerMutationEntered) {
+        await clearRetryableProviderIntent(adapters, key, entry, attemptedField, attemptedValue, candidateField, clock);
+        throw cause;
+      }
       for (let attempt = 0; attempt < 5 && !candidate; attempt += 1) {
         await wait(attempt);
-        candidate = await recoverDeploy(entry.record, phase, env, fetchImpl);
+        candidate = await recoverDeploy(entry.record, phase, env, fetchImpl, deadlineMs);
       }
       if (!candidate) throw new Error(`ARC2_${phase.toUpperCase()}_DEPLOY_AMBIGUOUS`, { cause });
     }
@@ -285,13 +424,17 @@ async function ensureDeploy(entry, key, artifacts, phase, env, adapters) {
   } else if (entry.record[candidateField] !== candidate.id) {
     throw new Error(`ARC2_${phase.toUpperCase()}_DEPLOY_CANDIDATE_CONFLICT`);
   }
-  const ready = await pollDeployReady(entry.record.netlify_site_id, candidate.id, env, fetchImpl, { wait });
-  await ensurePublished(entry.record, ready.id, env, fetchImpl);
+  const ready = await pollDeployReady(entry.record.netlify_site_id, candidate.id, env, fetchImpl, {
+    wait,
+    deadlineMs,
+    clock: adapters.clock,
+  });
+  await ensurePublished(entry.record, ready.id, env, adapters, deadlineMs);
   return { entry, ready };
 }
 
-async function recoverEmailHook(siteId, formId, leadEmail, env, fetchImpl) {
-  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(siteId)}`, env, fetchImpl);
+async function recoverEmailHook(siteId, formId, leadEmail, env, fetchImpl, deadlineMs) {
+  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(siteId)}`, env, fetchImpl, deadlineMs);
   const forForm = (Array.isArray(hooks) ? hooks : []).filter((hook) => hook?.site_id === siteId && hook?.form_id === formId &&
     hook?.type === 'email' && hook?.event === 'submission_created' && hook?.disabled !== true);
   if (forForm.some((hook) => String(hook.data?.email || '').trim().toLowerCase() !== leadEmail)) throw new Error('ARC2_EMAIL_HOOK_CONFLICT');
@@ -301,25 +444,43 @@ async function recoverEmailHook(siteId, formId, leadEmail, env, fetchImpl) {
 
 async function ensureLeadHook(entry, key, leadEmail, env, adapters) {
   const fetchImpl = adapters.fetch || fetch;
-  const wait = adapters.wait || waitForNetlify;
+  const deadlineMs = providerStageDeadline(adapters);
+  const wait = providerStageWait(adapters, deadlineMs);
   const clock = adapters.clock || (() => new Date());
-  const form = await findNetlifyForm(entry.record.netlify_site_id, entry.record.form_name, env, fetchImpl, { wait });
-  let hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl);
+  const form = await findNetlifyForm(entry.record.netlify_site_id, entry.record.form_name, env, fetchImpl, {
+    wait,
+    deadlineMs,
+    clock: adapters.clock,
+  });
+  let hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl, deadlineMs);
   if (!hook && entry.record.email_hook_attempted_at) {
     for (let attempt = 0; attempt < 5 && !hook; attempt += 1) {
       await wait(attempt);
-      hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl);
+      hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl, deadlineMs);
     }
   }
   if (!hook) {
     if (entry.record.email_hook_attempted_at) throw new Error('ARC2_EMAIL_HOOK_CREATE_AMBIGUOUS');
-    entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { email_hook_attempted_at: clock().toISOString() }, clock()));
+    await assertProviderMutationAllowed(entry.record, env, adapters, 'preflight-create-email-hook');
+    const attemptedValue = clock().toISOString();
+    entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { email_hook_attempted_at: attemptedValue }, clock()));
+    let providerMutationEntered = false;
     try {
-      hook = await ensureEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl);
+      hook = await ensureEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl, {
+        deadlineMs,
+        beforeMutation: async () => {
+          await assertProviderMutationAllowed(entry.record, env, adapters, 'create-email-hook');
+        },
+        onMutationFetch: () => { providerMutationEntered = true; },
+      });
     } catch (cause) {
+      if (!providerMutationEntered) {
+        await clearRetryableProviderIntent(adapters, key, entry, 'email_hook_attempted_at', attemptedValue, 'hook_id', clock);
+        throw cause;
+      }
       for (let attempt = 0; attempt < 5 && !hook; attempt += 1) {
         await wait(attempt);
-        hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl);
+        hook = await recoverEmailHook(entry.record.netlify_site_id, form.id, leadEmail, env, fetchImpl, deadlineMs);
       }
       if (!hook) throw new Error('ARC2_EMAIL_HOOK_CREATE_AMBIGUOUS', { cause });
     }
@@ -334,22 +495,45 @@ async function ensureLeadHook(entry, key, leadEmail, env, adapters) {
 export async function startHandoff(input, env, adapters = {}) {
   const clock = adapters.clock || (() => new Date());
   const fetchImpl = adapters.fetch || fetch;
-  const wait = adapters.wait || waitForNetlify;
   let normalized = normalizeStartPayload(input, env, clock(), { enforceFreshness: false });
   normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
   const key = handoffKey(normalized.payment.value, env.ARC_HANDOFF_STATE_SECRET);
   const handoffId = handoffIdFromKey(key);
   let entry = await readEntry(adapters.store, key);
+  const checkoutIndexKey = checkoutSessionIndexKey(normalized.payment.value, env);
+  const checkoutIndexValue = checkoutSessionIndexValue(handoffId, normalized);
+  const referenceIndexKey = checkoutReferenceIndexKey(normalized.payment.value, env);
+  const referenceIndexValue = checkoutReferenceIndexValue(handoffId, normalized);
+  const checkoutReservation = await readIndex(adapters.store, checkoutIndexKey);
+  const referenceReservation = await readIndex(adapters.store, referenceIndexKey);
   const existedAtStart = Boolean(entry);
   if (entry) rejectQuarantinedLegacyNamespace(entry.record);
   if (entry && !exactReplay(entry.record, normalized)) throw new Error('ARC2_IDEMPOTENCY_CONFLICT');
-  // Old signed evidence may resume only the exact immutable handoff it already
-  // created. A brand-new handoff still requires fresh artifact evidence.
-  if (!entry) normalized = normalizeStartPayload(input, env, clock());
+  if (checkoutReservation && canonicalJson(checkoutReservation) !== canonicalJson(checkoutIndexValue)) {
+    throw new Error('ARC2_INDEX_CONFLICT');
+  }
+  if (referenceReservation && canonicalJson(referenceReservation) !== canonicalJson(referenceIndexValue)) {
+    await ensureImmutableIndex(adapters.store, duplicatePaymentReviewKey(normalized, env),
+      duplicatePaymentReviewValue(referenceReservation, normalized, env));
+    throw new Error('ARC2_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED');
+  }
+  // Old signed evidence may resume an exact handoff row or an exact immutable
+  // checkout reservation left by a crash between index reservation and row
+  // creation. A truly brand-new handoff still requires fresh evidence.
+  if (!entry && !checkoutReservation && !referenceReservation) normalized = normalizeStartPayload(input, env, clock());
   // Reserve one immutable handoff per authenticated Checkout Session before
   // any Netlify write. The key is an HMAC, and the value stores only digests.
-  await ensureImmutableIndex(adapters.store, checkoutSessionIndexKey(normalized.payment.value, env),
-    checkoutSessionIndexValue(handoffId, normalized));
+  try {
+    await ensureImmutableIndex(adapters.store, referenceIndexKey, referenceIndexValue);
+  } catch (error) {
+    if (error.message !== 'ARC2_INDEX_CONFLICT') throw error;
+    const winner = await readIndex(adapters.store, referenceIndexKey);
+    if (!winner || canonicalJson(winner) === canonicalJson(referenceIndexValue)) throw error;
+    await ensureImmutableIndex(adapters.store, duplicatePaymentReviewKey(normalized, env),
+      duplicatePaymentReviewValue(winner, normalized, env));
+    throw new Error('ARC2_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED');
+  }
+  await ensureImmutableIndex(adapters.store, checkoutIndexKey, checkoutIndexValue);
   if (!entry) {
     const initial = createInitialRecord(normalized, env, key, clock(), { uuid: adapters.uuid });
     entry = await createEntry(adapters.store, key, initial.record);
@@ -363,31 +547,92 @@ export async function startHandoff(input, env, adapters = {}) {
       lead_route_recipient_hmac_sha256: normalized.leadRouteRecipientHmacSha256,
     }, clock()));
   }
+  let reversalControlReady = true;
+  if (entry.record.state !== 'DELIVERED') {
+    // When the reversal control is required, the first invocation may reserve
+    // the handoff and stop here until the verified Checkout Session ->
+    // PaymentIntent binding is registered. No provider mutation happens first.
+    try {
+      await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, {
+        checkoutSessionId: normalized.payment.value.checkout_session_id,
+        now: clock(),
+      });
+    } catch (error) {
+      if (/^ARC_STRIPE_REVERSAL_(?:BINDING|RECHECK)_REQUIRED$/.test(error?.message || '')) {
+        reversalControlReady = false;
+      } else {
+        throw error;
+      }
+    }
+  }
+  if (!reversalControlReady) {
+    return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady };
+  }
   if (entry.record.state === 'PAYMENT_VERIFIED') entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'SITE_INTENT', {}, clock()));
   if (entry.record.state === 'SITE_INTENT') {
-    const site = await createOrRecoverSite(entry.record, env, fetchImpl, wait);
+    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+    const site = await createOrRecoverSite(entry.record, env, adapters);
     await ensureImmutableIndex(adapters.store, siteIndexKey(site.id), {
       schema: 'arc2-site-index-v1', handoff_id: handoffId, netlify_site_id: site.id, netlify_session_id: entry.record.netlify_session_id,
     });
     entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'SITE_CREATED', {
       netlify_site_id: site.id, site_created_at: clock().toISOString(),
     }, clock()));
+    return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady };
   }
   if (entry.record.state === 'SITE_CREATED') {
+    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
     const deployed = await ensureDeploy(entry, key, normalized.deployArtifacts, 'preclaim', env, adapters);
     entry = await replaceEntry(adapters.store, key, deployed.entry, transitionRecord(deployed.entry.record, 'PRECLAIM_DEPLOY_READY', {
       preclaim_deploy_id: deployed.ready.id,
     }, clock()));
+    return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady };
   }
   if (entry.record.state === 'PRECLAIM_DEPLOY_READY') {
-    if (!entry.record.form_id || !entry.record.hook_id) entry = await ensureLeadHook(entry, key, normalized.leadEmail, env, adapters);
+    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+    const deadlineMs = providerStageDeadline(adapters);
+    const stageAdapters = { ...adapters, providerStageDeadlineMs: deadlineMs };
+    if (entry.record.lead_route_mode === 'netlify_form' && (!entry.record.form_id || !entry.record.hook_id)) {
+      entry = await ensureLeadHook(entry, key, normalized.leadEmail, env, stageAdapters);
+    }
     await verifyNetlifyHandoff(entry.record, {
-      accountId: env.NETLIFY_TEAM_ACCOUNT_ID, artifacts: entry.record.artifacts, deployId: entry.record.preclaim_deploy_id,
+      accountId: env.NETLIFY_TEAM_ACCOUNT_ID,
+      artifacts: deployArtifactsForPhase(normalized.deployArtifacts, 'preclaim').map(({ path, bytes }) => ({
+        path, size: bytes.length, sha256: sha256Hex(bytes),
+      })),
+      phase: 'preclaim',
+      deployId: entry.record.preclaim_deploy_id,
       formId: entry.record.form_id, formName: entry.record.form_name, hookId: entry.record.hook_id,
       leadEmailSha256: entry.record.lead_notification_email_sha256,
-    }, env, fetchImpl);
+    }, env, fetchImpl, { deadlineMs });
+    if (entry.record.lead_route_mode === 'not_required') {
+      const readyAt = clock();
+      const expiresAt = new Date(readyAt.getTime() + CLAIM_TOKEN_TTL_SECONDS * 1000);
+      const draft = transitionRecord(entry.record, 'INVITATION_READY', {
+        lead_route_receipt_sha256: entry.record.artifact_evidence_sha256,
+        claim_invitation_generation: 1,
+        claim_invitation_ready_at: readyAt.toISOString(),
+        lead_route_provider_message_id_sha256: entry.record.artifact_evidence_sha256,
+        claim_token_expires_at: expiresAt.toISOString(),
+      }, readyAt);
+      const token = deriveClaimBearer(draft, env);
+      entry = await replaceEntry(adapters.store, key, entry, { ...draft, claim_token_hmac_sha256: claimBearerDigest(token, env) });
+    }
   }
-  return { handoffId, record: entry.record, idempotentReplay: existedAtStart };
+  let claimBearer = null;
+  if (entry.record.lead_route_mode === 'not_required' && entry.record.state === 'INVITATION_READY') {
+    const observedAt = clock();
+    entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt);
+    // Re-ensure this immutable outbox on every exact replay. If the previous
+    // invocation crashed after the state CAS, replay converges before returning
+    // the deterministic bearer and never persists the bearer itself.
+    await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
+    claimBearer = deriveClaimBearer(entry.record, env);
+    if (!safeEqual(claimBearerDigest(claimBearer, env), entry.record.claim_token_hmac_sha256)) {
+      throw new Error('ARC2_CLAIM_BEARER_BINDING_FAILED');
+    }
+  }
+  return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady, claimBearer };
 }
 
 function verifyLeadRouteSignature(signature, raw, prefix, env) {
@@ -520,11 +765,41 @@ function normalizeLeadRouteReceipt(raw, signature, record, env, now, options = {
 }
 
 function deriveClaimBearer(record, env) {
-  const material = canonicalJson({
+  const materialValue = {
     handoff_id: record.handoff_id, lead_route_receipt_sha256: record.lead_route_receipt_sha256,
     claim_invitation_ready_at: record.claim_invitation_ready_at, claim_token_expires_at: record.claim_token_expires_at,
-  });
+  };
+  // Generation zero preserves already-issued pre-rotation bearer bytes.
+  if (record.claim_invitation_generation > 0) materialValue.claim_invitation_generation = record.claim_invitation_generation;
+  const material = canonicalJson(materialValue);
   return createHmac('sha256', env.ARC_CLAIM_TOKEN_SECRET).update(`${CLAIM_BEARER_DERIVATION_PREFIX}${material}`).digest('base64url');
+}
+
+async function rotateExpiredInvitation(entry, key, env, adapters, observedAt) {
+  if (entry.record.state !== 'INVITATION_READY') return entry;
+  if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) return entry;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const readyAt = observedAt;
+    const expiresAt = new Date(readyAt.getTime() + CLAIM_TOKEN_TTL_SECONDS * 1000);
+    const generation = Number.isSafeInteger(entry.record.claim_invitation_generation)
+      ? entry.record.claim_invitation_generation + 1
+      : 1;
+    const draft = reviseRecord(entry.record, {
+      claim_invitation_generation: generation,
+      claim_invitation_ready_at: readyAt.toISOString(),
+      claim_token_expires_at: expiresAt.toISOString(),
+    }, readyAt);
+    const token = deriveClaimBearer(draft, env);
+    try {
+      return await replaceEntry(adapters.store, key, entry, { ...draft, claim_token_hmac_sha256: claimBearerDigest(token, env) });
+    } catch (error) {
+      if (error?.message !== 'ARC2_STATE_CONTENTION' || attempt === 2) throw error;
+      entry = await readEntry(adapters.store, key);
+      if (!entry || entry.record.state !== 'INVITATION_READY') throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+      if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) return entry;
+    }
+  }
+  return entry;
 }
 
 function claimBearerDigest(token, env) {
@@ -534,14 +809,142 @@ function claimBearerDigest(token, env) {
 function invitationReadyOutbox(record, env) {
   const canonical = canonicalJson({
     version: INVITATION_READY_OUTBOX_VERSION, handoff_id: record.handoff_id, recipient_email_sha256: record.customer_email_sha256,
+    claim_invitation_generation: record.claim_invitation_generation,
     claim_token_hmac_sha256: record.claim_token_hmac_sha256, expires_at: record.claim_token_expires_at,
   });
   const digest = hmacHex(env.ARC_EMAIL_CLAIM_BINDING_SECRET, canonical);
   return { key: `invitation-ready-outbox/${digest}`, value: {
     schema: INVITATION_READY_OUTBOX_VERSION, status: 'READY', handoff_id: record.handoff_id,
+    claim_invitation_generation: record.claim_invitation_generation,
     recipient_email_sha256: record.customer_email_sha256, claim_token_hmac_sha256: record.claim_token_hmac_sha256,
     expires_at: record.claim_token_expires_at,
   } };
+}
+
+function invitationCurrentKey(handoffId) {
+  return `invitation-ready-current/${handoffId}`;
+}
+
+function invitationCurrentValue(record, outbox, env) {
+  const binding = {
+    schema: INVITATION_CURRENT_VERSION,
+    handoff_id: record.handoff_id,
+    claim_invitation_generation: record.claim_invitation_generation,
+    claim_token_hmac_sha256: record.claim_token_hmac_sha256,
+    expires_at: record.claim_token_expires_at,
+    outbox_key_sha256: sha256Hex(outbox.key),
+  };
+  return {
+    ...binding,
+    binding_hmac_sha256: hmacHex(env.ARC_EMAIL_CLAIM_BINDING_SECRET,
+      `${INVITATION_CURRENT_VERSION}\n${canonicalJson(binding)}`),
+  };
+}
+
+async function ensureInvitationCurrent(record, outbox, env, adapters) {
+  const key = invitationCurrentKey(record.handoff_id);
+  const value = invitationCurrentValue(record, outbox, env);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const existing = await readIndexEntry(adapters.store, key);
+    if (!existing) {
+      try {
+        await createIndex(adapters.store, key, value);
+        return value;
+      } catch (error) {
+        if (error?.message !== 'ARC2_INDEX_CONFLICT' || attempt === 3) throw error;
+        continue;
+      }
+    }
+    if (canonicalJson(existing.value) === canonicalJson(value)) return value;
+    const generation = existing.value?.claim_invitation_generation;
+    if (!Number.isSafeInteger(generation) || generation >= record.claim_invitation_generation) {
+      throw new Error('ARC2_CLAIM_INVITATION_CURRENT_CONFLICT');
+    }
+    try {
+      await replaceIndex(adapters.store, key, existing, value);
+      return value;
+    } catch (error) {
+      if (error?.message !== 'ARC2_STATE_CONTENTION' || attempt === 3) throw error;
+    }
+  }
+  throw new Error('ARC2_CLAIM_INVITATION_CURRENT_CONFLICT');
+}
+
+async function ensureInvitationDeliveryAuthority(record, env, adapters) {
+  const outbox = invitationReadyOutbox(record, env);
+  await ensureImmutableIndex(adapters.store, outbox.key, outbox.value);
+  await ensureInvitationCurrent(record, outbox, env, adapters);
+  return outbox;
+}
+
+async function rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt) {
+  if (entry.record.state !== 'CLAIM_WRAPPER_CONSUMED') return entry;
+  if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
+    throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
+  }
+  const fetchImpl = adapters.fetch || fetch;
+  const deadlineMs = providerStageDeadline(adapters);
+  const observedSite = await netlifyJson(`/sites/${encodeURIComponent(entry.record.netlify_site_id)}`,
+    env, fetchImpl, deadlineMs);
+  // This intentionally uses the source-account validator: a destination-owned
+  // site proves the provider claim completed and must never be reissued.
+  validateSiteIntent(observedSite, entry.record, env, false);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const readyAt = observedAt;
+    const expiresAt = new Date(readyAt.getTime() + CLAIM_TOKEN_TTL_SECONDS * 1000);
+    const generation = entry.record.claim_invitation_generation + 1;
+    const draft = transitionRecord(entry.record, 'INVITATION_READY', {
+      claim_invitation_generation: generation,
+      claim_invitation_ready_at: readyAt.toISOString(),
+      claim_token_expires_at: expiresAt.toISOString(),
+      claim_token_consumed_hmac_sha256: null,
+      claim_token_used_at: null,
+      claim_wrapper_consumed_at: null,
+      claim_jwt_issued_at: null,
+    }, readyAt);
+    const token = deriveClaimBearer(draft, env);
+    try {
+      return await replaceEntry(adapters.store, key, entry, {
+        ...draft,
+        claim_token_hmac_sha256: claimBearerDigest(token, env),
+      });
+    } catch (error) {
+      if (error?.message !== 'ARC2_STATE_CONTENTION' || attempt === 2) throw error;
+      entry = await readEntry(adapters.store, key);
+      if (entry?.record.state === 'INVITATION_READY' &&
+          Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) return entry;
+      if (!entry || entry.record.state !== 'CLAIM_WRAPPER_CONSUMED' ||
+          Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
+        throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+      }
+    }
+  }
+  throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+}
+
+export async function renewClaimInvitation(handoffId, env, adapters = {}) {
+  const key = handoffKeyFromId(handoffId);
+  const clock = adapters.clock || (() => new Date());
+  let entry = await readEntry(adapters.store, key);
+  if (!entry) return null;
+  const observedAt = clock();
+  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: observedAt });
+  if (entry.record.state === 'INVITATION_READY') {
+    if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
+      throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
+    }
+    entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt);
+  } else if (entry.record.state === 'CLAIM_WRAPPER_CONSUMED') {
+    entry = await rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt);
+  } else {
+    throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+  }
+  const token = deriveClaimBearer(entry.record, env);
+  if (!safeEqual(claimBearerDigest(token, env), entry.record.claim_token_hmac_sha256)) {
+    throw new Error('ARC2_CLAIM_BEARER_BINDING_FAILED');
+  }
+  await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
+  return { handoffId, record: entry.record, claimBearer: token };
 }
 
 export async function markClaimInvitationReady(handoffId, evidence, signature, env, adapters = {}) {
@@ -549,6 +952,10 @@ export async function markClaimInvitationReady(handoffId, evidence, signature, e
   const clock = adapters.clock || (() => new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
+  if (entry.record.lead_route_mode === 'not_required') {
+    throw new Error('ARC2_LEAD_ROUTE_RECEIPT_NOT_REQUIRED');
+  }
+  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
   // The committed producer can address only arc-lead-route-* sites. An older
   // namespace record that never reached invitation readiness has no valid
   // receipt path, so reject it before parsing evidence or changing state.
@@ -568,17 +975,17 @@ export async function markClaimInvitationReady(handoffId, evidence, signature, e
     const expiresAt = new Date(readyAt.getTime() + CLAIM_TOKEN_TTL_SECONDS * 1000);
     const draft = transitionRecord(entry.record, 'INVITATION_READY', {
       lead_route_receipt_sha256: receipt.digest, claim_invitation_ready_at: readyAt.toISOString(),
+      claim_invitation_generation: 1,
       lead_route_provider_message_id_sha256: receipt.value.provider_message_id_sha256,
       claim_token_expires_at: expiresAt.toISOString(),
     }, readyAt);
     const token = deriveClaimBearer(draft, env);
     entry = await replaceEntry(adapters.store, key, entry, { ...draft, claim_token_hmac_sha256: claimBearerDigest(token, env) });
   } else if (entry.record.lead_route_receipt_sha256 !== receipt.digest) throw new Error('ARC2_CLAIM_INVITATION_EVIDENCE_CONFLICT');
-  if (Date.parse(entry.record.claim_token_expires_at) <= observedAt.getTime()) throw new Error('ARC2_CLAIM_BEARER_EXPIRED');
+  entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt);
   const token = deriveClaimBearer(entry.record, env);
   if (!safeEqual(claimBearerDigest(token, env), entry.record.claim_token_hmac_sha256)) throw new Error('ARC2_CLAIM_BEARER_BINDING_FAILED');
-  const outbox = invitationReadyOutbox(entry.record, env);
-  await ensureImmutableIndex(adapters.store, outbox.key, outbox.value);
+  await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
   return { handoffId, record: entry.record, claimBearer: token, alreadyConsumed: false };
 }
 
@@ -588,6 +995,7 @@ export async function exchangeClaimBearer(handoffId, suppliedBearer, env, adapte
   const clock = adapters.clock || (() => new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
+  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
   const suppliedDigest = claimBearerDigest(suppliedBearer, env);
   if (entry.record.state === 'INVITATION_READY') {
     const usedAt = clock();
@@ -613,81 +1021,119 @@ export async function exchangeClaimBearer(handoffId, suppliedBearer, env, adapte
   const replayedAt = clock();
   if (entry.record.state !== 'CLAIM_WRAPPER_CONSUMED' || Date.parse(entry.record.claim_token_expires_at) - replayedAt.getTime() < 1000 ||
       !safeEqual(entry.record.claim_token_consumed_hmac_sha256 || '', suppliedDigest)) throw new Error('ARC2_CLAIM_BEARER_INVALID');
+  const issuedAt = Math.floor(replayedAt.getTime() / 1000);
+  if (issuedAt > entry.record.claim_jwt_issued_at) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { claim_jwt_issued_at: issuedAt }, replayedAt));
+        break;
+      } catch (error) {
+        if (error?.message !== 'ARC2_STATE_CONTENTION' || attempt === 2) throw error;
+        entry = await readEntry(adapters.store, key);
+        if (!entry || entry.record.state !== 'CLAIM_WRAPPER_CONSUMED' ||
+            !safeEqual(entry.record.claim_token_consumed_hmac_sha256 || '', suppliedDigest)) {
+          throw new Error('ARC2_CLAIM_BEARER_INVALID');
+        }
+        if (entry.record.claim_jwt_issued_at >= issuedAt) break;
+      }
+    }
+  }
   return { handoffId, record: entry.record, claimUrl: netlifyClaimUrl(entry.record, env) };
 }
 
-async function verifyClaimedRecord(record, deployId, destinationAccountId, env, fetchImpl) {
-  const site = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
-  validateSiteIntent(site, record, env, true);
-  if (site.account_id !== destinationAccountId || destinationAccountId === record.netlify_source_account_id || site.published_deploy?.id !== deployId) {
+async function verifyClaimedRecord(record, deployId, destinationAccountId, env, fetchImpl, deadlineMs) {
+  if (destinationAccountId === record.netlify_source_account_id) {
     throw new Error('ARC2_POSTCLAIM_ACCOUNT_OR_DEPLOY_MISMATCH');
   }
-  const deploy = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/deploys/${encodeURIComponent(deployId)}`, env, fetchImpl);
-  if (deploy?.id !== deployId || deploy?.site_id !== record.netlify_site_id || deploy?.state !== 'ready') throw new Error('ARC2_POSTCLAIM_DEPLOY_MISMATCH');
-  const files = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/files`, env, fetchImpl);
-  if (!Array.isArray(files) || files.length !== record.artifacts.length || record.artifacts.some((artifact) => {
-    const file = files.find((item) => item?.path === `/${artifact.path}`);
-    return !file || Number(file.size) !== artifact.size;
-  })) throw new Error('ARC2_POSTCLAIM_FILES_MISMATCH');
-  const artifactBytes = await downloadVerifiedArtifacts(record.netlify_site_id, record.artifacts, env, fetchImpl);
-  const forms = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}/forms`, env, fetchImpl);
-  if ((Array.isArray(forms) ? forms : []).filter((form) => form?.id === record.form_id && form?.site_id === record.netlify_site_id && form?.name === record.form_name).length !== 1) {
-    throw new Error('ARC2_POSTCLAIM_FORM_MISMATCH');
+  const observedSite = await netlifyJson(`/sites/${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl, deadlineMs);
+  validateSiteIntent(observedSite, record, env, true);
+  if (observedSite.account_id !== destinationAccountId || observedSite.published_deploy?.id !== deployId) {
+    throw new Error('ARC2_POSTCLAIM_ACCOUNT_OR_DEPLOY_MISMATCH');
   }
-  const hooks = await netlifyJson(`/hooks?site_id=${encodeURIComponent(record.netlify_site_id)}`, env, fetchImpl);
-  if ((Array.isArray(hooks) ? hooks : []).filter((hook) => hook?.id === record.hook_id && hook?.site_id === record.netlify_site_id &&
-      hook?.form_id === record.form_id && hook?.type === 'email' && hook?.event === 'submission_created' && hook?.disabled !== true &&
-      sha256Hex(String(hook.data?.email || '').trim().toLowerCase()) === record.lead_notification_email_sha256).length !== 1) {
-    throw new Error('ARC2_POSTCLAIM_HOOK_MISMATCH');
-  }
-  const productionUrl = canonicalNetlifySiteUrl(record.netlify_site_name);
-  const publicResponse = await fetchImpl(productionUrl, { method: 'GET', redirect: 'error' });
-  if (!publicResponse.ok || !(publicResponse.headers.get('x-robots-tag') || '').toLowerCase().includes('noindex')) throw new Error('ARC2_POSTCLAIM_PUBLICATION_MISMATCH');
-  return { site, deploy, artifactBytes, productionUrl };
+  const preclaim = deployId === record.preclaim_deploy_id;
+  const expectedArtifacts = preclaim ? record.artifacts.map((artifact, index) => index === 0 ? {
+    path: artifact.path,
+    size: Buffer.byteLength(ARC2_PRECLAIM_HEADERS_FILE),
+    sha256: sha256Hex(ARC2_PRECLAIM_HEADERS_FILE),
+  } : artifact) : record.artifacts;
+  const verified = await verifyNetlifyHandoff(record, {
+    accountId: destinationAccountId,
+    artifacts: expectedArtifacts,
+    phase: preclaim ? 'preclaim' : 'final',
+    deployId,
+    formId: record.form_id,
+    formName: record.form_name,
+    hookId: record.hook_id,
+    leadEmailSha256: record.lead_notification_email_sha256,
+  }, env, fetchImpl, { deadlineMs });
+  validateSiteIntent(verified.site, record, env, true);
+  return verified;
 }
 
 async function finishClaim(entry, key, hint, env, adapters) {
   const fetchImpl = adapters.fetch || fetch;
   const clock = adapters.clock || (() => new Date());
-  if (entry.record.state === 'CLAIM_WRAPPER_CONSUMED') {
-    const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id, hint.destinationAccountId, env, fetchImpl);
-    entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIM_CALLBACK_RECEIVED', {
-      destination_account_id: hint.destinationAccountId, claim_callback_received_at: clock().toISOString(), production_url: verified.productionUrl,
-    }, clock()));
+  const deadlineMs = providerStageDeadline(adapters);
+  const stageAdapters = { ...adapters, providerStageDeadlineMs: deadlineMs };
+  // One authenticated provider hint must converge all bounded post-claim
+  // stages. Each durable transition remains individually replayable, and a
+  // fresh reversal guard runs before every read or provider mutation.
+  while (true) {
+    if (entry.record.state === 'CLAIM_WRAPPER_CONSUMED') {
+      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
+        hint.destinationAccountId, env, fetchImpl, deadlineMs);
+      entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIM_CALLBACK_RECEIVED', {
+        destination_account_id: hint.destinationAccountId,
+        claim_callback_received_at: clock().toISOString(),
+        production_url: verified.productionUrl,
+      }, clock()));
+      continue;
+    }
+    if (entry.record.state === 'CLAIM_CALLBACK_RECEIVED') {
+      if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
+      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
+        hint.destinationAccountId, env, fetchImpl, deadlineMs);
+      entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIMED_VERIFIED', {
+        claimed_verified_at: clock().toISOString(), production_url: verified.productionUrl,
+      }, clock()));
+      continue;
+    }
+    if (entry.record.state === 'CLAIMED_VERIFIED') {
+      if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
+      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      const preclaim = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
+        hint.destinationAccountId, env, fetchImpl, deadlineMs);
+      const deployed = await ensureDeploy(entry, key, preclaim.artifactBytes, 'final', env, stageAdapters);
+      entry = deployed.entry;
+      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      const final = await verifyClaimedRecord(entry.record, deployed.ready.id,
+        hint.destinationAccountId, env, fetchImpl, deadlineMs);
+      const verifiedFinalRecord = {
+        ...entry.record,
+        final_deploy_id: deployed.ready.id,
+        production_url: final.productionUrl,
+      };
+      const outbox = createOutboxClaim(verifiedFinalRecord, env);
+      await ensureImmutableIndex(adapters.store, outbox.key, outbox.value);
+      entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'FINAL_DEPLOY_READY', {
+        final_deploy_id: deployed.ready.id, production_url: final.productionUrl,
+        final_deploy_ready_at: clock().toISOString(), outbox_claim_status: 'CLAIMED', outbox_claim_key_hmac_sha256: outbox.digest,
+      }, clock()));
+      continue;
+    }
+    if (entry.record.state === 'FINAL_DEPLOY_READY' || entry.record.state === 'DELIVERED') {
+      if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
+      if (entry.record.state !== 'DELIVERED') {
+        await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      }
+      await verifyClaimedRecord(entry.record, entry.record.final_deploy_id,
+        hint.destinationAccountId, env, fetchImpl, deadlineMs);
+      return entry;
+    }
+    throw new Error('ARC2_CLAIM_STATE_CONFLICT');
   }
-  if (entry.record.state === 'CLAIM_CALLBACK_RECEIVED') {
-    if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
-    const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id, hint.destinationAccountId, env, fetchImpl);
-    entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIMED_VERIFIED', {
-      claimed_verified_at: clock().toISOString(), production_url: verified.productionUrl,
-    }, clock()));
-  }
-  if (entry.record.state === 'CLAIMED_VERIFIED') {
-    if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
-    const preclaim = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id, hint.destinationAccountId, env, fetchImpl);
-    const deployed = await ensureDeploy(entry, key, preclaim.artifactBytes, 'final', env, adapters);
-    entry = deployed.entry;
-    const final = await verifyClaimedRecord(entry.record, deployed.ready.id, hint.destinationAccountId, env, fetchImpl);
-    // Build the outbox binding from the verified final values in memory, then
-    // persist final deploy, URL, outbox, and state in one CAS. A crash cannot
-    // leave FINAL fields attached to the preceding state.
-    const verifiedFinalRecord = {
-      ...entry.record,
-      final_deploy_id: deployed.ready.id,
-      production_url: final.productionUrl,
-    };
-    const outbox = createOutboxClaim(verifiedFinalRecord, env);
-    await ensureImmutableIndex(adapters.store, outbox.key, outbox.value);
-    entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'FINAL_DEPLOY_READY', {
-      final_deploy_id: deployed.ready.id, production_url: final.productionUrl,
-      final_deploy_ready_at: clock().toISOString(), outbox_claim_status: 'CLAIMED', outbox_claim_key_hmac_sha256: outbox.digest,
-    }, clock()));
-  }
-  if (entry.record.state === 'FINAL_DEPLOY_READY' || entry.record.state === 'DELIVERED') {
-    if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
-    await verifyClaimedRecord(entry.record, entry.record.final_deploy_id, hint.destinationAccountId, env, fetchImpl);
-  }
-  return entry;
 }
 
 export async function processClaimWebhook(input, env, adapters = {}) {
@@ -700,6 +1146,9 @@ export async function processClaimWebhook(input, env, adapters = {}) {
       hint.destinationAccountId === entry.record.netlify_source_account_id) throw new Error('ARC2_CLAIM_BINDING_FAILED');
   if (!['CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(entry.record.state)) {
     throw new Error('ARC2_CLAIM_STATE_CONFLICT');
+  }
+  if (entry.record.state !== 'DELIVERED') {
+    await assertHandoffFulfillmentAllowed(adapters.store, index.handoff_id, env, { now: adapters.clock?.() || new Date() });
   }
   const finished = await finishClaim(entry, key, hint, env, adapters);
   return { handoffId: index.handoff_id, record: finished.record };
@@ -966,7 +1415,24 @@ export async function getHandoffStatus(handoffId, env, adapters = {}, options = 
   if (!entry) return null;
   const record = validateExpectedBindings(entry.record);
   const status = { ...publicStatus(record, clock()), claim_available: record.state === 'INVITATION_READY' && Date.parse(record.claim_token_expires_at) > clock().getTime() };
-  if (options.includePrivate && record.state === 'FINAL_DEPLOY_READY') Object.assign(status, createClaimStateEvidence(record, env));
+  if (options.includePrivate && record.state === 'FINAL_DEPLOY_READY') {
+    // Private claim-state evidence is the final email worker's send authority.
+    // It requires a Stripe observation that does not predate final-deploy
+    // readiness and is no more than one minute old. Guard both sides of the
+    // Netlify readback so provider latency cannot turn an old preflight check
+    // into send authority.
+    const guardOptions = {
+      maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+      recheckNotBefore: record.final_deploy_ready_at,
+    };
+    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { ...guardOptions, now: clock() });
+    const deadlineMs = providerStageDeadline(adapters);
+    await verifyClaimedRecord(record, record.final_deploy_id, record.destination_account_id,
+      env, adapters.fetch || fetch, deadlineMs);
+    const authorizedAt = clock();
+    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { ...guardOptions, now: authorizedAt });
+    Object.assign(status, createClaimStateEvidence(record, env, authorizedAt));
+  }
   return status;
 }
 
