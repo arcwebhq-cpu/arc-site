@@ -35,6 +35,11 @@ assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|meth
 assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
 assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
+assert.equal((home.match(/<a\b[^>]*\bdata-intake-cta\b[^>]*>/g) || []).length, 2, 'Default build must expose two honest intake fallback actions.');
+assert.doesNotMatch(home, /data-intake-cta[^>]*href="#start"/,
+  'Compiled-closed intake actions must not advertise an unavailable online form.');
+assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request"[^>]*>Email ARC About a Preview<\/a>/);
+assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
 assert.match(home, /data-analytics-build-enabled="false"/,
