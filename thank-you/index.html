@@ -35,15 +35,19 @@
   <script>
   (async()=>{
     try{
-      if(document.body.dataset.analyticsBuildEnabled!=='true')throw new Error('ANALYTICS_DISABLED');
-      const pendingKey='arc-pending-preview-analytics',raw=sessionStorage.getItem(pendingKey);
-      if(raw){
-        const pending=JSON.parse(raw),expiresAt=Number(pending?.expires_at);
-        if(Number.isFinite(expiresAt)&&expiresAt>Date.now()){
-          const {expires_at,...payload}=pending;
-          const response=await fetch('/api/analytics/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true});
-          if(response.ok)sessionStorage.removeItem(pendingKey);
-        }else sessionStorage.removeItem(pendingKey);
+      const pendingKey='arc-pending-preview-analytics',sessionKey='arc-analytics-session';
+      if(document.body.dataset.analyticsBuildEnabled!=='true'){
+        sessionStorage.removeItem(pendingKey);sessionStorage.removeItem(sessionKey);
+      }else{
+        const raw=sessionStorage.getItem(pendingKey);
+        if(raw){
+          const pending=JSON.parse(raw),expiresAt=Number(pending?.expires_at);
+          if(Number.isFinite(expiresAt)&&expiresAt>Date.now()){
+            const {expires_at,...payload}=pending;
+            const response=await fetch('/api/analytics/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true});
+            if(response.ok)sessionStorage.removeItem(pendingKey);
+          }else sessionStorage.removeItem(pendingKey);
+        }
       }
     }catch(error){}
     try{localStorage.removeItem('arc-preview-draft-v7');localStorage.removeItem('arc-preview-draft-v4');localStorage.removeItem('arc-preview-draft-v3')}catch(error){}

@@ -123,7 +123,13 @@ assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="true"/);
 assert.match(home, /form\.dataset\.intakeBuildEnabled==='true'/);
 assert.match(home, /id="projectForm" inert/);
-assert.match(home, /Preview requests are temporarily paused while delivery routing is verified/);
+assert.equal((home.match(/<a\b[^>]*\bdata-intake-cta\b[^>]*>/g) || []).length, 2, 'Expected the navigation and hero intake actions.');
+assert.doesNotMatch(home, /data-intake-cta[^>]*href="#start"/,
+  'The source/default intake actions must fail closed to a truthful manual-email fallback.');
+assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request"[^>]*>Email ARC About a Preview<\/a>/);
+assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
+assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href=enabled\?'#start':'mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request'/,
+  'Only exact live readiness may restore the online-intake CTA.');
 assert.match(home, /fetch\('\/api\/intake\/readiness'/);
 assert.match(home, /ARC_INTAKE_ENABLED|intake_enabled/);
 assert.match(home, /<form action="\/api\/intake\/submit"/);
@@ -137,7 +143,16 @@ assert.match(home, /freshConfirmationFields\.has\(field\.name\)/);
 assert.match(home, /JSON\.stringify\(\{savedAt,expiresAt:savedAt\+draftTtlMs,data:draftData\(\)\}\)/);
 assert.match(home, /saved\.expiresAt<=now/);
 assert.match(thankYou, /removeItem\('arc-preview-draft-v7'\)/);
-assert.match(privacy, /saved in this browser expire after seven days/i);
+const acceptedResponseIndex = home.indexOf('const accepted=response.status===201');
+const acceptedDraftRemovalIndex = home.indexOf('localStorage.removeItem(draftKey)', acceptedResponseIndex);
+const acceptedRedirectIndex = home.indexOf("location.assign('/thank-you/')", acceptedResponseIndex);
+assert.ok(acceptedResponseIndex > -1 && acceptedDraftRemovalIndex > acceptedResponseIndex && acceptedDraftRemovalIndex < acceptedRedirectIndex,
+  'A verified accepted response must clear the browser draft before navigation.');
+assert.match(privacy, /not restored after seven days/i);
+assert.match(privacy, /cleared the next time you open ARC after they expire/i);
+assert.match(privacy, /cannot delete browser storage while the site is closed/i);
+assert.match(retentionControl, /never restored after 7 days/i);
+assert.match(retentionControl, /cannot delete local browser storage\s+while the site is closed/i);
 
 for (const untrustedHiddenName of ['submission_timestamp', 'submission_id', 'lead_route', 'lead_route_status', 'lead_route_verification', 'checkout_consent_required', 'terms_version', 'terms_accepted_at']) {
   assert.doesNotMatch(home, new RegExp(`name="${untrustedHiddenName}"`));
@@ -166,6 +181,12 @@ assert.doesNotMatch(`${terms}\n${scope}`, /technical revocation|immutable (?:cop
 assert.match(home, /const analyticsEndpoint='\/api\/analytics\/event'/);
 assert.match(home, /credentials:'omit',keepalive:true/);
 assert.match(home, /sessionStorage\.setItem\(pendingAnalyticsKey/);
+assert.match(home, /if\(analyticsBuildEnabled\)[\s\S]*?sessionStorage\.setItem\(analyticsSessionKey/,
+  'Analytics browser identity may only be created in an analytics-enabled build.');
+assert.match(home, /sessionStorage\.removeItem\(analyticsSessionKey\);sessionStorage\.removeItem\(pendingAnalyticsKey\)/,
+  'An analytics-disabled build must clear stale analytics browser state.');
+assert.match(thankYou, /sessionStorage\.removeItem\(pendingKey\);sessionStorage\.removeItem\(sessionKey\)/,
+  'The analytics-disabled thank-you page must clear stale analytics browser state.');
 assert.doesNotMatch(home, /name="analytics_session_id"/);
 assert.match(home, /event:'arc_preview_request',event_id:randomId\(\)/);
 assert.doesNotMatch(home, /track\('arc_preview_request'/);
@@ -392,7 +413,12 @@ assert.match(imageSizeDisabled, /throw new Error\('Image parsing is intentionall
 assert.equal(packageJson.devDependencies['@sparticuz/chromium'], '149.0.0');
 assert.equal(packageJson.devDependencies.playwright, '1.62.0');
 assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
+assert.equal(packageJson.scripts.preflight, 'node scripts/launch-preflight.mjs --mode=safety');
+assert.equal(packageJson.scripts['preflight:sandbox'], 'node scripts/launch-preflight.mjs --mode=sandbox');
+assert.equal(packageJson.scripts['preflight:live'], 'node scripts/launch-preflight.mjs --mode=live');
 assert.deepEqual(packageJson.scripts.test.split(' && '), [
+  'npm run preflight',
+  'node tests/launch-preflight-contract.mjs',
   'node tests/source-contract.mjs',
   'node tests/analytics-contract.mjs',
   'node tests/intake-readiness-contract.mjs',

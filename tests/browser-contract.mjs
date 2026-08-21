@@ -87,13 +87,29 @@ try {
       hasTouch: viewport.isMobile,
     });
     const errors = [];
+    const analyticsRequests = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/analytics/event') analyticsRequests.push(request.url());
+    });
+    await page.addInitScript(() => {
+      sessionStorage.setItem('arc-analytics-session', 'stale-session');
+      sessionStorage.setItem('arc-pending-preview-analytics', 'stale-pending-event');
+    });
 
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1150);
+    const analyticsOffState = await page.evaluate(() => ({
+      session: sessionStorage.getItem('arc-analytics-session'),
+      pending: sessionStorage.getItem('arc-pending-preview-analytics'),
+      dataLayerCreated: Object.prototype.hasOwnProperty.call(window, 'dataLayer'),
+    }));
+    assert.deepEqual(analyticsOffState, { session: null, pending: null, dataLayerCreated: false },
+      `${viewport.name}: compiled analytics-off state created or retained browser tracking state`);
+    assert.deepEqual(analyticsRequests, [], `${viewport.name}: compiled analytics-off state sent an analytics request`);
     assert.equal(await page.locator('h1').count(), 1, `${viewport.name}: expected one h1`);
     assert.equal(await page.locator('.hero-copy-block').evaluate((element) => getComputedStyle(element).opacity), '1', `${viewport.name}: hero copy is hidden`);
     const heroLayout = await page.evaluate(() => {
@@ -203,7 +219,24 @@ try {
       })
       .map((element) => element.className));
     assert.deepEqual(hiddenWithoutScript, [], 'Core content must remain visible if JavaScript fails or is unavailable.');
+    assert.equal(await noScriptPage.locator('[data-intake-cta][href^="mailto:arcwebhq@gmail.com"]').count(), 2,
+      'The no-script compiled-closed page must retain its manual email fallbacks.');
     await noScriptPage.close();
+
+    const disabledThankYouPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await disabledThankYouPage.addInitScript(() => {
+      sessionStorage.setItem('arc-analytics-session', 'stale-session');
+      sessionStorage.setItem('arc-pending-preview-analytics', 'stale-pending-event');
+      localStorage.setItem('arc-preview-draft-v7', 'stale-draft');
+    });
+    await disabledThankYouPage.goto(`${baseUrl}/thank-you/`, { waitUntil: 'networkidle' });
+    assert.deepEqual(await disabledThankYouPage.evaluate(() => ({
+      session: sessionStorage.getItem('arc-analytics-session'),
+      pending: sessionStorage.getItem('arc-pending-preview-analytics'),
+      draft: localStorage.getItem('arc-preview-draft-v7'),
+    })), { session: null, pending: null, draft: null },
+    'The analytics-disabled thank-you page must clear stale analytics state and the accepted draft.');
+    await disabledThankYouPage.close();
 
     const paymentPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const paymentRequests = [];
