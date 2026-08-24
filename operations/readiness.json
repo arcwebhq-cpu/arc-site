@@ -1,6 +1,6 @@
 {
   "schema": "arc-operations-readiness-v1",
-  "reviewed_at": "2026-08-13",
+  "reviewed_at": "2026-08-24",
   "offer": {
     "currency": "USD",
     "subtotal_amount": 5000,
@@ -24,13 +24,33 @@
       "stripe-test-session-id"
     ],
     "blockers": [
-      "adult-contracting-representative-unconfirmed",
+      "adult-contracting-authority-outside-stripe-unverified",
       "checkout-consent-not-wired-or-live-tested",
-      "arc-stripe-account-unverified",
+      "arc-stripe-public-profile-is-stale",
+      "stripe-tax-status-pending-and-head-office-missing",
+      "stripe-tax-registrations-zero",
+      "live-payment-links-have-automatic-tax-off",
+      "live-reusable-payment-links-not-safely-restricted",
+      "stripe-webhook-endpoints-zero",
       "business-license-unverified",
       "sales-tax-registration-unverified",
       "destination-tax-configuration-unverified"
     ],
+    "provider_observation": {
+      "observed_at": "2026-08-24",
+      "account_name": "ARC",
+      "charges_enabled": true,
+      "payouts_enabled": true,
+      "details_submitted": true,
+      "adult_representative_present": true,
+      "public_profile_matches_arc": false,
+      "tax_status": "pending",
+      "head_office_configured": false,
+      "tax_registration_count": 0,
+      "automatic_tax_on_observed_live_links": false,
+      "webhook_endpoint_count": 0,
+      "live_checkout_activation_allowed": false
+    },
     "sandbox_evidence": [
       {
         "observed_at": "2026-08-13",

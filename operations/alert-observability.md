@@ -28,6 +28,9 @@ within one 8-second wall-clock budget. It persists each exact alert before
 advancing and returns a signed `next_cursor` when work remains; operators must
 resume until `AUDIT_COMPLETE`. The private ARC1 recovery endpoint likewise uses
 signed cursor-resumable UUID shards, at most 20 dispatch attempts/100 reads per
-call, and a shared 8-second deadline.
+call, and a shared 8-second deadline. The separate first-party ARC1 adapter
+recovery endpoint uses signed cursor-resumable HMAC shards with the same bounded
+attempt/read/deadline policy. It records only hook ingress acceptance; a Zapier
+Catch Hook HTTP 200 is not a workflow-completion or delivery receipt.
 
 Before `failure_alert_verified` can be true, build a separate alert consumer with create-only send attempts, a verified ARC recipient, provider delivery receipts, escalation/acknowledgement, retry limits, and a synthetic stuck-state test. Keep the audit endpoint disabled until its store bounds and recipient workflow are reviewed. Neither endpoint has a schedule, and alert delivery remains unimplemented.
