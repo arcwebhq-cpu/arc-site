@@ -9,7 +9,10 @@ is to leave all automation OFF.
 
 ## Targets
 
-- Unsubmitted browser drafts: automatic deletion after 7 days and after a successful request.
+- Unsubmitted browser drafts: never restored after 7 days; cleared on the next
+  ARC visit after expiry, immediately after a confirmed successful request, or
+  when the visitor clears site data. ARC cannot delete local browser storage
+  while the site is closed.
 - First-party aggregate analytics: delete after 90 days once the separately approved default-off prune control is activated.
 - QA submissions, test emails, test uploads, and temporary test sites: delete within 14 days after the evidence bundle is recorded.
 - Unpaid preview requests, submitted assets, generated previews, workflow state, and related email: delete or de-identify within 24 months after the last interaction, and sooner when no longer needed.
