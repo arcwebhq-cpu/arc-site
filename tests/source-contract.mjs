@@ -537,6 +537,7 @@ assert.deepEqual(packageJson.scripts.test.split(' && '), [
   'npm run preflight',
   'node tests/launch-preflight-contract.mjs',
   'node tests/workflow-supply-chain-contract.mjs',
+  'node tests/netlify-function-config-contract.mjs',
   'node tests/source-contract.mjs',
   'node tests/analytics-contract.mjs',
   'node tests/intake-readiness-contract.mjs',

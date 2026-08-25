@@ -2,7 +2,6 @@ import { getStore } from '@netlify/blobs';
 
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 import {
-  INTAKE_ARC1_ADAPTER_COMPLETION_ENDPOINT_PATH,
   INTAKE_ARC1_ADAPTER_ENABLED_ENV,
   INTAKE_ARC1_ADAPTER_MAX_CONTROL_BYTES,
   INTAKE_ARC1_ADAPTER_STORE,
@@ -66,7 +65,8 @@ export function createIntakeArc1AdapterCompletionHandler() {
 }
 
 export default createIntakeArc1AdapterCompletionHandler();
+// Netlify extracts route configuration at build time, so keep these values literal.
 export const config = {
-  path: INTAKE_ARC1_ADAPTER_COMPLETION_ENDPOINT_PATH, method: 'POST',
+  path: '/internal/intake/arc1/adapter/complete', method: 'POST',
   rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] },
 };

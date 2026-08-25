@@ -861,4 +861,16 @@ assert.equal(migrationConfig.method, 'POST');
 assert.equal(recoveryConfig.path, '/internal/intake/arc1/adapter/recover');
 assert.equal(recoveryConfig.method, 'POST');
 assert.equal(Object.hasOwn(recoveryConfig, 'schedule'), false);
+
+for (const [file, expectedPath] of [
+  ['intake-arc1-adapter-claim.mjs', '/internal/intake/arc1/adapter/claim'],
+  ['intake-arc1-adapter-complete.mjs', '/internal/intake/arc1/adapter/complete'],
+  ['intake-arc1-adapter-legacy-migration.mjs', '/internal/intake/arc1/adapter/migrate-legacy'],
+]) {
+  const source = await readFile(new URL(`../netlify/functions/${file}`, import.meta.url), 'utf8');
+  assert.ok(source.includes(`path: '${expectedPath}'`),
+    `${file} must inline its custom path so Netlify can extract the route at build time.`);
+  assert.doesNotMatch(source, /\bpath:\s*INTAKE_[A-Z0-9_]+/,
+    `${file} must not hide its custom path behind an imported runtime constant.`);
+}
 console.log('ARC first-party durable synchronous adapter and retryable downstream dispatch contract passed.');
