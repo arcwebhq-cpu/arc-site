@@ -329,7 +329,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
               <summary>Confirm contact form and website structure <span class="optional" id="structureStatus">Defaults selected</span></summary>
               <div class="optional-details-body brief-details-body">
             <div class="conditional-panel" id="leadFormPanel" hidden>
-              <div class="field"><label for="leadEmail">Lead notification email</label><input id="leadEmail" name="lead_notification_email" type="email" placeholder="Where website form leads should go"><p class="hint">Pending verification. Before production launch, ARC must send a real test submission to this address and the recipient must confirm receipt.</p></div>
+              <div class="field"><label for="leadEmail">Lead notification email</label><input id="leadEmail" name="lead_notification_email" type="email" autocomplete="email" maxlength="254" placeholder="Where website form leads should go"><p class="hint">Pending verification. Before production launch, ARC must send a real test submission to this address and the recipient must confirm receipt.</p></div>
               <p class="group-title" id="leadFieldsLabel">Lead form fields *</p>
               <div class="choices" id="leadFieldChoices" data-group="lead_form_fields" role="group" aria-labelledby="leadFieldsLabel">
                 <label><input type="checkbox" name="lead_form_fields" value="Name" checked> Name</label><label><input type="checkbox" name="lead_form_fields" value="Email" checked> Email</label>
@@ -343,7 +343,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
               <label><input type="checkbox" name="sections" value="About" checked> About</label><label><input type="checkbox" name="sections" value="Services" checked> Services</label>
               <label><input type="checkbox" name="sections" value="Process" checked> Process</label><label><input type="checkbox" name="sections" value="Reviews"> Reviews</label>
               <label><input type="checkbox" name="sections" value="Gallery"> Gallery</label><label><input type="checkbox" name="sections" value="FAQ"> FAQ</label>
-              <label><input type="checkbox" name="sections" value="Contact or quote form" checked> Contact / quote form</label><label><input type="checkbox" name="sections" value="Location and hours"> Location &amp; hours</label>
+              <label><input id="contactFormSection" type="checkbox" name="sections" value="Contact or quote form" checked> Contact / quote form</label><label><input type="checkbox" name="sections" value="Location and hours"> Location &amp; hours</label>
             </div>
             <details class="optional-details">
               <summary>Add features or FAQs <span class="optional">Optional</span></summary>
@@ -465,6 +465,11 @@ if(analyticsBuildEnabled){
   try{sessionStorage.removeItem(analyticsSessionKey);sessionStorage.removeItem(pendingAnalyticsKey)}catch(error){}
 }
 const sendAnalytics=payload=>fetch(analyticsEndpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true}).catch(()=>{});
+function fetchWithTimeout(resource,options,timeoutMs){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  return fetch(resource,{...options,signal:controller.signal}).finally(()=>clearTimeout(timer));
+}
 const track=(event,details={})=>{
   if(!analyticsBuildEnabled)return;
   const payload={event,event_id:randomId(),session_id:analyticsFields.analyticsSessionId.value,path:location.pathname,...details};
@@ -621,7 +626,7 @@ form.querySelectorAll('[data-exclusive-group]').forEach(group=>{
   });
 });
 
-const ctaDestinationPanel=document.getElementById('ctaDestinationPanel'), ctaDestination=document.getElementById('ctaDestination'), ctaDestinationLabel=document.getElementById('ctaDestinationLabel'), secondaryFormPanel=document.getElementById('secondaryFormPanel'), leadFormPanel=document.getElementById('leadFormPanel'), leadFormYes=document.getElementById('leadFormYes'), leadFormNo=document.getElementById('leadFormNo'), leadEmail=document.getElementById('leadEmail'), leadRouteNotice=document.getElementById('leadRouteNotice'), structureDetails=document.getElementById('structureDetails'), structureStatus=document.getElementById('structureStatus');
+const ctaDestinationPanel=document.getElementById('ctaDestinationPanel'), ctaDestination=document.getElementById('ctaDestination'), ctaDestinationLabel=document.getElementById('ctaDestinationLabel'), secondaryFormPanel=document.getElementById('secondaryFormPanel'), leadFormPanel=document.getElementById('leadFormPanel'), leadFormYes=document.getElementById('leadFormYes'), leadFormNo=document.getElementById('leadFormNo'), leadEmail=document.getElementById('leadEmail'), leadRouteNotice=document.getElementById('leadRouteNotice'), structureDetails=document.getElementById('structureDetails'), structureStatus=document.getElementById('structureStatus'), contactFormSection=document.getElementById('contactFormSection');
 function setPanel(panel,visible){panel.hidden=!visible}
 function updateLeadPanel(){
   const cta=form.querySelector('input[name="main_call_to_action"]:checked')?.value||'';
@@ -630,6 +635,7 @@ function updateLeadPanel(){
   else setPanel(secondaryFormPanel,Boolean(cta));
   leadRouteNotice.hidden=!implied;
   const show=implied||leadFormYes.checked;
+  contactFormSection.checked=show;
   structureStatus.textContent=show?'Lead routing required':'Defaults selected';
   if(show)structureDetails.open=true;
   setPanel(leadFormPanel,show);leadEmail.required=show;
@@ -654,6 +660,12 @@ function updateCTA(){
 }
 form.querySelectorAll('input[name="main_call_to_action"]').forEach(input=>input.addEventListener('change',updateCTA));
 form.querySelectorAll('input[name="lead_form_needed"]').forEach(input=>input.addEventListener('change',updateLeadPanel));
+contactFormSection.addEventListener('change',()=>{
+  const cta=form.querySelector('input[name="main_call_to_action"]:checked')?.value||'';
+  const implied=cta==='Request Estimate'||cta==='Contact';
+  if(!contactFormSection.checked&&implied){contactFormSection.checked=true;return}
+  if(contactFormSection.checked&&!leadFormYes.checked){leadFormYes.checked=true;leadFormNo.checked=false;updateLeadPanel()}
+});
 
 const logoUploadPanel=document.getElementById('logoUploadPanel'), photoUploadPanel=document.getElementById('photoUploadPanel'), socialLinksPanel=document.getElementById('socialLinksPanel'), uploadNote=document.getElementById('uploadNote'), assetPermissionPanel=document.getElementById('assetPermissionPanel'), assetPermission=document.getElementById('assetPermission');
 function updateAssetPanels(){
@@ -874,7 +886,7 @@ form.addEventListener('submit',async event=>{
   submit.textContent='Sending...';
   form.setAttribute('aria-busy','true');
   try{
-    const response=await fetch('/api/intake/submit',{method:'POST',body:new FormData(form),credentials:'omit',redirect:'error',referrerPolicy:'same-origin'});
+    const response=await fetchWithTimeout('/api/intake/submit',{method:'POST',body:new FormData(form),credentials:'omit',redirect:'error',referrerPolicy:'same-origin'},60000);
     const value=await response.json();
     const accepted=response.status===201&&value&&Object.keys(value).sort().join(',')==='accepted,schema,submission_id'&&value.schema==='arc-intake-submission-accepted-v1'&&value.accepted===true&&/^[0-9a-f-]{36}$/i.test(value.submission_id);
     if(!accepted)throw new Error(response.status===503?'INTAKE_DISABLED':'INTAKE_REJECTED');
@@ -887,7 +899,8 @@ form.addEventListener('submit',async event=>{
   }catch(error){
     submitting=false;form.removeAttribute('aria-busy');submit.textContent='Submit Preview Request';
     const paused=error.message==='INTAKE_DISABLED';
-    err.textContent=paused?'Online preview requests are paused. Email ARC about a manual preview.':'Your request was not stored. Please try again later.';
+    const timedOut=error?.name==='AbortError';
+    err.textContent=paused?'Online preview requests are paused. Email ARC about a manual preview.':timedOut?'We could not confirm delivery. Your answers are still here—wait a moment, then try once or email ARC.':'Your request was not stored. Your answers are still here; please try again or email ARC.';
     if(paused)setIntakeAvailability(false);else submit.disabled=false;
   }
 });
@@ -900,9 +913,9 @@ function setIntakeAvailability(enabled){
 }
 async function configureIntake(){
   setIntakeAvailability(false);
-  try{const response=await fetch('/api/intake/readiness',{headers:{accept:'application/json'},credentials:'omit',cache:'no-store'});const value=await response.json();const exact=value&&Object.keys(value).sort().join(',')==='intake_enabled,schema'&&value.schema==='arc-intake-readiness-v1'&&value.intake_enabled===true;setIntakeAvailability(form.dataset.intakeBuildEnabled==='true'&&response.ok&&exact)}catch(error){setIntakeAvailability(false)}
+  try{const response=await fetchWithTimeout('/api/intake/readiness',{headers:{accept:'application/json'},credentials:'omit',cache:'no-store'},8000);const value=await response.json();const exact=value&&Object.keys(value).sort().join(',')==='intake_enabled,schema'&&value.schema==='arc-intake-readiness-v1'&&value.intake_enabled===true;setIntakeAvailability(form.dataset.intakeBuildEnabled==='true'&&response.ok&&exact)}catch(error){setIntakeAvailability(false)}
 }
-window.addEventListener('pageshow',resetSubmitButton);
+window.addEventListener('pageshow',event=>{resetSubmitButton();if(event.persisted)configureIntake()});
 restoreDraft();updateCTA();updateAssetPanels();updateProofPanel();showStep(0,false,false);configureIntake();
 </script>
 </body>

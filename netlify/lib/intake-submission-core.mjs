@@ -34,9 +34,31 @@ export const INTAKE_ALLOWED_FIELDS = Object.freeze([
 const FILE_FIELDS = new Set(INTAKE_FILE_FIELDS);
 const MULTI_FIELDS = new Set(INTAKE_MULTI_FIELDS);
 const ALLOWED_FIELDS = new Set(INTAKE_ALLOWED_FIELDS);
-const REQUIRED_FIELDS = Object.freeze(['business', 'city', 'email', 'industry', 'main_call_to_action', 'main_services', 'name']);
+const REQUIRED_FIELDS = Object.freeze([
+  'business', 'city', 'email', 'industry', 'main_call_to_action', 'main_services', 'name', 'primary_style',
+]);
 const MAX_VALUES_PER_MULTI_FIELD = 16;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+const CTA_VALUES = new Set(['Book Consultation', 'Call', 'Contact', 'Order or Reserve', 'Request Estimate']);
+const PRIMARY_STYLE_VALUES = new Set(['Bold', 'Editorial', 'Luxury', 'Minimal', 'Modern', 'Warm and local']);
+const LEAD_FORM_VALUES = new Set(['No', 'Yes']);
+const ENUM_VALUES = Object.freeze({
+  brand_tone: new Set(['Calm', 'Confident', 'Energetic', 'Friendly', 'Professional']),
+  domain_status: new Set(['I need a domain', 'I own a domain', 'Not sure']),
+  main_call_to_action: CTA_VALUES,
+  primary_style: PRIMARY_STYLE_VALUES,
+  lead_form_needed: LEAD_FORM_VALUES,
+});
+const MULTI_ENUM_VALUES = Object.freeze({
+  assets: new Set(['Logo', 'None yet', 'Photos', 'Social links']),
+  goals: new Set(['Bookings', 'Estimate requests', 'Explain services', 'Look more trusted', 'More calls', 'Sell or reserve online']),
+  lead_form_fields: new Set(['Address', 'Budget', 'Email', 'Name', 'Phone', 'Preferred date', 'Project details', 'Service']),
+  proof: new Set(['Awards or certifications', 'Case studies or results', 'Customer reviews', 'Licensed or insured', 'None yet', 'Years of experience']),
+  sections: new Set(['About', 'Contact or quote form', 'FAQ', 'Gallery', 'Location and hours', 'Process', 'Reviews', 'Services']),
+});
+const EMAIL_FIELDS = Object.freeze(['email', 'lead_notification_email', 'public_email']);
 
 export function createInitialArc1DeliveryState(receivedAt) {
   const nextAttemptAt = new Date(receivedAt);
@@ -93,7 +115,95 @@ function scalar(value, field) {
   if (typeof value !== 'string') throw new TypeError(`${field} must be text.`);
   const clean = value.trim();
   if (Buffer.byteLength(clean, 'utf8') > 20_000) throw new TypeError(`${field} is too large.`);
+  if (CONTROL_CHARACTER_PATTERN.test(clean)) throw new TypeError(`${field} contains unsupported control characters.`);
   return clean;
+}
+
+function presentList(values, field) {
+  const list = values.get(field);
+  if (list === undefined) return [];
+  if (!Array.isArray(list) || list.some((value) => !value)) throw new TypeError(`${field} contains an empty value.`);
+  if (new Set(list).size !== list.length) throw new TypeError(`${field} contains duplicate values.`);
+  return list;
+}
+
+function validEmail(value) {
+  return typeof value === 'string' && value.length <= 254 && EMAIL_PATTERN.test(value);
+}
+
+function validHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
+function validatePublicBrief(values, files) {
+  for (const field of EMAIL_FIELDS) {
+    const value = values.get(field);
+    if (value && !validEmail(value)) throw new TypeError(`${field} is invalid.`);
+  }
+  if (values.get('website') && !validHttpUrl(values.get('website'))) throw new TypeError('website is invalid.');
+
+  for (const [field, allowed] of Object.entries(ENUM_VALUES)) {
+    const value = values.get(field);
+    if (value && !allowed.has(value)) throw new TypeError(`${field} is invalid.`);
+  }
+  for (const [field, allowed] of Object.entries(MULTI_ENUM_VALUES)) {
+    for (const value of presentList(values, field)) {
+      if (!allowed.has(value)) throw new TypeError(`${field} is invalid.`);
+    }
+  }
+
+  const goals = presentList(values, 'goals');
+  const sections = presentList(values, 'sections');
+  if (!goals.length) throw new TypeError('Intake goals are required.');
+  if (!sections.length) throw new TypeError('Intake website sections are required.');
+
+  for (const field of ['assets', 'proof']) {
+    const selected = presentList(values, field);
+    if (selected.includes('None yet') && selected.length !== 1) throw new TypeError(`${field} has conflicting values.`);
+  }
+
+  const cta = values.get('main_call_to_action');
+  const leadChoice = values.get('lead_form_needed');
+  const impliedLeadForm = cta === 'Request Estimate' || cta === 'Contact';
+  const includesLeadForm = impliedLeadForm || leadChoice === 'Yes';
+  if (!leadChoice || (impliedLeadForm && leadChoice !== 'Yes')) throw new TypeError('Lead-form choice is invalid.');
+  if (sections.includes('Contact or quote form') && !includesLeadForm) {
+    throw new TypeError('A contact-form section requires lead routing.');
+  }
+  if (includesLeadForm) {
+    if (leadChoice !== 'Yes' || !validEmail(values.get('lead_notification_email')) ||
+        !presentList(values, 'lead_form_fields').length) {
+      throw new TypeError('Verified lead routing details are required.');
+    }
+  }
+
+  const ctaDestination = values.get('cta_destination');
+  if (cta === 'Call') {
+    const digits = String(ctaDestination || '').replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) throw new TypeError('Call destination is invalid.');
+  }
+  if ((cta === 'Book Consultation' || cta === 'Order or Reserve') && !validHttpUrl(ctaDestination)) {
+    throw new TypeError('CTA destination is invalid.');
+  }
+
+  const proof = presentList(values, 'proof');
+  if (proof.some((value) => value !== 'None yet') && !values.get('proof_details')) {
+    throw new TypeError('Exact proof details are required.');
+  }
+  const assets = presentList(values, 'assets');
+  const hasSubmittedAsset = files.size > 0;
+  if ((hasSubmittedAsset || assets.includes('Logo') || assets.includes('Photos')) && values.get('asset_permission') !== 'Confirmed') {
+    throw new TypeError('Exact asset permission is required for submitted assets.');
+  }
+  if (files.has('logo_file') && !assets.includes('Logo')) throw new TypeError('Logo upload is missing its asset selection.');
+  if ((files.has('hero_image_file') || files.has('supporting_image_file')) && !assets.includes('Photos')) {
+    throw new TypeError('Photo upload is missing its asset selection.');
+  }
 }
 
 export async function normalizeIntakeForm(formData, now = new Date(), uuid = randomUUID) {
@@ -129,13 +239,7 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
   if (values.get('intake_version') !== INTAKE_VERSION || values.get('budget_confirmed') !== BUDGET_CONFIRMATION ||
       values.get('terms_accepted') !== TERMS_CONFIRMATION) throw new TypeError('Intake consent or version is invalid.');
   for (const field of REQUIRED_FIELDS) if (!values.get(field)) throw new TypeError(`Required intake field is missing: ${field}.`);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.get('email')) || values.get('email').length > 254) {
-    throw new TypeError('Intake email is invalid.');
-  }
-  if (!Array.isArray(values.get('goals')) || values.get('goals').filter(Boolean).length === 0) throw new TypeError('Intake goals are required.');
-  if (files.size > 0 && values.get('asset_permission') !== 'Confirmed') {
-    throw new TypeError('Exact asset permission is required for submitted assets.');
-  }
+  validatePublicBrief(values, files);
 
   const assets = [];
   let totalFileBytes = 0;

@@ -72,10 +72,14 @@ await assert.rejects(validateDecodableImageAsset(webp(), 'image/webp'), /fully d
 const undecodableForm = new FormData();
 for (const [key, value] of Object.entries({
   intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
-  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Estimate',
+  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
+  lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',
 })) undecodableForm.append(key, value);
-undecodableForm.append('goals', 'Calls');
+undecodableForm.append('goals', 'More calls');
+undecodableForm.append('lead_form_fields', 'Email');
+undecodableForm.append('sections', 'Contact or quote form');
+undecodableForm.append('assets', 'Logo');
 undecodableForm.append('logo_file', new Blob([validStructureInvalidIdat], { type: 'image/png' }), 'corrupt.png');
 let undecodableIdentityAllocations = 0;
 await assert.rejects(normalizeIntakeForm(undecodableForm, new Date(), () => {
@@ -97,11 +101,15 @@ class FakeStore {
 const form = new FormData();
 for (const [key, value] of Object.entries({
   intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
-  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Estimate',
+  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
+  lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed',
   'bot-field': '',
 })) form.append(key, value);
-form.append('goals', 'Calls');
+form.append('goals', 'More calls');
+form.append('lead_form_fields', 'Email');
+form.append('sections', 'Contact or quote form');
+form.append('assets', 'Logo');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 form.append('logo_file', new Blob([png], { type: 'image/png' }), 'logo.png');
 const now = new Date('2026-08-13T20:00:00.000Z');

@@ -56,6 +56,8 @@ const validForm = () => {
     city: 'Everett, WA',
     main_services: 'Roof replacement',
     main_call_to_action: 'Request Estimate',
+    lead_form_needed: 'Yes',
+    lead_notification_email: 'owner@example.test',
     primary_style: 'Modern',
     budget_confirmed: BUDGET_CONFIRMATION,
     terms_accepted: TERMS_CONFIRMATION,
@@ -63,6 +65,8 @@ const validForm = () => {
   })) form.append(field, value);
   form.append('goals', 'More calls');
   form.append('goals', 'Estimate requests');
+  form.append('lead_form_fields', 'Email');
+  form.append('sections', 'Contact or quote form');
   return form;
 };
 
@@ -122,13 +126,25 @@ const allNamedControlForm = () => {
     main_call_to_action: 'Request Estimate',
     main_services: 'Roof replacement',
     name: 'Test Owner',
+    lead_form_needed: 'Yes',
+    lead_form_fields: 'Email',
+    lead_notification_email: 'owner@example.test',
     primary_style: 'Modern',
+    public_email: 'public@example.test',
+    sections: 'Contact or quote form',
+    website: 'https://example.test',
+    brand_tone: 'Professional',
+    domain_status: 'I own a domain',
+    assets: 'Logo',
+    proof: 'Customer reviews',
+    proof_details: 'Verified review supplied by the customer.',
     terms_accepted: TERMS_CONFIRMATION,
   };
   for (const field of actualNamedControlFields) {
     if (INTAKE_FILE_FIELDS.includes(field)) form.append(field, pngBlob(), `${field}.png`);
     else form.append(field, exactValues[field] ?? 'Contract test value');
   }
+  form.append('assets', 'Photos');
   return form;
 };
 
@@ -163,12 +179,34 @@ assert.deepEqual(
 );
 assert.deepEqual(normalizedRealForm.record.asset_manifest.map(({ role }) => role).sort(), [...INTAKE_FILE_FIELDS].sort());
 
+const invalidCtaForm = validForm();
+invalidCtaForm.set('main_call_to_action', 'Invent a CTA');
+await assert.rejects(normalizeIntakeForm(invalidCtaForm), /main_call_to_action is invalid/i);
+const missingLeadRouteForm = validForm();
+missingLeadRouteForm.delete('lead_notification_email');
+await assert.rejects(normalizeIntakeForm(missingLeadRouteForm), /lead routing details are required/i);
+const invalidWebsiteForm = validForm();
+invalidWebsiteForm.set('website', 'javascript:alert(1)');
+await assert.rejects(normalizeIntakeForm(invalidWebsiteForm), /website is invalid/i);
+const duplicateGoalForm = validForm();
+duplicateGoalForm.append('goals', 'More calls');
+await assert.rejects(normalizeIntakeForm(duplicateGoalForm), /goals contains duplicate values/i);
+const unsupportedGoalForm = validForm();
+unsupportedGoalForm.set('goals', 'Guaranteed revenue');
+await assert.rejects(normalizeIntakeForm(unsupportedGoalForm), /goals is invalid/i);
+const unsupportedProofForm = validForm();
+unsupportedProofForm.append('proof', 'Customer reviews');
+await assert.rejects(normalizeIntakeForm(unsupportedProofForm), /proof details are required/i);
+
 const tooLargeFileForm = validForm();
 tooLargeFileForm.append('asset_permission', 'Confirmed');
+tooLargeFileForm.append('assets', 'Logo');
 tooLargeFileForm.append('logo_file', pngBlob(INTAKE_MAX_FILE_BYTES + 1), 'logo.png');
 await assert.rejects(normalizeIntakeForm(tooLargeFileForm), /file size is invalid/i);
 const tooLargeTotalForm = validForm();
 tooLargeTotalForm.append('asset_permission', 'Confirmed');
+tooLargeTotalForm.append('assets', 'Logo');
+tooLargeTotalForm.append('assets', 'Photos');
 for (const field of INTAKE_FILE_FIELDS) {
   const size = field === INTAKE_FILE_FIELDS.at(-1) ? 1_000_001 : 1_000_000;
   tooLargeTotalForm.append(field, pngBlob(size), `${field}.png`);

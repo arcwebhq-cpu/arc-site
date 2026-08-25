@@ -437,10 +437,13 @@ assert.equal(incrementalDuplicateAlerts.values.size, 1);
 const intakeForm = new FormData();
 for (const [field, value] of Object.entries({
   intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
-  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Estimate',
+  industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
+  lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, 'bot-field': '',
 })) intakeForm.append(field, value);
-intakeForm.append('goals', 'Calls');
+intakeForm.append('goals', 'More calls');
+intakeForm.append('lead_form_fields', 'Email');
+intakeForm.append('sections', 'Contact or quote form');
 const intakeNormalized = await normalizeIntakeForm(intakeForm, old, () => '44444444-4444-4444-8444-444444444444');
 await intake.setJSON(intakeNormalized.key, {
   ...intakeNormalized.record,

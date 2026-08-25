@@ -57,9 +57,13 @@ for (const [field, value] of Object.entries({
   intake_version: 'arc-intake-v7', name: 'Private Adapter Owner', email: 'adapter-owner@example.test',
   business: 'Private Adapter Roofing', industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement',
   main_call_to_action: 'Request Estimate', budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION,
+  lead_form_needed: 'Yes', lead_notification_email: 'adapter-owner@example.test', primary_style: 'Modern',
   asset_permission: 'Confirmed', 'bot-field': '',
 })) form.append(field, value);
-form.append('goals', 'More qualified calls');
+form.append('goals', 'More calls');
+form.append('lead_form_fields', 'Email');
+form.append('sections', 'Contact or quote form');
+form.append('assets', 'Logo');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 form.append('logo_file', new Blob([png], { type: 'image/png' }), 'logo.png');
 const normalized = await normalizeIntakeForm(form, now, () => submissionId);
