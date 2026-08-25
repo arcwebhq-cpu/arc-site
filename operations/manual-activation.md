@@ -39,16 +39,24 @@ Official starting points:
 
 ## 2. Connect the real ARC Stripe account
 
-The account observed during the August 24, 2026 audit is the ARC Stripe account.
-Stripe reported charges and payouts enabled, details submitted, and an adult
-representative present. That is **not** launch proof. The public business profile
-still described an unrelated sunglasses business and linked the old Netlify URL;
-support email and support URL were absent. Stripe Tax was pending because the
-head office was missing, no tax registration existed in Stripe, both observed
-live reusable Payment Links had automatic tax disabled, and no webhook endpoint
-was configured. One active recurring support product/link also contradicted the
-published one-time, no-renewal scope. Keep every live link private and inactive
-for selling until the adult operator corrects and re-verifies those facts.
+The only connected context observed during the August 25, 2026 audit was the ARC
+live Stripe account; no ARC test or sandbox context was available. Stripe
+reported charges and payouts enabled, details submitted, and a representative
+record present; the accessible fields did not verify legal age or contracting
+authority. The public profile now identifies ARC, links
+`https://arcweb.onl`, and has support contact details configured. Those
+improvements are **not** launch proof. Stripe Tax remains pending because the
+head office is missing, no tax registration exists in Stripe, automatic tax is
+disabled on the observed live link, and no webhook endpoint is configured.
+
+The active website-build link is for the correct $5,000 USD one-time amount, but
+it has no successful payments, uses Stripe's hosted confirmation instead of the
+verified ARC success handoff, does not require terms consent, and collects a
+phone number. A stale active $100 Price has one successful live payment that
+remains unrefunded. An active $500 monthly support offer has no subscriptions but
+contradicts the published one-time, no-renewal scope. Do not distribute any live
+link or enable live selling until the adult operator resolves and re-verifies
+every mismatch, including the historical $100 payment.
 
 In the correct ARC account, the adult representative must complete verification,
 bank/payout ownership, business/public details, support contact, statement
@@ -74,15 +82,28 @@ must be byte-for-byte identical; a conflict keeps the handoff disabled.
 
 ## 3. Connect the ARC Netlify handoff account
 
-The August 24, 2026 hosting audit confirmed that `arcweb.onl` is already served
-by the `arcsites` Netlify project on a legacy owner team, Git-linked to the ARC
-site repository, and deployed from the reviewed main commit. The ARC browser
-session can view deploy metadata but cannot open that project's settings. A
-separate ARC-team recovery mirror was created with no custom domain and no
-environment variables; it must stay disabled and must not be treated as the
-production identity. Obtain authorized membership in the legacy owner team
-before editing production settings. Do not recreate the live project, move the
-domain, or change Netlify DNS during this access step.
+The August 25, 2026 deployment observation confirmed that both `arcweb.onl` and
+`arcsites.netlify.app` served the exact reviewed index bytes from main commit
+`5c4b853133e526f7ccbbf7d4e44a006a172f1fd0`; the reviewed build and both live
+responses had SHA-256
+`2811e658cd21ea93d025ee8c9802400a7f49b8835e9d2b81d574ce9a54b7d3ea`.
+GitHub Actions run `32821861690` (`ARC site quality`) completed successfully,
+and the public readiness endpoint still reported `intake_enabled=false`. This
+proves the observed public build identity only. It does not prove access to the
+production provider settings, Function-scoped environment values, webhook or
+workflow routing, or any activation gate.
+
+The production project remains on its legacy owner team, and a separate ARC-team
+recovery mirror with no custom domain or environment variables must stay
+disabled and must not be treated as the production identity. Obtain authorized
+membership in the legacy owner team before editing production settings. Do not
+recreate the live project, move the domain, or change Netlify DNS during this
+access step.
+
+Do not add a catch-all redirect from `arcsites.netlify.app` to `arcweb.onl` until
+every provider callback, webhook, API, claim, and stored workflow URL using the
+alias has been inventoried and migrated. Alias retirement is deliberately
+deferred; an early redirect could break non-browser provider traffic.
 
 The adult account holder must supply the real ARC team slug/account ID, a
 least-privilege deployment credential, an OAuth client ID/secret, approved
@@ -159,10 +180,11 @@ paused browser UI. An enabled build posts only to the first-party
 `/api/intake/submit` Function, which rechecks readiness before a private Blob
 write. The default build still strips the POST method and endpoint.
 
-The repository now contains a **default-OFF, not-yet-deployed** first-party ARC1
-adapter for `arc-intake-function-submission-v1`. A normal Zapier Catch Hook is
-not the bridge endpoint and cannot produce ARC's synchronous response. The
-reviewed endpoint value is
+The repository and observed production commit now contain the **default-OFF**
+first-party ARC1 adapter for `arc-intake-function-submission-v1`. Its presence in
+the deployed commit is not provider activation: no provider invocation or exact
+signed ACK has been verified. A normal Zapier Catch Hook is not the bridge
+endpoint and cannot produce ARC's synchronous response. The reviewed endpoint is
 `https://arcweb.onl/internal/intake/arc1/adapter`. Before its exact signed ACK,
 the adapter re-creates and authenticates the canonical bridge envelope, reads
 the source through strong Blob consistency, validates the actual stored image
@@ -193,9 +215,10 @@ rotation procedure is also a pre-activation requirement. The recovery endpoint
 has no schedule and must be called with each authenticated `next_cursor` until
 `RECOVERY_COMPLETE` during a disabled test.
 
-Public intake remains disabled until the repo-local adapter is deployed and its
-exact ACK, asset, retry, dedupe, secret-boundary, completion-receipt, and alert
-paths are proven against the unpublished downstream workflow. Only then may
+Public intake remains disabled until the deployed adapter is exercised through a
+provider-disabled test and its exact ACK, asset, retry, dedupe, secret-boundary,
+completion-receipt, and alert paths are proven against the unpublished
+downstream workflow. Only then may
 `arc1_consumer_adapter_verified` change to `true` and a reviewed deploy set
 `ARC_BUILD_INTAKE_ENABLED=true`. The build writes an immutable
 `arc-intake-build-marker-v1` literal into the same Function bundle and compiles

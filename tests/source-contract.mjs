@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
-const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status, intakeSubmissionCore, intakeSubmit] = await Promise.all([
+const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, manualActivation, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status, intakeSubmissionCore, intakeSubmit] = await Promise.all([
   readFile(new URL('index.html', root), 'utf8'),
   readFile(new URL('thank-you/index.html', root), 'utf8'),
   readFile(new URL('payment-success/index.html', root), 'utf8'),
@@ -15,6 +15,7 @@ const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, r
   readFile(new URL('robots.txt', root), 'utf8'),
   readFile(new URL('sitemap.xml', root), 'utf8'),
   readFile(new URL('operations/readiness.json', root), 'utf8'),
+  readFile(new URL('operations/manual-activation.md', root), 'utf8'),
   readFile(new URL('operations/data-retention.md', root), 'utf8'),
   readFile(new URL('operations/customer-email-contract.md', root), 'utf8'),
   readFile(new URL('netlify.toml', root), 'utf8'),
@@ -279,6 +280,28 @@ for (const path of ['/', '/service-scope/', '/terms/', '/privacy/', '/refunds/']
 assert.doesNotMatch(sitemap, /thank-you/);
 
 assert.equal(readiness.schema, 'arc-operations-readiness-v1');
+assert.equal(readiness.reviewed_at, '2026-08-25');
+assert.deepEqual(readiness.deployment_observation, {
+  observed_at: '2026-08-25',
+  repository_ref: 'main',
+  repository_commit_sha: '5c4b853133e526f7ccbbf7d4e44a006a172f1fd0',
+  repository_tree_sha: '5e3e6dd5fa425ed6a9820c62873be43874fc65b0',
+  quality_workflow_name: 'ARC site quality',
+  quality_workflow_run_id: 32821861690,
+  quality_workflow_conclusion: 'success',
+  canonical_origin: 'https://arcweb.onl',
+  legacy_alias_origin: 'https://arcsites.netlify.app',
+  reviewed_build_index_sha256: '2811e658cd21ea93d025ee8c9802400a7f49b8835e9d2b81d574ce9a54b7d3ea',
+  canonical_live_index_sha256: '2811e658cd21ea93d025ee8c9802400a7f49b8835e9d2b81d574ce9a54b7d3ea',
+  legacy_alias_live_index_sha256: '2811e658cd21ea93d025ee8c9802400a7f49b8835e9d2b81d574ce9a54b7d3ea',
+  reviewed_build_and_live_index_bytes_match: true,
+  public_intake_readiness: {
+    schema: 'arc-intake-readiness-v1',
+    intake_enabled: false,
+  },
+  legacy_alias_redirect_status: 'deferred-pending-provider-url-inventory',
+  production_activation_claim_allowed: false,
+});
 assert.deepEqual(readiness.offer, {
   currency: 'USD',
   subtotal_amount: 5000,
@@ -290,6 +313,62 @@ assert.equal(readiness.checkout.status, 'blocked');
 assert.equal(readiness.checkout.allowed_mode, 'test-only');
 assert.ok(readiness.checkout.required_evidence.includes('adult-purchaser-affirmative-acceptance'));
 assert.ok(readiness.checkout.required_evidence.includes('automatic-tax-complete'));
+assert.equal(readiness.checkout.blockers.includes('arc-stripe-public-profile-is-stale'), false);
+for (const blocker of [
+  'stripe-test-or-sandbox-context-unavailable',
+  'live-website-build-link-has-no-verified-success-handoff',
+  'active-monthly-support-offer-conflicts-with-published-one-time-scope',
+  'stale-live-100-dollar-price-and-unrefunded-payment-require-adult-review',
+]) assert.ok(readiness.checkout.blockers.includes(blocker));
+assert.deepEqual(readiness.checkout.provider_observation, {
+  observed_at: '2026-08-25',
+  account_name: 'ARC',
+  connected_context_count: 1,
+  connected_context_modes: ['live'],
+  test_or_sandbox_context_available: false,
+  charges_enabled: true,
+  payouts_enabled: true,
+  details_submitted: true,
+  representative_record_present: true,
+  representative_legal_age_verified: false,
+  representative_contracting_authority_verified: false,
+  public_profile_matches_arc: true,
+  public_profile_url: 'https://arcweb.onl',
+  support_contact_configured: true,
+  tax_status: 'pending',
+  head_office_configured: false,
+  tax_registration_count: 0,
+  automatic_tax_on_observed_live_links: false,
+  webhook_endpoint_count: 0,
+  live_website_build_payment_link: {
+    active: true,
+    currency: 'USD',
+    amount_minor: 500000,
+    automatic_tax_enabled: false,
+    billing_address_collection: 'auto',
+    phone_collection_enabled: true,
+    tax_id_collection_enabled: false,
+    invoice_creation_enabled: false,
+    promotion_codes_enabled: false,
+    terms_of_service_consent_required: false,
+    success_behavior: 'stripe-hosted-confirmation-only',
+    successful_payment_count: 0,
+  },
+  stale_legacy_100_dollar_price: {
+    active: true,
+    successful_live_payment_count: 1,
+    unrefunded_live_payment_count: 1,
+  },
+  monthly_support_offer: {
+    active: true,
+    currency: 'USD',
+    amount_minor: 50000,
+    interval: 'month',
+    successful_subscription_count: 0,
+    conflicts_with_published_offer: true,
+  },
+  live_checkout_activation_allowed: false,
+});
 assert.equal(readiness.checkout.sandbox_evidence.length, 1);
 assert.deepEqual(readiness.checkout.sandbox_evidence[0], {
   observed_at: '2026-08-13',
@@ -357,7 +436,17 @@ assert.equal(readiness.intake_trust_boundary.client_hidden_fields_are_authoritat
 assert.equal(readiness.intake_routing.native_netlify_form_registered, false);
 assert.equal(readiness.intake_routing.submission_endpoint, 'Netlify Function /api/intake/submit');
 assert.equal(readiness.intake_routing.stored_schema, 'arc-intake-function-submission-v1');
+assert.equal(readiness.intake_routing.workflow_route, 'first-party-adapter-present-downstream-provider-proof-required');
 assert.equal(readiness.intake_routing.arc1_consumer_compatible, false);
+assert.deepEqual(readiness.intake_routing.arc1_adapter_observation, {
+  observed_at: '2026-08-25',
+  endpoint: '/internal/intake/arc1/adapter',
+  deployment_state: 'present-in-observed-production-commit',
+  activation_state: 'default-off',
+  provider_invocation_verified: false,
+  signed_ack_verified: false,
+  consumer_completion_verified: false,
+});
 assert.ok(readiness.intake_routing.verification_requirements.includes('build-runtime-gate-blocks-before-body-parse-and-storage'));
 assert.ok(readiness.intake_routing.verification_requirements.includes('same-deploy-immutable-build-marker-enabled'));
 assert.ok(readiness.intake_routing.verification_requirements.includes('provider-form-detection-disabled-and-legacy-direct-post-rejected-after-deploy'));
@@ -405,6 +494,16 @@ assert.equal(readiness.legal_and_outreach_compliance.adult_contracting_represent
 assert.equal(readiness.legal_and_outreach_compliance.legal_operator, null);
 assert.equal(readiness.legal_and_outreach_compliance.mailing_address, null);
 assert.equal(readiness.legal_and_outreach_compliance.apollo_must_remain_off, true);
+assert.match(manualActivation, /only connected context observed during the August 25, 2026 audit was the ARC\s+live Stripe account/i);
+assert.match(manualActivation, /representative\s+record present; the accessible fields did not verify legal age or contracting\s+authority/i);
+assert.match(manualActivation, /public profile now identifies ARC, links\s+`https:\/\/arcweb\.onl`, and has support contact details configured/i);
+assert.match(manualActivation, /stale active \$100 Price has one successful live payment that\s+remains unrefunded/i);
+assert.match(manualActivation, /active \$500 monthly support offer has no subscriptions but\s+contradicts the published one-time, no-renewal scope/i);
+assert.doesNotMatch(manualActivation, /unrelated sunglasses business|default-OFF, not-yet-deployed/i);
+assert.match(manualActivation, /observed production commit now contain the \*\*default-OFF\*\*[\s\S]*?no provider invocation or exact\s+signed ACK has been verified/i);
+assert.match(manualActivation, /Do not add a catch-all redirect from `arcsites\.netlify\.app` to `arcweb\.onl` until\s+every provider callback, webhook, API, claim, and stored workflow URL/i);
+assert.doesNotMatch(netlifyConfig, /from = "https:\/\/arcsites\.netlify\.app\/\*"/,
+  'The legacy alias redirect must remain deferred until provider URLs are inventoried.');
 assert.match(netlifyConfig, /from = "\/operations\/\*"[\s\S]*?status = 404[\s\S]*?force = true/);
 assert.match(netlifyConfig, /from = "\/tests\/\*"[\s\S]*?status = 404[\s\S]*?force = true/);
 assert.match(netlifyConfig, /\[functions\][\s\S]*?directory = "netlify\/functions"/);
