@@ -77,9 +77,16 @@ export function expirationTimestamp(receivedAt) {
   return started + RETENTION_DAYS * 24 * 60 * 60 * 1000;
 }
 
+export function expirationTimestampFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) ||
+      !Number.isSafeInteger(metadata.expires_at) || metadata.expires_at <= 0) return null;
+  return metadata.expires_at;
+}
+
 export function isExpiredMetadata(metadata, now = new Date()) {
-  const expiry = Number(metadata?.expires_at);
-  return Number.isFinite(expiry) && expiry <= new Date(now).getTime();
+  const expiry = expirationTimestampFromMetadata(metadata);
+  const currentTime = new Date(now).getTime();
+  return expiry !== null && Number.isFinite(currentTime) && expiry <= currentTime;
 }
 
 export function aggregateAnalytics(events, now = new Date()) {
