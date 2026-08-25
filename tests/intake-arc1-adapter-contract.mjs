@@ -298,7 +298,7 @@ try {
 
   // Prove byte-for-byte compatibility with the committed downstream verifier,
   // private asset consumer, and acknowledgement producer in the paired repo.
-  const previewRoot = new URL(`${process.env.ARC_PREVIEWS_DIR || '../arc-previews-launch'}/`, new URL(`file://${process.cwd()}/`));
+  const previewRoot = new URL(`${process.env.ARC_PREVIEWS_DIR || '../arc-previews'}/`, new URL(`file://${process.cwd()}/`));
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const runCodeStep = async (file, inputData, fetchImpl = globalThis.fetch) => {
     const source = await readFile(new URL(`zapier/${file}`, previewRoot), 'utf8');
