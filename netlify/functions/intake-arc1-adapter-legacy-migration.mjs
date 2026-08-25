@@ -1,0 +1,41 @@
+import { getStore } from '@netlify/blobs';
+
+import {
+  INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH,
+  INTAKE_ARC1_ADAPTER_STORE,
+  arc1AdapterLegacyMigrationEnabled,
+  authorizeArc1AdapterDispatch,
+  migrateLegacyArc1AdapterRecords,
+} from '../lib/intake-arc1-adapter-core.mjs';
+
+const headers = Object.freeze({
+  'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8',
+  'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
+  'X-Robots-Tag': 'noindex, nofollow, noarchive',
+});
+const json = (status, value) => new Response(JSON.stringify(value), { status, headers });
+
+export function createIntakeArc1AdapterLegacyMigrationHandler() {
+  return async (request, context = {}) => {
+    if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+    if (!authorizeArc1AdapterDispatch(request, process.env)) return json(401, { error: 'unauthorized' });
+    if (!arc1AdapterLegacyMigrationEnabled(process.env)) {
+      return json(503, { error: 'migration_disabled' });
+    }
+    try {
+      const result = await migrateLegacyArc1AdapterRecords(request, process.env,
+        context.adapterStore || getStore({ name: INTAKE_ARC1_ADAPTER_STORE, consistency: 'strong' }),
+        Object.hasOwn(context, 'cursor') ? { cursor: context.cursor } : {});
+      return json(200, { schema: 'arc-intake-arc1-adapter-legacy-migration-result-v1', ...result });
+    } catch (error) {
+      if (error instanceof TypeError) return json(400, { error: 'invalid_request' });
+      return json(503, { error: 'migration_unavailable' });
+    }
+  };
+}
+
+export default createIntakeArc1AdapterLegacyMigrationHandler();
+export const config = {
+  path: INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH, method: 'POST',
+  rateLimit: { windowLimit: 1, windowSize: 60, aggregateBy: ['ip', 'domain'] },
+};

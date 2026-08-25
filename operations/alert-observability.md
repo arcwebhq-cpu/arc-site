@@ -30,7 +30,11 @@ resume until `AUDIT_COMPLETE`. The private ARC1 recovery endpoint likewise uses
 signed cursor-resumable UUID shards, at most 20 dispatch attempts/100 reads per
 call, and a shared 8-second deadline. The separate first-party ARC1 adapter
 recovery endpoint uses signed cursor-resumable HMAC shards with the same bounded
-attempt/read/deadline policy. It records only hook ingress acceptance; a Zapier
-Catch Hook HTTP 200 is not a workflow-completion or delivery receipt.
+attempt/read/deadline policy. A Zapier Catch Hook HTTP 200 is transport-only and
+keeps the job pending. Recovery never reposts a hook-accepted packet: it monitors
+the 15-minute awaiting-claim deadline and 30-minute active claim, moves stale
+work to `REVIEW_REQUIRED`, creates a pseudonymous review index before pending
+cleanup, and leaves resolution manual. Signed completion is the only ordinary
+path to `COMPLETED`. No automatic claim reassignment exists in this release.
 
 Before `failure_alert_verified` can be true, build a separate alert consumer with create-only send attempts, a verified ARC recipient, provider delivery receipts, escalation/acknowledgement, retry limits, and a synthetic stuck-state test. Keep the audit endpoint disabled until its store bounds and recipient workflow are reviewed. Neither endpoint has a schedule, and alert delivery remains unimplemented.

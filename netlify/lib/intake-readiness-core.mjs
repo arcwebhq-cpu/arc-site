@@ -89,6 +89,8 @@ export function intakeArc1AdapterProofFromEnvironment(env = process.env, now = n
 export function intakeArc1RuntimeReady(request, env = process.env, now = new Date()) {
   if (env.ARC_INTAKE_ARC1_BRIDGE_ENABLED !== 'true' || env.ARC_INTAKE_ARC1_DISPATCH_ENABLED !== 'true' ||
       env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
+      env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED !== 'true' ||
+      env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED !== 'true' ||
       env[INTAKE_PRIVATE_ASSET_ENABLED_ENV] !== 'true' ||
       !INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED || !intakeArc1AdapterProofFromEnvironment(env, now)) return false;
   try {
@@ -102,6 +104,8 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
       'ARC_INTAKE_ARC1_RUN_SECRET',
       'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
       'ARC1_ASSET_RECEIPT_SECRET', 'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER',
+      'ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
+      'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET',
       INTAKE_IDEMPOTENCY_SECRET_ENV,
     ];
     const secrets = required.map((name) => env[name]);
