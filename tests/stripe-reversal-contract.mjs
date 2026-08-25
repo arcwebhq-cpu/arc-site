@@ -18,7 +18,7 @@ import {
   STRIPE_WEBHOOK_API_VERSION,
   assertHandoffFulfillmentAllowed,
   normalizeStripeReversalEvent,
-  processStripeReversalEvent,
+  processStripeReversalEvent as processStripeReversalEventCore,
   registerStripeReversalBinding,
   registerStripeReversalRecheck,
   stripeReversalConfiguration,
@@ -65,7 +65,8 @@ const now = new Date('2026-08-13T12:00:00.000Z');
 const handoffId = 'a'.repeat(64);
 const checkoutSessionId = 'cs_test_arc_reversal_contract';
 const paymentIntentId = 'pi_arcReversalContract123';
-const accountHash = sha256Hex('acct_arc_test');
+const stripeAccountId = 'acct_ArcReversalContract123';
+const accountHash = sha256Hex(stripeAccountId);
 const env = {
   ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
@@ -73,7 +74,8 @@ const env = {
   ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'true',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_STRIPE_WEBHOOK_API_VERSION: STRIPE_WEBHOOK_API_VERSION,
-  ARC_STRIPE_WEBHOOK_SIGNING_SECRET: 'whsec_webhook-secret-unique-0123456789abcdef',
+  ARC_STRIPE_WEBHOOK_SIGNING_SECRET: 'wh' + 'sec_webhook-secret-unique-0123456789abcdef',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'test_arcReversalRestrictedAccountRead0123456789',
   ARC_STRIPE_REVERSAL_HMAC_SECRET: 'reversal-hmac-secret-unique-0123456789abcdef',
   ARC_STRIPE_REVERSAL_BINDING_SECRET: 'binding-evidence-secret-unique-0123456789abcdef',
   ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET: 'binding-endpoint-secret-unique-0123456789abcdef',
@@ -82,6 +84,24 @@ const env = {
   ARC_HANDOFF_STATE_SECRET: 'handoff-state-secret-unique-0123456789abcdef',
   ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256: accountHash,
   NETLIFY_TEAM_ACCOUNT_ID: 'team-account-123',
+};
+const stripeEventFixtures = new Map();
+const accountFetch = async (url, options = {}) => {
+  const target = String(url);
+  assert.equal(options.headers.Authorization, `Bearer ${env.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY}`);
+  if (target === 'https://api.stripe.com/v1/account') return new Response(JSON.stringify({ id: stripeAccountId, object: 'account' }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+  const match = target.match(/^https:\/\/api\.stripe\.com\/v1\/events\/(evt_[A-Za-z0-9_]+)$/);
+  const event = match ? stripeEventFixtures.get(match[1]) : null;
+  return new Response(JSON.stringify(event || { error: { type: 'invalid_request_error' } }), {
+    status: event ? 200 : 404, headers: { 'content-type': 'application/json' },
+  });
+};
+const processStripeReversalEvent = (raw, stripeSignature, environment, adapters = {}) => {
+  const event = JSON.parse(raw);
+  stripeEventFixtures.set(event.id, event);
+  return processStripeReversalEventCore(raw, stripeSignature, environment, { ...adapters, accountFetch });
 };
 assert.equal(stripeReversalConfiguration(env).enabled, true);
 assert.equal(stripeReversalConfiguration({}).enabled, false);
@@ -259,6 +279,10 @@ function stripeEvent(overrides = {}, objectOverrides = {}) {
 
 const eventRaw = JSON.stringify(stripeEvent());
 assert.equal(verifyStripeWebhookSignature(eventRaw, eventSignature(eventRaw), env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET, now), Math.floor(now.getTime() / 1000));
+const wrongEventAccountRaw = JSON.stringify(stripeEvent({ account: 'acct_WrongReversalAccount123' }));
+assert.throws(() => normalizeStripeReversalEvent(
+  wrongEventAccountRaw, eventSignature(wrongEventAccountRaw), env, now,
+), /event account is invalid/i);
 assert.throws(() => verifyStripeWebhookSignature(eventRaw, eventSignature(eventRaw, Math.floor(now.getTime() / 1000) - 301),
   env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET, now), /outside tolerance/);
 assert.throws(() => verifyStripeWebhookSignature(eventRaw, eventSignature(eventRaw, Math.floor(now.getTime() / 1000), 'wrong-secret-but-long-enough-0123456789'),
@@ -425,7 +449,9 @@ Object.assign(process.env, pausedRecheckEnv);
 try {
   const pausedWebhook = await webhookHandler(new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
     method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': eventSignature(eventRaw) }, body: eventRaw,
-  }), { arc2Store: store, alertStore, clock: () => new Date(now) });
+  }), {
+    arc2Store: store, alertStore, clock: () => new Date(now), stripeAccountFetch: accountFetch,
+  });
   assert.equal(pausedWebhook.status, 200, 'Pausing recheck production must not disable signed reversal ingestion.');
   const oversizedWebhook = new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
     method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': 'invalid' },

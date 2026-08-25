@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { validateDecodableImageAsset } from './image-asset-validation.mjs';
 
 export const INTAKE_STORE = 'arc-intake-submissions';
@@ -8,6 +8,8 @@ export const INTAKE_ARC1_DELIVERY_SCHEMA = 'arc-intake-arc1-delivery-state-v1';
 export const INTAKE_ARC1_DISPATCH_SCHEMA = 'arc-intake-arc1-dispatch-state-v1';
 export const INTAKE_ASSET_REFERENCE_SCHEMA = 'arc-intake-private-asset-reference-v1';
 export const INTAKE_VERSION = 'arc-intake-v7';
+export const INTAKE_IDEMPOTENCY_SECRET_ENV = 'ARC_INTAKE_IDEMPOTENCY_SECRET';
+export const INTAKE_REQUEST_ID_PREFIX = 'arc-intake-request-id-v1\n';
 export const BUDGET_CONFIRMATION = 'Yes, understands the finished ARC website subtotal is $5,000 plus applicable sales tax only after preview approval';
 export const TERMS_CONFIRMATION = 'Accepted ARC preview terms, privacy policy, refund policy, and service scope dated 2026-08-12; separate adult checkout acceptance required';
 export const INTAKE_MAX_REQUEST_BYTES = 4_000_000;
@@ -24,7 +26,7 @@ export const INTAKE_SINGLE_FIELDS = Object.freeze([
   'industry', 'intake_version', 'landing_path', 'last_step_reached', 'lead_form_needed', 'lead_notification_email',
   'main_call_to_action', 'main_offer', 'main_services', 'name', 'primary_style', 'public_address', 'public_email', 'public_phone',
   'reference_site_likes', 'referrer_host', 'social_links', 'target_customer', 'terms_accepted', 'utm_campaign',
-  'utm_content', 'utm_medium', 'utm_source', 'utm_term', 'website', 'why_choose_you', 'proof_details', 'bot-field',
+  'utm_content', 'utm_medium', 'utm_source', 'utm_term', 'website', 'why_choose_you', 'proof_details', 'submission_request_id', 'bot-field',
 ]);
 export const INTAKE_ALLOWED_FIELDS = Object.freeze([
   ...INTAKE_FILE_FIELDS,
@@ -59,6 +61,13 @@ const MULTI_ENUM_VALUES = Object.freeze({
   sections: new Set(['About', 'Contact or quote form', 'FAQ', 'Gallery', 'Location and hours', 'Process', 'Reviews', 'Services']),
 });
 const EMAIL_FIELDS = Object.freeze(['email', 'lead_notification_email', 'public_email']);
+
+export function intakeIdempotencyConfigured(env = process.env) {
+  const secret = env[INTAKE_IDEMPOTENCY_SECRET_ENV];
+  if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32 || Buffer.byteLength(secret, 'utf8') > 256) return false;
+  return !Object.entries(env).some(([name, value]) => name !== INTAKE_IDEMPOTENCY_SECRET_ENV &&
+    /(?:SECRET|TOKEN|PAT)$/.test(name) && typeof value === 'string' && value.length > 0 && value === secret);
+}
 
 export function createInitialArc1DeliveryState(receivedAt) {
   const nextAttemptAt = new Date(receivedAt);
@@ -206,7 +215,19 @@ function validatePublicBrief(values, files) {
   }
 }
 
-export async function normalizeIntakeForm(formData, now = new Date(), uuid = randomUUID) {
+function deterministicSubmissionIdentity(requestId, secret) {
+  if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32 || Buffer.byteLength(secret, 'utf8') > 256) {
+    throw new TypeError('Intake idempotency secret is unavailable.');
+  }
+  const digest = createHmac('sha256', secret).update(`${INTAKE_REQUEST_ID_PREFIX}${requestId}`).digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function normalizeIntakeForm(formData, now = new Date(), uuid = randomUUID, options = {}) {
   if (!formData || typeof formData.entries !== 'function') throw new TypeError('Multipart form data is required.');
   const values = new Map();
   const files = new Map();
@@ -239,6 +260,10 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
   if (values.get('intake_version') !== INTAKE_VERSION || values.get('budget_confirmed') !== BUDGET_CONFIRMATION ||
       values.get('terms_accepted') !== TERMS_CONFIRMATION) throw new TypeError('Intake consent or version is invalid.');
   for (const field of REQUIRED_FIELDS) if (!values.get(field)) throw new TypeError(`Required intake field is missing: ${field}.`);
+  const requestId = values.get('submission_request_id');
+  if ((requestId || options.idempotencySecret) && !UUID_PATTERN.test(String(requestId || ''))) {
+    throw new TypeError('Intake request identity is invalid.');
+  }
   validatePublicBrief(values, files);
 
   const assets = [];
@@ -268,8 +293,11 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
 
   const receivedAt = new Date(now);
   if (!Number.isFinite(receivedAt.getTime())) throw new TypeError('Server time is invalid.');
-  const submissionId = uuid();
+  const submissionId = options.idempotencySecret
+    ? deterministicSubmissionIdentity(requestId, options.idempotencySecret)
+    : uuid();
   if (!UUID_PATTERN.test(submissionId)) throw new TypeError('Secure submission identity is unavailable.');
+  values.delete('submission_request_id');
   const data = Object.fromEntries([...values.entries()].sort(([left], [right]) => left.localeCompare(right)));
   assets.sort((left, right) => left.role.localeCompare(right.role));
   const manifest = assets.map(({ content_base64, content_utf8, ...asset }) => asset);

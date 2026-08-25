@@ -52,6 +52,10 @@ import {
   STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
   assertHandoffFulfillmentAllowed,
 } from './stripe-reversal-core.mjs';
+import {
+  assertHandoffStripeCheckoutPaid,
+  bindStripeCheckoutToHandoff,
+} from './stripe-checkout-core.mjs';
 
 const LEAD_ROUTE_RECEIPT_VERSION = 'arc2-lead-route-inbox-receipt-v1';
 const LEAD_ROUTE_RECEIPT_SCOPE = 'authoritative-lead-route-inbox-receipt';
@@ -265,7 +269,18 @@ async function assertProviderMutationAllowed(record, env, adapters, operation) {
     await adapters.beforeProviderMutation(operation, record);
   }
   const clock = adapters.clock || (() => new Date());
-  await assertHandoffFulfillmentAllowed(adapters.store, record.handoff_id, env, { now: clock() });
+  await assertCheckoutAndReversalAllowed(record, env, adapters, { now: clock() });
+}
+
+async function assertCheckoutAndReversalAllowed(record, env, adapters, reversalOptions = {}) {
+  await assertHandoffStripeCheckoutPaid(
+    adapters.store,
+    record.handoff_id,
+    record.payment_evidence_sha256,
+    env,
+    { accountFetch: adapters.stripeAccountFetch },
+  );
+  await assertHandoffFulfillmentAllowed(adapters.store, record.handoff_id, env, reversalOptions);
 }
 
 async function clearRetryableProviderIntent(adapters, key, entry, attemptedField, attemptedValue, completedField, clock) {
@@ -497,8 +512,23 @@ export async function startHandoff(input, env, adapters = {}) {
   const fetchImpl = adapters.fetch || fetch;
   let normalized = normalizeStartPayload(input, env, clock(), { enforceFreshness: false });
   normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
+  if (normalized.payment.value.client_reference_mismatch_review_required) {
+    throw new Error('ARC2_CHECKOUT_REFERENCE_REVIEW_REQUIRED');
+  }
   const key = handoffKey(normalized.payment.value, env.ARC_HANDOFF_STATE_SECRET);
   const handoffId = handoffIdFromKey(key);
+  // Live fulfillment requires a separately authenticated, durable Checkout
+  // webhook receipt plus an immutable handoff binding. This runs before any
+  // handoff reservation, state mutation, or provider request and is a no-op
+  // only in an explicitly configured sandbox exercise.
+  await bindStripeCheckoutToHandoff(
+    adapters.store,
+    handoffId,
+    normalized.payment.value,
+    normalized.payment.digest,
+    env,
+    { accountFetch: adapters.stripeAccountFetch },
+  );
   let entry = await readEntry(adapters.store, key);
   const checkoutIndexKey = checkoutSessionIndexKey(normalized.payment.value, env);
   const checkoutIndexValue = checkoutSessionIndexValue(handoffId, normalized);
@@ -553,7 +583,7 @@ export async function startHandoff(input, env, adapters = {}) {
     // the handoff and stop here until the verified Checkout Session ->
     // PaymentIntent binding is registered. No provider mutation happens first.
     try {
-      await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, {
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, {
         checkoutSessionId: normalized.payment.value.checkout_session_id,
         now: clock(),
       });
@@ -570,7 +600,7 @@ export async function startHandoff(input, env, adapters = {}) {
   }
   if (entry.record.state === 'PAYMENT_VERIFIED') entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'SITE_INTENT', {}, clock()));
   if (entry.record.state === 'SITE_INTENT') {
-    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
     const site = await createOrRecoverSite(entry.record, env, adapters);
     await ensureImmutableIndex(adapters.store, siteIndexKey(site.id), {
       schema: 'arc2-site-index-v1', handoff_id: handoffId, netlify_site_id: site.id, netlify_session_id: entry.record.netlify_session_id,
@@ -581,7 +611,7 @@ export async function startHandoff(input, env, adapters = {}) {
     return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady };
   }
   if (entry.record.state === 'SITE_CREATED') {
-    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
     const deployed = await ensureDeploy(entry, key, normalized.deployArtifacts, 'preclaim', env, adapters);
     entry = await replaceEntry(adapters.store, key, deployed.entry, transitionRecord(deployed.entry.record, 'PRECLAIM_DEPLOY_READY', {
       preclaim_deploy_id: deployed.ready.id,
@@ -589,7 +619,7 @@ export async function startHandoff(input, env, adapters = {}) {
     return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady };
   }
   if (entry.record.state === 'PRECLAIM_DEPLOY_READY') {
-    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
     const deadlineMs = providerStageDeadline(adapters);
     const stageAdapters = { ...adapters, providerStageDeadlineMs: deadlineMs };
     if (entry.record.lead_route_mode === 'netlify_form' && (!entry.record.form_id || !entry.record.hook_id)) {
@@ -928,7 +958,7 @@ export async function renewClaimInvitation(handoffId, env, adapters = {}) {
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
   const observedAt = clock();
-  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: observedAt });
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: observedAt });
   if (entry.record.state === 'INVITATION_READY') {
     if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
       throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
@@ -955,7 +985,7 @@ export async function markClaimInvitationReady(handoffId, evidence, signature, e
   if (entry.record.lead_route_mode === 'not_required') {
     throw new Error('ARC2_LEAD_ROUTE_RECEIPT_NOT_REQUIRED');
   }
-  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
   // The committed producer can address only arc-lead-route-* sites. An older
   // namespace record that never reached invitation readiness has no valid
   // receipt path, so reject it before parsing evidence or changing state.
@@ -995,7 +1025,7 @@ export async function exchangeClaimBearer(handoffId, suppliedBearer, env, adapte
   const clock = adapters.clock || (() => new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
-  await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { now: clock() });
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
   const suppliedDigest = claimBearerDigest(suppliedBearer, env);
   if (entry.record.state === 'INVITATION_READY') {
     const usedAt = clock();
@@ -1080,7 +1110,7 @@ async function finishClaim(entry, key, hint, env, adapters) {
   // fresh reversal guard runs before every read or provider mutation.
   while (true) {
     if (entry.record.state === 'CLAIM_WRAPPER_CONSUMED') {
-      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
       const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
         hint.destinationAccountId, env, fetchImpl, deadlineMs);
       entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIM_CALLBACK_RECEIVED', {
@@ -1092,7 +1122,7 @@ async function finishClaim(entry, key, hint, env, adapters) {
     }
     if (entry.record.state === 'CLAIM_CALLBACK_RECEIVED') {
       if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
-      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
       const verified = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
         hint.destinationAccountId, env, fetchImpl, deadlineMs);
       entry = await replaceEntry(adapters.store, key, entry, transitionRecord(entry.record, 'CLAIMED_VERIFIED', {
@@ -1102,12 +1132,12 @@ async function finishClaim(entry, key, hint, env, adapters) {
     }
     if (entry.record.state === 'CLAIMED_VERIFIED') {
       if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
-      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
       const preclaim = await verifyClaimedRecord(entry.record, entry.record.preclaim_deploy_id,
         hint.destinationAccountId, env, fetchImpl, deadlineMs);
       const deployed = await ensureDeploy(entry, key, preclaim.artifactBytes, 'final', env, stageAdapters);
       entry = deployed.entry;
-      await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
       const final = await verifyClaimedRecord(entry.record, deployed.ready.id,
         hint.destinationAccountId, env, fetchImpl, deadlineMs);
       const verifiedFinalRecord = {
@@ -1126,7 +1156,7 @@ async function finishClaim(entry, key, hint, env, adapters) {
     if (entry.record.state === 'FINAL_DEPLOY_READY' || entry.record.state === 'DELIVERED') {
       if (entry.record.destination_account_id !== hint.destinationAccountId) throw new Error('ARC2_CLAIM_DESTINATION_CONFLICT');
       if (entry.record.state !== 'DELIVERED') {
-        await assertHandoffFulfillmentAllowed(adapters.store, entry.record.handoff_id, env, { now: clock() });
+        await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
       }
       await verifyClaimedRecord(entry.record, entry.record.final_deploy_id,
         hint.destinationAccountId, env, fetchImpl, deadlineMs);
@@ -1148,7 +1178,7 @@ export async function processClaimWebhook(input, env, adapters = {}) {
     throw new Error('ARC2_CLAIM_STATE_CONFLICT');
   }
   if (entry.record.state !== 'DELIVERED') {
-    await assertHandoffFulfillmentAllowed(adapters.store, index.handoff_id, env, { now: adapters.clock?.() || new Date() });
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: adapters.clock?.() || new Date() });
   }
   const finished = await finishClaim(entry, key, hint, env, adapters);
   return { handoffId: index.handoff_id, record: finished.record };
@@ -1425,12 +1455,12 @@ export async function getHandoffStatus(handoffId, env, adapters = {}, options = 
       maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
       recheckNotBefore: record.final_deploy_ready_at,
     };
-    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { ...guardOptions, now: clock() });
+    await assertCheckoutAndReversalAllowed(record, env, adapters, { ...guardOptions, now: clock() });
     const deadlineMs = providerStageDeadline(adapters);
     await verifyClaimedRecord(record, record.final_deploy_id, record.destination_account_id,
       env, adapters.fetch || fetch, deadlineMs);
     const authorizedAt = clock();
-    await assertHandoffFulfillmentAllowed(adapters.store, handoffId, env, { ...guardOptions, now: authorizedAt });
+    await assertCheckoutAndReversalAllowed(record, env, adapters, { ...guardOptions, now: authorizedAt });
     Object.assign(status, createClaimStateEvidence(record, env, authorizedAt));
   }
   return status;

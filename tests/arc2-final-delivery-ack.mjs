@@ -85,6 +85,7 @@ const secrets = Object.fromEntries(secretNames.map((name, index) => [
 ]));
 const env = {
   ...secrets,
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'test_arcDeliveryRestrictedAccountRead0123456789',
   ARC_HANDOFF_ENABLED: 'false',
   ARC_CHECKOUT_BINDING_KEY_ID: '01',
   ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON: '{}',
@@ -105,6 +106,8 @@ const env = {
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
   ARC_STRIPE_WEBHOOK_API_VERSION: '2026-06-24.dahlia',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',

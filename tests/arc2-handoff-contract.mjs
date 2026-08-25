@@ -53,6 +53,11 @@ import {
   STRIPE_WEBHOOK_API_VERSION,
   stripeReversalKeys,
 } from '../netlify/lib/stripe-reversal-core.mjs';
+import {
+  STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+  STRIPE_CHECKOUT_SESSION_SCHEMA,
+  stripeCheckoutKeys,
+} from '../netlify/lib/stripe-checkout-core.mjs';
 import claimHandler, { config as claimConfig } from '../netlify/functions/arc2-claim.mjs';
 import webhookHandler, { config as webhookConfig } from '../netlify/functions/arc2-claim-webhook.mjs';
 import invitationHandler, { config as invitationConfig } from '../netlify/functions/arc2-claim-invitation-ready.mjs';
@@ -60,6 +65,7 @@ import startHandler, { config as startConfig } from '../netlify/functions/arc2-h
 import statusHandler, { config as statusConfig } from '../netlify/functions/arc2-handoff-status.mjs';
 
 const now = new Date('2026-08-12T18:00:00.000Z');
+const stripeAccountId = 'acct_ArcHandoffContract123';
 const secrets = Object.fromEntries([
   'ARC_CHECKOUT_BINDING_SECRET',
   'ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET',
@@ -82,14 +88,15 @@ const secrets = Object.fromEntries([
 ].map((name, index) => [name, `${name.toLowerCase()}-${String(index).padStart(2, '0')}-unique-test-secret-0123456789`]));
 const env = {
   ...secrets,
-  ARC_HANDOFF_ENABLED: 'true',
+  ARC_HANDOFF_ENABLED: 'false',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'test_arcHandoffRestrictedAccountRead0123456789',
   ARC_CHECKOUT_BINDING_KEY_ID: '01',
   ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON: '{}',
   ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   ARC_EXPECTED_PAYMENT_LINK_ID: 'plink_1ArcHandoffTest',
   ARC_EXPECTED_PRICE_ID: 'price_1ArcHandoffTest',
   ARC_EXPECTED_PRODUCT_TAX_CODE: 'txcd_10000000',
-  ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256: sha256Hex('acct_arc_test'),
+  ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256: sha256Hex(stripeAccountId),
   ARC_ADULT_OPERATOR_VERIFIED: 'true',
   ARC_BUSINESS_LICENSE_VERIFIED: 'true',
   ARC_TAX_REGISTRATION_VERIFIED: 'true',
@@ -102,23 +109,35 @@ const env = {
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
   ARC_STRIPE_WEBHOOK_API_VERSION: STRIPE_WEBHOOK_API_VERSION,
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_RUNTIME_ENVIRONMENT: 'sandbox',
   ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
-  SITE_NAME: 'arcsites',
+  SITE_NAME: 'arc2-sandbox',
   URL: 'https://arcweb.onl/',
   DEPLOY_PRIME_URL: 'https://main--arcsites.netlify.app/',
   NETLIFY_TEAM_SLUG: 'arc-team',
   NETLIFY_TEAM_ACCOUNT_ID: 'account-source-123',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
 };
-assert.equal(configuredEnvironment(env).enabled, false, 'Test-mode events require a disabled handoff on an explicit nonproduction sandbox.');
-const sandboxEnv = { ...env, ARC_HANDOFF_ENABLED: 'false', SITE_NAME: 'arc2-sandbox' };
+assert.equal(configuredEnvironment({ ...env, ARC_HANDOFF_ENABLED: 'true' }).enabled, false,
+  'Test-mode events require a disabled handoff on an explicit nonproduction sandbox.');
+const sandboxEnv = { ...env };
 assert.deepEqual(configuredEnvironment(sandboxEnv), { enabled: true, missing: [], invalid: [] });
-const productionEnv = { ...env, ARC_STRIPE_LIVE_MODE_ENABLED: 'true', ARC_ALLOW_TEST_MODE_EVENTS: 'false', ARC_RUNTIME_ENVIRONMENT: 'production' };
+const productionEnv = {
+  ...env,
+  ARC_STRIPE_LIVE_MODE_ENABLED: 'true',
+  ARC_ALLOW_TEST_MODE_EVENTS: 'false',
+  ARC_RUNTIME_ENVIRONMENT: 'production',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true',
+  ARC_HANDOFF_ENABLED: 'true',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'live_arcHandoffRestrictedAccountRead0123456789',
+  SITE_NAME: 'arcsites',
+};
 assert.deepEqual(configuredEnvironment(productionEnv), { enabled: true, missing: [], invalid: [] });
 const tokenAliasEnv = { ...productionEnv, NETLIFY_ACCESS_TOKEN: productionEnv.NETLIFY_ADMIN_PAT };
 delete tokenAliasEnv.NETLIFY_ADMIN_PAT;
@@ -141,6 +160,8 @@ assert.equal(configuredEnvironment({ ...productionEnv, ARC_TAX_REGISTRATION_VERI
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_STRIPE_LIVE_MODE_ENABLED: 'yes' }).enabled, false, 'Stripe mode must be exact live in production.');
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_CHECKOUT_BINDING_KEY_ID: '' }).enabled, false, 'Checkout key id must be explicit.');
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON: '{ }' }).enabled, false, 'Retired key registry must be canonical.');
+assert.equal(configuredEnvironment({ ...productionEnv, ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false' }).enabled, false,
+  'Production handoff cannot bypass the authenticated Checkout event ledger.');
 assert.equal(configuredEnvironment({}).enabled, false, 'Missing configuration must fail closed.');
 assert.equal(configuredEnvironment({ ...productionEnv, SITE_ID: '00000000-0000-4000-8000-000000000000' }).enabled, false, 'Wrong Netlify site must fail closed.');
 assert.equal(configuredEnvironment({ ...productionEnv, SITE_NAME: 'attacker-site' }).enabled, false, 'Wrong Netlify site name must fail closed.');
@@ -678,6 +699,21 @@ class FakeStore {
   }
 }
 
+const checkoutGateStore = new FakeStore();
+await assert.rejects(startHandoff(input, {
+  ...tokenAliasTestEnv,
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true',
+}, {
+  store: checkoutGateStore,
+  clock: () => new Date(now),
+  fetch: async () => { throw new Error('Checkout gating must precede provider access.'); },
+  stripeAccountFetch: async () => new Response(JSON.stringify({ id: stripeAccountId, object: 'account' }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  }),
+}), /ARC_STRIPE_CHECKOUT_EVENT_REQUIRED/,
+'Required Checkout event confirmation must stop before the first handoff reservation or provider request.');
+assert.equal(checkoutGateStore.values.size, 0, 'A missing Checkout receipt must not create handoff state.');
+
 const storeContract = new FakeStore();
 const firstEntry = await createEntry(storeContract, 'handoffs/test', { schema: 'bad-on-read' });
 assert.equal(firstEntry.etag, 'etag-1');
@@ -866,6 +902,47 @@ assert.ok([...noFormStore.values.keys()].some((key) => key.startsWith('invitatio
   'Exact replay must recover the immutable invitation outbox after a post-CAS failure.');
 const noFormReplay = await startHandoff(noFormBundle.input, env, noFormAdapters);
 assert.equal(noFormReplay.claimBearer, noFormRecovered.claimBearer, 'No-form lost-response replay must return the deterministic bearer.');
+const checkoutReviewStore = new FakeStore();
+checkoutReviewStore.values = new Map([...noFormStore.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
+checkoutReviewStore.counter = noFormStore.counter;
+const checkoutSessionHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+  `stripe-checkout-session-id-v1\n${noFormBundle.paymentValue.checkout_session_id}`);
+const checkoutPaymentIntentHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+  `stripe-checkout-payment-intent-id-v1\n${noFormPaymentIntentId}`);
+const checkoutPaymentLinkHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+  `stripe-checkout-payment-link-id-v1\n${noFormBundle.paymentValue.payment_link_id}`);
+await createIndex(checkoutReviewStore, stripeCheckoutKeys.handoffBindingKey(noFormBootstrap.handoffId), {
+  schema: STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+  handoff_id: noFormBootstrap.handoffId,
+  checkout_session_id_hmac_sha256: checkoutSessionHmac,
+  payment_intent_id_hmac_sha256: checkoutPaymentIntentHmac,
+  payment_link_id_hmac_sha256: checkoutPaymentLinkHmac,
+  payment_evidence_sha256: noFormRecovered.record.payment_evidence_sha256,
+  stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+  livemode: false,
+});
+await createIndex(checkoutReviewStore, stripeCheckoutKeys.sessionStateKey(
+  noFormBundle.paymentValue.checkout_session_id, env,
+), {
+  schema: STRIPE_CHECKOUT_SESSION_SCHEMA,
+  state: 'REVIEW_REQUIRED',
+  fulfillment_allowed: false,
+  manual_review_required: true,
+});
+await assert.rejects(exchangeClaimBearer(
+  noFormBootstrap.handoffId,
+  noFormRecovered.claimBearer,
+  { ...env, ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true' },
+  {
+    store: checkoutReviewStore,
+    clock: () => new Date(now),
+    stripeAccountFetch: async () => new Response(JSON.stringify({ id: stripeAccountId, object: 'account' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }),
+  },
+), /ARC_STRIPE_CHECKOUT_LEDGER_HALT/,
+'A Checkout conflict discovered after invitation creation must block claim exchange before consuming the bearer.');
+assert.equal((await readEntry(checkoutReviewStore, handoffKeyFromId(noFormBootstrap.handoffId))).record.state, 'INVITATION_READY');
 const noFormExpiredStore = new FakeStore();
 noFormExpiredStore.values = new Map([...noFormStore.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
 noFormExpiredStore.counter = noFormStore.counter;

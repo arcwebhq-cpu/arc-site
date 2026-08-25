@@ -26,6 +26,7 @@ export default async (request, context = {}) => {
       store,
       clock: context.clock,
       fetch: context.fetch,
+      stripeAccountFetch: context.stripeAccountFetch,
     });
     if (!result) return jsonResponse(404, { error: 'handoff_not_found' });
     const origin = new URL(process.env.ARC_PUBLIC_ORIGIN).origin;
@@ -39,7 +40,12 @@ export default async (request, context = {}) => {
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return jsonResponse(413, { error: 'renewal_too_large' });
     if (error instanceof TypeError || error?.name === 'SyntaxError') return jsonResponse(400, { error: 'invalid_renewal' });
-    if (/ARC_STRIPE_REVERSAL_HALT/.test(error?.message || '')) return jsonResponse(409, { error: 'fulfillment_halted' });
+    if (/ARC_STRIPE_(?:REVERSAL_HALT|CHECKOUT_(?:LEDGER_HALT|HANDOFF_BINDING_CONFLICT|PAYMENT_NOT_PAID))/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'fulfillment_halted' });
+    }
+    if (/ARC_STRIPE_(?:CHECKOUT|ACCOUNT)_/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'payment_control_unavailable' });
+    }
     if (/NOT_EXPIRED|STATE_CONFLICT|STATE_CONTENTION|CURRENT_CONFLICT/.test(error?.message || '')) {
       return jsonResponse(409, { error: 'claim_invitation_renewal_conflict' });
     }

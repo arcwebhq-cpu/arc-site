@@ -13,11 +13,17 @@ export default async (request, context = {}) => {
       store,
       clock: context.clock,
       fetch: context.fetch,
+      stripeAccountFetch: context.stripeAccountFetch,
     },
       { includePrivate: url.searchParams.get('include_private') === 'true' });
     return status ? jsonResponse(200, status) : jsonResponse(404, { error: 'handoff_not_found' });
   } catch (error) {
-    if (/ARC_STRIPE_REVERSAL_HALT/.test(error?.message || '')) return jsonResponse(409, { error: 'fulfillment_halted' });
+    if (/ARC_STRIPE_(?:REVERSAL_HALT|CHECKOUT_(?:LEDGER_HALT|HANDOFF_BINDING_CONFLICT|PAYMENT_NOT_PAID))/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'fulfillment_halted' });
+    }
+    if (/ARC_STRIPE_(?:CHECKOUT|ACCOUNT)_/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'payment_control_unavailable' });
+    }
     if (/ARC_STRIPE_REVERSAL_(?:CONTROL_DISABLED|BINDING_REQUIRED|RECHECK_REQUIRED)/.test(error?.message || '')) {
       return jsonResponse(503, { error: 'stripe_reversal_control_unavailable' });
     }

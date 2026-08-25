@@ -10,11 +10,19 @@ export default async (request, context = {}) => {
   try {
     const input = parseJsonBodyText(await readBoundedRequestText(request, 4096), 4096);
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
-    await processClaimWebhook(input, process.env, { store });
+    await processClaimWebhook(input, process.env, {
+      store, stripeAccountFetch: context.stripeAccountFetch,
+    });
     return emptyResponse(204);
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return jsonResponse(413, { error: 'claim_hint_too_large' });
     if (error instanceof TypeError || error?.name === 'SyntaxError') return jsonResponse(400, { error: 'invalid_claim_hint' });
+    if (/ARC_STRIPE_(?:REVERSAL_HALT|CHECKOUT_(?:LEDGER_HALT|HANDOFF_BINDING_CONFLICT|PAYMENT_NOT_PAID))/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'fulfillment_halted' });
+    }
+    if (/ARC_STRIPE_(?:CHECKOUT|ACCOUNT)_/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'payment_control_unavailable' });
+    }
     if (/UNKNOWN|BINDING|STATE_CONFLICT|MISMATCH|NOT_CLAIMED/.test(error?.message || '')) return jsonResponse(409, { error: 'claim_not_verified' });
     return jsonResponse(503, { error: 'claim_reverification_unavailable' });
   }

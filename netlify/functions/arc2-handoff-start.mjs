@@ -11,7 +11,9 @@ export default async (request, context = {}) => {
   try {
     const body = parseJsonBodyText(await readBoundedRequestText(request, 5_000_000), 5_000_000);
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
-    const result = await startHandoff(body, process.env, { store, clock: context.clock });
+    const result = await startHandoff(body, process.env, {
+      store, clock: context.clock, stripeAccountFetch: context.stripeAccountFetch,
+    });
     const origin = new URL(process.env.ARC_PUBLIC_ORIGIN).origin;
     return jsonResponse(202, {
       handoff_id: result.handoffId,
@@ -25,6 +27,15 @@ export default async (request, context = {}) => {
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return jsonResponse(413, { error: 'handoff_request_too_large' });
     if (error instanceof TypeError || error?.name === 'SyntaxError') return jsonResponse(400, { error: 'invalid_handoff_request' });
+    if (/ARC_STRIPE_CHECKOUT_(?:LEDGER_HALT|BINDING_MISMATCH|HANDOFF_BINDING_CONFLICT)|ARC2_CHECKOUT_REFERENCE_REVIEW_REQUIRED/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'fulfillment_halted' });
+    }
+    if (/ARC_STRIPE_CHECKOUT_(?:EVENT_REQUIRED|RECEIPT_REQUIRED|PAYMENT_NOT_PAID|HANDOFF_BINDING_REQUIRED)/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'payment_not_confirmed' });
+    }
+    if (/ARC_STRIPE_CHECKOUT_LEDGER_DISABLED/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'stripe_checkout_control_unavailable' });
+    }
     if (/ARC_STRIPE_REVERSAL_HALT/.test(error?.message || '')) return jsonResponse(409, { error: 'fulfillment_halted' });
     if (/ARC_STRIPE_REVERSAL_(?:CONTROL_DISABLED|STATE_CONFLICT)/.test(error?.message || '')) {
       return jsonResponse(503, { error: 'stripe_reversal_control_unavailable' });
