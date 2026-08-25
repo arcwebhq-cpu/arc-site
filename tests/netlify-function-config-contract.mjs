@@ -51,6 +51,13 @@ function propertyValue(config, property) {
 
 function quotedLiteral(value) {
   if (value.length < 2 || !["'", '"'].includes(value[0]) || value.at(-1) !== value[0]) return null;
+  let escaped = false;
+  for (let index = 1; index < value.length - 1; index += 1) {
+    if (escaped) { escaped = false; continue; }
+    if (value[index] === '\\') { escaped = true; continue; }
+    if (value[index] === value[0] || value[index] === '\n' || value[index] === '\r') return null;
+  }
+  if (escaped) return null;
   return value.slice(1, -1);
 }
 

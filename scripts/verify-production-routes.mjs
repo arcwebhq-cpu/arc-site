@@ -8,11 +8,11 @@ assert.match(expectedDeploySha, /^[a-f0-9]{40}$/, 'ARC_EXPECTED_DEPLOY_SHA must 
 
 const origin = 'https://arcweb.onl';
 const metadataUrl = 'https://api.netlify.com/api/v1/sites/arcsites.netlify.app';
-const fetchOptions = Object.freeze({ redirect: 'error', signal: AbortSignal.timeout(15_000) });
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 async function fetchExact(url, options = {}) {
-  return fetch(url, { ...fetchOptions, ...options, headers: {
+  return fetch(url, { redirect: 'error', cache: 'no-store', ...options,
+    signal: AbortSignal.timeout(15_000), headers: {
     'User-Agent': 'ARC-production-route-smoke/1', ...(options.headers || {}),
   } });
 }
