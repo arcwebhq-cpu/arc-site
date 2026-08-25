@@ -49,6 +49,38 @@ function propertyValue(config, property) {
   return match?.[1].trim() || null;
 }
 
+function withoutComments(source) {
+  let result = '';
+  let quote = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') { lineComment = false; result += '\n'; }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') { blockComment = false; index += 1; }
+      continue;
+    }
+    if (quote) {
+      result += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '/' && next === '/') { lineComment = true; index += 1; continue; }
+    if (character === '/' && next === '*') { blockComment = true; index += 1; continue; }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    result += character;
+  }
+  return result;
+}
+
 function quotedLiteral(value) {
   if (value.length < 2 || !["'", '"'].includes(value[0]) || value.at(-1) !== value[0]) return null;
   let escaped = false;
@@ -77,24 +109,30 @@ function literalValues(value, file, property) {
 let routedFunctions = 0;
 for (const file of (await readdir(functionDirectory)).filter(name => name.endsWith('.mjs')).sort()) {
   const source = await readFile(new URL(file, functionDirectory), 'utf8');
-  const config = configObject(source, file);
-  if (!config) continue;
+  const rawConfig = configObject(source, file);
+  if (!rawConfig) continue;
+  const config = withoutComments(rawConfig);
 
   const pathValue = propertyValue(config, 'path');
-  if (pathValue) {
-    routedFunctions += 1;
-    for (const route of literalValues(pathValue, file, 'path')) {
-      assert.match(route, /^\//, `${file} config.path must be an absolute site path.`);
-    }
+  const methodValue = propertyValue(config, 'method');
+  const backgroundValue = propertyValue(config, 'background');
+  if (!pathValue) {
+    assert.equal(backgroundValue, 'true',
+      `${file} must declare an inline custom path unless it is an explicit background-only Function.`);
+    assert.equal(methodValue, null, `${file} must not declare a method without an inline custom path.`);
+    continue;
   }
 
-  const methodValue = propertyValue(config, 'method');
-  if (methodValue) {
-    for (const method of literalValues(methodValue, file, 'method')) {
-      assert.ok(allowedMethods.has(method), `${file} uses an unsupported literal HTTP method: ${method}`);
-    }
+  assert.notEqual(methodValue, null, `${file} custom routes must declare an inline HTTP method.`);
+  assert.equal(backgroundValue, null, `${file} must not mix background-only and custom-route configuration.`);
+  routedFunctions += 1;
+  for (const route of literalValues(pathValue, file, 'path')) {
+    assert.match(route, /^\//, `${file} config.path must be an absolute site path.`);
+  }
+  for (const method of literalValues(methodValue, file, 'method')) {
+    assert.ok(allowedMethods.has(method), `${file} uses an unsupported literal HTTP method: ${method}`);
   }
 }
 
-assert.ok(routedFunctions >= 20, 'Expected the ARC production Function route surface to remain covered.');
+assert.equal(routedFunctions, 25, 'The reviewed ARC custom-route count changed; inspect every added or removed Function.');
 console.log(`ARC Netlify Function config contract passed for ${routedFunctions} custom-routed functions.`);

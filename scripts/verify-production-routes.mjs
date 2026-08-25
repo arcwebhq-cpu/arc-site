@@ -11,15 +11,33 @@ const metadataUrl = 'https://api.netlify.com/api/v1/sites/arcsites.netlify.app';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 async function fetchExact(url, options = {}) {
-  return fetch(url, { redirect: 'error', cache: 'no-store', ...options,
-    signal: AbortSignal.timeout(15_000), headers: {
-    'User-Agent': 'ARC-production-route-smoke/1', ...(options.headers || {}),
+  const { timeoutMs = 15_000, ...requestOptions } = options;
+  return fetch(url, { redirect: 'error', cache: 'no-store', ...requestOptions,
+    signal: AbortSignal.timeout(timeoutMs), headers: {
+    'User-Agent': 'ARC-production-route-smoke/1', ...(requestOptions.headers || {}),
   } });
 }
 
 let deployment;
-for (let attempt = 0; attempt < 48; attempt += 1) {
-  const response = await fetchExact(metadataUrl);
+let lastTransientState = 'the expected deploy was not visible';
+const deployDeadline = Date.now() + 4 * 60_000;
+while (Date.now() < deployDeadline) {
+  const remainingMs = deployDeadline - Date.now();
+  let response;
+  try {
+    response = await fetchExact(metadataUrl, { timeoutMs: Math.min(15_000, remainingMs) });
+  } catch (error) {
+    lastTransientState = `metadata request failed: ${error?.name || 'unknown error'}`;
+    const pauseMs = Math.min(5_000, deployDeadline - Date.now());
+    if (pauseMs > 0) await delay(pauseMs);
+    continue;
+  }
+  if (response.status === 429 || response.status >= 500) {
+    lastTransientState = `metadata returned transient HTTP ${response.status}`;
+    const pauseMs = Math.min(5_000, deployDeadline - Date.now());
+    if (pauseMs > 0) await delay(pauseMs);
+    continue;
+  }
   assert.equal(response.status, 200, 'Netlify public deployment metadata must remain available.');
   const site = await response.json();
   assert.equal(site.name, 'arcsites');
@@ -29,9 +47,12 @@ for (let attempt = 0; attempt < 48; attempt += 1) {
     deployment = site.published_deploy;
     break;
   }
-  await delay(5_000);
+  lastTransientState = `published commit was ${site.published_deploy?.commit_ref || 'missing'}`;
+  const pauseMs = Math.min(5_000, deployDeadline - Date.now());
+  if (pauseMs > 0) await delay(pauseMs);
 }
-assert.ok(deployment, `Netlify did not publish ready commit ${expectedDeploySha} within four minutes.`);
+assert.ok(deployment,
+  `Netlify did not publish ready commit ${expectedDeploySha} within four minutes; ${lastTransientState}.`);
 assert.equal(deployment.context, 'production');
 assert.equal(deployment.branch, 'main');
 
