@@ -14,7 +14,9 @@ export default async (request, context = {}) => {
         typeof body.lead_route_receipt_evidence_hmac_sha256 !== 'string' || Object.keys(body).length !== 3) return jsonResponse(400, { error: 'invalid_receipt' });
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
     const result = await markClaimInvitationReady(body.handoff_id, body.lead_route_receipt_evidence,
-      body.lead_route_receipt_evidence_hmac_sha256, process.env, { store });
+      body.lead_route_receipt_evidence_hmac_sha256, process.env, {
+        store, stripeAccountFetch: context.stripeAccountFetch,
+      });
     if (!result) return jsonResponse(404, { error: 'handoff_not_found' });
     if (!result.claimBearer) return jsonResponse(409, { error: 'claim_wrapper_already_consumed' });
     const origin = new URL(process.env.ARC_PUBLIC_ORIGIN).origin;
@@ -24,6 +26,12 @@ export default async (request, context = {}) => {
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return jsonResponse(413, { error: 'receipt_too_large' });
     if (error instanceof TypeError || error?.name === 'SyntaxError') return jsonResponse(400, { error: 'invalid_receipt' });
+    if (/ARC_STRIPE_(?:REVERSAL_HALT|CHECKOUT_(?:LEDGER_HALT|HANDOFF_BINDING_CONFLICT|PAYMENT_NOT_PAID))/.test(error?.message || '')) {
+      return jsonResponse(409, { error: 'fulfillment_halted' });
+    }
+    if (/ARC_STRIPE_(?:CHECKOUT|ACCOUNT)_/.test(error?.message || '')) {
+      return jsonResponse(503, { error: 'payment_control_unavailable' });
+    }
     if (/CONFLICT|STATE_CONTENTION/.test(error?.message || '')) return jsonResponse(409, { error: 'claim_invitation_ready_conflict' });
     return jsonResponse(503, { error: 'claim_invitation_ready_unavailable' });
   }

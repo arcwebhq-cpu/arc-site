@@ -41,6 +41,9 @@ const packageJson = JSON.parse(packageText);
 const imageSizePackage = JSON.parse(imageSizePackageText);
 const intakeBuildMarker = await readFile(new URL('netlify/lib/intake-build-marker.mjs', root), 'utf8');
 const buildScript = await readFile(new URL('scripts/build-site.mjs', root), 'utf8');
+const stripeCheckoutCore = await readFile(new URL('netlify/lib/stripe-checkout-core.mjs', root), 'utf8');
+const stripeAccountVerification = await readFile(new URL('netlify/lib/stripe-account-verification.mjs', root), 'utf8');
+const stripeWebhook = await readFile(new URL('netlify/functions/stripe-reversal-webhook.mjs', root), 'utf8');
 
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
@@ -133,6 +136,9 @@ assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href=enabled\?'#start':'m
 assert.match(home, /fetchWithTimeout\('\/api\/intake\/readiness'/);
 assert.match(home, /ARC_INTAKE_ENABLED|intake_enabled/);
 assert.match(home, /<form action="\/api\/intake\/submit"/);
+assert.match(home, /name="submission_request_id" id="submissionRequestId"/);
+assert.match(home, /crypto\.randomUUID/);
+assert.match(home, /crypto\.getRandomValues/);
 assert.match(home, /fetchWithTimeout\('\/api\/intake\/submit',\{method:'POST',body:new FormData\(form\)/);
 assert.match(home, /fetchWithTimeout\('\/api\/intake\/readiness',[\s\S]*?,8000\)/,
   'Readiness requests must fail closed instead of hanging the intake UI.');
@@ -145,10 +151,12 @@ assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
 assert.match(home, /const draftTtlMs=7\*24\*60\*60\*1000/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /freshConfirmationFields\.has\(field\.name\)/);
-assert.match(home, /JSON\.stringify\(\{savedAt,expiresAt:savedAt\+draftTtlMs,data:draftData\(\)\}\)/);
+assert.match(home, /JSON\.stringify\(\{savedAt,expiresAt:savedAt\+draftTtlMs,requestId:ensureSubmissionRequestId\(\),data:draftData\(\)\}\)/);
+assert.match(home, /submissionRequestIdPattern\.test\(saved\.requestId\|\|''\)/,
+  'The idempotency nonce must survive a retained-form reload for an exact retry.');
 assert.match(home, /saved\.expiresAt<=now/);
 assert.match(thankYou, /removeItem\('arc-preview-draft-v7'\)/);
-const acceptedResponseIndex = home.indexOf('const accepted=response.status===201');
+const acceptedResponseIndex = home.indexOf('const accepted=(response.status===200||response.status===201)');
 const acceptedDraftRemovalIndex = home.indexOf('localStorage.removeItem(draftKey)', acceptedResponseIndex);
 const acceptedRedirectIndex = home.indexOf("location.assign('/thank-you/')", acceptedResponseIndex);
 assert.ok(acceptedResponseIndex > -1 && acceptedDraftRemovalIndex > acceptedResponseIndex && acceptedDraftRemovalIndex < acceptedRedirectIndex,
@@ -433,6 +441,7 @@ assert.deepEqual(packageJson.scripts.test.split(' && '), [
   'node tests/intake-arc1-bridge-contract.mjs',
   'node tests/intake-arc1-adapter-contract.mjs',
   'node tests/intake-arc1-dispatch-contract.mjs',
+  'node tests/stripe-checkout-contract.mjs',
   'node tests/stripe-reversal-contract.mjs',
   'node tests/retention-control-contract.mjs',
   'node tests/operations-audit-contract.mjs',
@@ -478,7 +487,39 @@ assert.match(arc2Core, /ARC_PRODUCTION_ORIGIN_BINDING/);
 assert.match(arc2Core, /ARC_HANDOFF_ENABLED/);
 assert.match(arc2Core, /ARC_STRIPE_REVERSAL_CONTROL_REQUIRED/,
   'Handoff readiness must require the reversal control instead of allowing an optional bypass.');
+assert.match(arc2Core, /ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED/,
+  'Live handoff readiness must require an independently authenticated Checkout event ledger.');
+assert.match(stripeCheckoutCore, /checkout\.session\.completed/);
+assert.match(stripeCheckoutCore, /checkout\.session\.async_payment_succeeded/);
+assert.match(stripeCheckoutCore, /checkout\.session\.async_payment_failed/);
+assert.match(stripeCheckoutCore, /checkout\.session\.expired/);
+assert.match(stripeCheckoutCore, /ARC_STRIPE_CHECKOUT_EVENT_CONFLICT/);
+assert.match(stripeCheckoutCore, /ARC_STRIPE_CHECKOUT_RECEIPT_CONFLICT/);
+assert.match(stripeCheckoutCore, /REVIEW_REQUIRED/);
+assert.match(stripeCheckoutCore, /assertStripeCheckoutPaid/);
+assert.match(stripeCheckoutCore, /bindStripeCheckoutToHandoff/);
+assert.match(stripeCheckoutCore, /assertHandoffStripeCheckoutPaid/);
+assert.match(stripeCheckoutCore, /processed_event_hmacs_sha256/,
+  'Checkout retries must retain an applied-event marker across ambiguous CAS results.');
+assert.match(stripeAccountVerification, /stripeGetJson\('\/v1\/account'/);
+assert.match(stripeAccountVerification, /stripeGetJson\(`\/v1\/events\/\$\{encodeURIComponent\(event\.eventId\)\}`/);
+assert.match(stripeAccountVerification, /\^rk_\(test\|live\)_/,
+  'Account verification must reject unrestricted or mode-mismatched Stripe keys.');
+assert.match(stripeWebhook, /processStripeCheckoutEvent/,
+  'The authenticated Stripe destination must dispatch allowlisted Checkout events into the durable ledger.');
+assert.match(arc2Service, /const key = handoffKey[\s\S]*?bindStripeCheckoutToHandoff[\s\S]*?let entry = await readEntry/,
+  'Checkout ledger binding must precede the first handoff reservation.');
+assert.equal((arc2Service.match(/await assertHandoffFulfillmentAllowed/g) || []).length, 1,
+  'Every reversal gate must be encapsulated by the combined Checkout-and-reversal guard.');
+assert.ok((arc2Service.match(/await assertCheckoutAndReversalAllowed/g) || []).length >= 15,
+  'Claim, deploy, invitation, webhook, and private send-authority stages must all recheck Checkout state.');
 assert.match(arc2Service, /assertProviderMutationAllowed/);
+assert.match(intakeSubmissionCore, /ARC_INTAKE_IDEMPOTENCY_SECRET/);
+assert.match(intakeSubmissionCore, /arc-intake-request-id-v1\\n/);
+assert.match(intakeSubmit, /getWithMetadata\(normalized\.key, \{ type: 'json', consistency: 'strong' \}\)/,
+  'An ambiguous intake create must use strong readback before deciding whether the request failed.');
+assert.match(intakeSubmit, /created \? 201 : 200/,
+  'An exact lost-response retry must recover with HTTP 200 instead of creating another lead.');
 assert.match(arc2Service, /create-site/);
 assert.match(arc2Service, /create-\$\{phase\}-deploy/);
 assert.match(arc2Service, /restore-deploy/);

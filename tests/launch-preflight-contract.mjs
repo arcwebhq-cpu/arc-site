@@ -58,6 +58,8 @@ const common = {
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'true',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
   ARC_STRIPE_WEBHOOK_API_VERSION: '2026-06-24.dahlia',
   ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
@@ -69,6 +71,7 @@ const common = {
 
 const sandboxEnv = {
   ...common,
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'test_TOP_SECRET_ACCOUNT_MARKER_0123456789',
   ARC_HANDOFF_ENABLED: 'false',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
@@ -88,10 +91,12 @@ const enabledBuildMarker = Object.freeze({
 });
 const liveEnv = {
   ...common,
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'live_TOP_SECRET_ACCOUNT_MARKER_0123456789',
   ARC_HANDOFF_ENABLED: 'true',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'true',
   ARC_ALLOW_TEST_MODE_EVENTS: 'false',
   ARC_RUNTIME_ENVIRONMENT: 'production',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true',
   ARC_BUILD_INTAKE_ENABLED: 'true',
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
   ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
@@ -145,6 +150,16 @@ assert.equal(live.ok, true);
 assert.equal(live.checks.intake_ready, true);
 assert.deepEqual(live.missing, []);
 assert.deepEqual(live.invalid, []);
+const liveWithoutCheckoutGate = createLaunchPreflightReport({
+  ...liveEnv,
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
+}, {
+  mode: 'live',
+  buildMarker: enabledBuildMarker,
+  runtimeReady: () => true,
+});
+assert.equal(liveWithoutCheckoutGate.ok, false);
+assert.ok(liveWithoutCheckoutGate.invalid.includes('ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED'));
 
 const defaultCompiledClosed = createLaunchPreflightReport(liveEnv, {
   mode: 'live',
@@ -174,6 +189,12 @@ assert.equal(spawned.stderr, '');
 assert.equal(JSON.parse(spawned.stdout).state, 'SANDBOX_CONFIGURED');
 
 for (const marker of secretMarkers) {
+  assert.equal(JSON.stringify(sandbox).includes(marker), false);
+  assert.equal(JSON.stringify(live).includes(marker), false);
+  assert.equal(spawned.stdout.includes(marker), false);
+  assert.equal(spawned.stderr.includes(marker), false);
+}
+for (const marker of [sandboxEnv.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY, liveEnv.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY]) {
   assert.equal(JSON.stringify(sandbox).includes(marker), false);
   assert.equal(JSON.stringify(live).includes(marker), false);
   assert.equal(spawned.stdout.includes(marker), false);

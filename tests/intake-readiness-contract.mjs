@@ -31,7 +31,9 @@ import {
   INTAKE_MAX_REQUEST_BYTES,
   INTAKE_MAX_TOTAL_FILE_BYTES,
   INTAKE_SUBMISSION_SCHEMA,
+  INTAKE_IDEMPOTENCY_SECRET_ENV,
   TERMS_CONFIRMATION,
+  intakeIdempotencyConfigured,
   normalizeIntakeForm,
 } from '../netlify/lib/intake-submission-core.mjs';
 
@@ -43,12 +45,29 @@ class FakeStore {
     this.values.set(key, structuredClone(value));
     return { modified: true, etag: `etag-${this.calls}` };
   }
+  async getWithMetadata(key) {
+    const value = this.values.get(key);
+    return value ? { data: structuredClone(value), etag: `etag-${this.calls}` } : null;
+  }
+}
+
+class AmbiguousWriteStore extends FakeStore {
+  constructor() { super(); this.failAfterFirstWrite = true; }
+  async setJSON(key, value, options = {}) {
+    const result = await super.setJSON(key, value, options);
+    if (result.modified && this.failAfterFirstWrite) {
+      this.failAfterFirstWrite = false;
+      throw new Error('simulated_ambiguous_intake_write');
+    }
+    return result;
+  }
 }
 
 const validForm = () => {
   const form = new FormData();
   for (const [field, value] of Object.entries({
     intake_version: 'arc-intake-v7',
+    submission_request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     name: 'Test Owner',
     email: 'owner@example.test',
     business: 'Test Roofing',
@@ -132,6 +151,7 @@ const allNamedControlForm = () => {
     primary_style: 'Modern',
     public_email: 'public@example.test',
     sections: 'Contact or quote form',
+    submission_request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     website: 'https://example.test',
     brand_tone: 'Professional',
     domain_status: 'I own a domain',
@@ -174,7 +194,7 @@ const normalizedRealForm = await normalizeIntakeForm(
 assert.equal(normalizedRealForm.record.data.primary_style, 'Modern');
 assert.deepEqual(
   Object.keys(normalizedRealForm.record.data).sort(),
-  actualNamedControlFields.filter((field) => field !== 'bot-field' && !INTAKE_FILE_FIELDS.includes(field)).sort(),
+  actualNamedControlFields.filter((field) => !['bot-field', 'submission_request_id'].includes(field) && !INTAKE_FILE_FIELDS.includes(field)).sort(),
   'A form assembled from every actual named control must survive normalization without dropping fields.',
 );
 assert.deepEqual(normalizedRealForm.record.asset_manifest.map(({ role }) => role).sort(), [...INTAKE_FILE_FIELDS].sort());
@@ -197,6 +217,9 @@ await assert.rejects(normalizeIntakeForm(unsupportedGoalForm), /goals is invalid
 const unsupportedProofForm = validForm();
 unsupportedProofForm.append('proof', 'Customer reviews');
 await assert.rejects(normalizeIntakeForm(unsupportedProofForm), /proof details are required/i);
+const invalidRequestIdentityForm = validForm();
+invalidRequestIdentityForm.set('submission_request_id', 'caller-controlled-id');
+await assert.rejects(normalizeIntakeForm(invalidRequestIdentityForm), /request identity is invalid/i);
 
 const tooLargeFileForm = validForm();
 tooLargeFileForm.append('asset_permission', 'Confirmed');
@@ -277,6 +300,7 @@ const bridgeRuntimeEnv = {
   ARC1_ASSET_RECEIPT_SECRET: 'asset-receipt-secret-unique-0123456789-ab',
   ARC_INTAKE_ARC1_DOWNSTREAM_BEARER: 'downstream-bearer-unique-0123456789-ab',
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
+  ARC_INTAKE_IDEMPOTENCY_SECRET: 'intake-idempotency-secret-unique-0123456789',
   SITE_ID: adapterSiteId,
   ARC_EXPECTED_NETLIFY_SITE_ID: adapterSiteId,
   SITE_NAME: 'arcsites',
@@ -342,6 +366,14 @@ try {
   process.env.ARC_INTAKE_ARC1_ACK_SECRET = process.env.ARC_INTAKE_ARC1_EVIDENCE_SECRET;
   assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, 'Duplicate bridge secrets must block readiness.');
   process.env.ARC_INTAKE_ARC1_ACK_SECRET = savedAckSecret;
+  assert.equal(intakeIdempotencyConfigured(process.env), true);
+  const savedIdempotencySecret = process.env[INTAKE_IDEMPOTENCY_SECRET_ENV];
+  delete process.env[INTAKE_IDEMPOTENCY_SECRET_ENV];
+  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
+    'Public intake readiness must require a private lost-response idempotency secret.');
+  process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = process.env.ARC_INTAKE_ARC1_ACK_SECRET;
+  assert.equal(intakeIdempotencyConfigured(process.env), false, 'The intake idempotency secret must be distinct.');
+  process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = savedIdempotencySecret;
 
   for (const invalidProof of [
     '',
@@ -458,16 +490,26 @@ try {
   assert.deepEqual(await unpermittedFolderResponse.json(), { error: 'invalid_intake' });
   await assert.rejects(normalizeIntakeForm(unpermittedFolder), /unexpected intake field/i);
 
+  process.env.ARC_INTAKE_ARC1_DISPATCH_ENABLED = 'false';
+  delete process.env[INTAKE_IDEMPOTENCY_SECRET_ENV];
+  const missingIdempotencyControl = await enabledSubmitHandler(submitRequest(), {
+    get intakeStore() { throw new Error('Missing idempotency control must block before storage.'); },
+  });
+  assert.equal(missingIdempotencyControl.status, 503);
+  process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = savedIdempotencySecret;
   const accepted = await enabledSubmitHandler(submitRequest(allNamedControlForm()), {
     intakeStore: store,
     clock: () => new Date('2026-08-13T08:00:00.000Z'),
     uuid: () => '11111111-1111-4111-8111-111111111111',
   });
   assert.equal(accepted.status, 201);
-  assert.deepEqual(await accepted.json(), {
-    schema: 'arc-intake-submission-accepted-v1', accepted: true, submission_id: '11111111-1111-4111-8111-111111111111',
-  });
-  const stored = store.values.get('submissions/11111111-1111-4111-8111-111111111111');
+  const acceptedBody = await accepted.json();
+  assert.equal(acceptedBody.schema, 'arc-intake-submission-accepted-v1');
+  assert.equal(acceptedBody.accepted, true);
+  assert.match(acceptedBody.submission_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(acceptedBody.submission_id, '11111111-1111-4111-8111-111111111111',
+    'Public submission identity must derive from the private idempotency key, not caller-supplied randomness.');
+  const stored = store.values.get(`submissions/${acceptedBody.submission_id}`);
   assert.equal(stored.schema, INTAKE_SUBMISSION_SCHEMA);
   assert.equal(stored.source, 'first-party-netlify-function');
   assert.equal(stored.form_name, 'arc-preview-function-v1');
@@ -478,12 +520,42 @@ try {
   assert.equal(stored.arc1_dispatch.attempt_count, 0, 'Default-OFF dispatch must not invoke a background function.');
   assert.equal(stored.data.primary_style, 'Modern');
   assert.match(stored.submission_data_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(stored).includes('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false,
+    'The raw browser idempotency nonce must never enter durable customer records.');
   assert.equal(store.calls, 1);
+
+  const exactRetry = await enabledSubmitHandler(submitRequest(allNamedControlForm()), {
+    intakeStore: store,
+    clock: () => new Date('2026-08-13T08:05:00.000Z'),
+    uuid: () => '22222222-2222-4222-8222-222222222222',
+  });
+  assert.equal(exactRetry.status, 200, 'A lost-response retry must recover the original durable acceptance.');
+  assert.deepEqual(await exactRetry.json(), acceptedBody);
+  assert.equal(store.values.size, 1, 'An exact retry must not create a duplicate lead.');
+
+  const changedRetryForm = allNamedControlForm();
+  changedRetryForm.set('business', 'Changed after ambiguous response');
+  const changedRetry = await enabledSubmitHandler(submitRequest(changedRetryForm), { intakeStore: store });
+  assert.equal(changedRetry.status, 409);
+  assert.deepEqual(await changedRetry.json(), { error: 'intake_conflict' });
+  assert.equal(store.values.size, 1, 'A reused nonce with changed answers must fail closed.');
+  assert.equal(store.calls, 3);
+
+  const ambiguousForm = allNamedControlForm();
+  ambiguousForm.set('submission_request_id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+  const ambiguousStore = new AmbiguousWriteStore();
+  const ambiguousAccepted = await enabledSubmitHandler(submitRequest(ambiguousForm), {
+    intakeStore: ambiguousStore,
+    clock: () => new Date('2026-08-13T08:10:00.000Z'),
+  });
+  assert.equal(ambiguousAccepted.status, 200,
+    'A strong read after an ambiguous create response must recover the durable acceptance.');
+  assert.equal(ambiguousStore.values.size, 1);
 
   process.env[INTAKE_READINESS_ENV] = JSON.stringify({ ...completeAttestation, route_verified: false });
   const revoked = await enabledSubmitHandler(submitRequest(), { intakeStore: store });
   assert.equal(revoked.status, 503);
-  assert.equal(store.calls, 1, 'Revocation must block before any second storage write.');
+  assert.equal(store.calls, 3, 'Revocation must block before any further storage write.');
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
   assert.equal((await enabledSubmitHandler(submitRequest(validForm(), 'https://example.com'), { intakeStore: store })).status, 403);
@@ -526,7 +598,7 @@ try {
   const unknown = validForm();
   unknown.append('client_claims_ready', 'true');
   assert.equal((await enabledSubmitHandler(submitRequest(unknown), { intakeStore: store })).status, 400);
-  assert.equal(store.calls, 1);
+  assert.equal(store.calls, 3);
   assert.equal(submitConfig.path, '/api/intake/submit');
   assert.equal(submitConfig.method, 'POST');
   assert.equal(submitConfig.rateLimit.windowLimit, 5);

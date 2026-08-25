@@ -10,6 +10,7 @@ import {
 } from './intake-arc1-adapter-core.mjs';
 import { resolveSameDeployDispatcher } from './intake-arc1-dispatch-core.mjs';
 import { INTAKE_PRIVATE_ASSET_ENABLED_ENV, resolvePrivateAssetEnvironment } from './intake-private-asset-core.mjs';
+import { INTAKE_IDEMPOTENCY_SECRET_ENV, intakeIdempotencyConfigured } from './intake-submission-core.mjs';
 
 export const INTAKE_READINESS_ENV = 'ARC_INTAKE_READINESS_ATTESTATION';
 export const INTAKE_READINESS_SCHEMA = 'arc-intake-readiness-attestation-v1';
@@ -101,9 +102,11 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
       'ARC_INTAKE_ARC1_RUN_SECRET',
       'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
       'ARC1_ASSET_RECEIPT_SECRET', 'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER',
+      INTAKE_IDEMPOTENCY_SECRET_ENV,
     ];
     const secrets = required.map((name) => env[name]);
-    if (secrets.some((value) => typeof value !== 'string' || Buffer.byteLength(value, 'utf8') < 32 || Buffer.byteLength(value, 'utf8') > 256) ||
+    if (!intakeIdempotencyConfigured(env) ||
+        secrets.some((value) => typeof value !== 'string' || Buffer.byteLength(value, 'utf8') < 32 || Buffer.byteLength(value, 'utf8') > 256) ||
         new Set(secrets).size !== secrets.length) return false;
     const endpoint = new URL(env.ARC_INTAKE_ARC1_ENDPOINT);
     return endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password && !endpoint.port && endpoint.pathname !== '/' &&

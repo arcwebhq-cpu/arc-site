@@ -195,6 +195,8 @@ try {
     await page.locator('#termsAccepted').check();
     await page.waitForTimeout(500);
     const savedDraft = JSON.parse(await page.evaluate(() => localStorage.getItem('arc-preview-draft-v7')));
+    assert.match(savedDraft.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      `${viewport.name}: retained answers lost their exact-retry nonce`);
     assert.equal('asset_permission' in savedDraft.data, false, `${viewport.name}: asset permission was persisted`);
     assert.equal('budget_confirmed' in savedDraft.data, false, `${viewport.name}: budget confirmation was persisted`);
     assert.equal('terms_accepted' in savedDraft.data, false, `${viewport.name}: legal consent was persisted`);
@@ -223,6 +225,9 @@ try {
     assert.match(intakeRequest.headers['content-type'] || '', /^multipart\/form-data;\s*boundary=/i,
       `${viewport.name}: intake did not use a multipart request`);
     assert.ok(intakeRequest.body.length > 0, `${viewport.name}: intake request body was empty`);
+    assert.match(intakeRequest.body.toString('utf8'),
+      /name="submission_request_id"\r\n\r\n[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\r\n/i,
+      `${viewport.name}: multipart intake omitted its exact-retry nonce`);
     assert.deepEqual(errors, [], `${viewport.name}: browser errors: ${errors.join('; ')}`);
     await page.close();
   }

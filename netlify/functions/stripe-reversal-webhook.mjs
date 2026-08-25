@@ -4,11 +4,19 @@ import {
   processStripeReversalEvent,
   stripeReversalConfiguration,
 } from '../lib/stripe-reversal-core.mjs';
+import {
+  processStripeCheckoutEvent,
+  stripeCheckoutConfiguration,
+} from '../lib/stripe-checkout-core.mjs';
 
 const ALERT_STORE = 'arc-operations-alerts';
 
 export default async (request, context = {}) => {
-  if (!stripeReversalConfiguration(process.env).webhookOperational) return jsonResponse(503, { error: 'stripe_reversal_control_disabled' });
+  const reversalConfiguration = stripeReversalConfiguration(process.env);
+  const checkoutConfiguration = stripeCheckoutConfiguration(process.env);
+  if (!reversalConfiguration.webhookOperational && !checkoutConfiguration.webhookOperational) {
+    return jsonResponse(503, { error: 'stripe_webhook_control_disabled' });
+  }
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     return jsonResponse(415, { error: 'json_required' });
@@ -36,11 +44,29 @@ export default async (request, context = {}) => {
     if (!body) return jsonResponse(400, { error: 'invalid_webhook' });
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
     const alertStore = context.alertStore || getStore({ name: ALERT_STORE, consistency: 'strong' });
+    let eventType;
+    try { eventType = JSON.parse(body)?.type; } catch {}
+    if (typeof eventType === 'string' && eventType.startsWith('checkout.session.')) {
+      if (!checkoutConfiguration.webhookOperational) return jsonResponse(503, { error: 'stripe_checkout_control_disabled' });
+      const result = await processStripeCheckoutEvent(
+        body,
+        request.headers.get('stripe-signature'),
+        process.env,
+        { store, alertStore, clock: context.clock, accountFetch: context.stripeAccountFetch },
+      );
+      return jsonResponse(200, {
+        accepted: true,
+        checkout_state: result.summary.state,
+        idempotent_replay: result.idempotentReplay,
+        fulfillment_halted: result.summary.fulfillment_allowed !== true,
+      });
+    }
+    if (!reversalConfiguration.webhookOperational) return jsonResponse(503, { error: 'stripe_reversal_control_disabled' });
     const result = await processStripeReversalEvent(
       body,
       request.headers.get('stripe-signature'),
       process.env,
-      { store, alertStore, clock: context.clock },
+      { store, alertStore, clock: context.clock, accountFetch: context.stripeAccountFetch },
     );
     return jsonResponse(200, {
       accepted: true,

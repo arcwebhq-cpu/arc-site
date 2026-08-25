@@ -14,6 +14,10 @@ import {
   readIndexEntry,
   replaceIndex,
 } from './arc2-handoff-store.mjs';
+import {
+  stripeAccountVerificationConfigured,
+  verifyStripeEventOwnership,
+} from './stripe-account-verification.mjs';
 
 export const STRIPE_REVERSAL_SCHEMA = 'arc-stripe-reversal-state-v1';
 export const STRIPE_REVERSAL_EVENT_SCHEMA = 'arc-stripe-reversal-event-v1';
@@ -183,6 +187,7 @@ export function stripeReversalConfiguration(env = process.env) {
     'ARC_STRIPE_WEBHOOK_SIGNING_SECRET', 'ARC_STRIPE_REVERSAL_HMAC_SECRET', 'ARC_STRIPE_REVERSAL_BINDING_SECRET',
     'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET', 'ARC_STRIPE_REVERSAL_RECHECK_SECRET',
     'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET', 'ARC_HANDOFF_STATE_SECRET',
+    'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
   ];
   const supplied = names.map((name) => env[name]).filter(validSecret);
   const otherSecretNames = [
@@ -200,15 +205,18 @@ export function stripeReversalConfiguration(env = process.env) {
   const bindingEnabled = env.ARC_STRIPE_REVERSAL_BINDING_ENABLED === 'true';
   const recheckEnabled = env.ARC_STRIPE_REVERSAL_RECHECK_ENABLED === 'true';
   const apiVersionValid = env.ARC_STRIPE_WEBHOOK_API_VERSION === STRIPE_WEBHOOK_API_VERSION;
+  const accountVerificationValid = stripeAccountVerificationConfigured(env);
   const commonValid = liveModeValid && HEX_64.test(expectedAccount) && distinct &&
     validSecret(env.ARC_STRIPE_REVERSAL_HMAC_SECRET) && validSecret(env.ARC_HANDOFF_STATE_SECRET);
-  const webhookOperational = webhookEnabled && commonValid && apiVersionValid && validSecret(env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET);
+  const webhookOperational = webhookEnabled && commonValid && apiVersionValid && accountVerificationValid &&
+    validSecret(env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET);
   const bindingOperational = bindingEnabled && commonValid && validSecret(env.ARC_STRIPE_REVERSAL_BINDING_SECRET) &&
     validSecret(env.ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET);
   const recheckOperational = recheckEnabled && commonValid && validSecret(env.ARC_STRIPE_REVERSAL_RECHECK_SECRET) &&
     validSecret(env.ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET);
   const enabled = required && webhookOperational && bindingOperational && recheckOperational;
   return {
+    accountVerificationValid,
     apiVersionValid,
     bindingEnabled,
     bindingOperational,
@@ -218,7 +226,7 @@ export function stripeReversalConfiguration(env = process.env) {
     required,
     recheckEnabled,
     recheckOperational,
-    secretsValid: distinct && supplied.length === names.length,
+    secretsValid: distinct && supplied.length === names.length && accountVerificationValid,
     webhookEnabled,
     webhookOperational,
   };
@@ -569,6 +577,11 @@ export function normalizeStripeReversalEvent(raw, stripeSignature, env, now = ne
       !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
     throw new TypeError('Stripe event is not allowlisted or is incorrectly bound.');
   }
+  if (event.account !== undefined &&
+      (typeof event.account !== 'string' || !/^acct_[A-Za-z0-9]{6,128}$/.test(event.account) ||
+        !safeEqual(sha256Hex(event.account), env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256))) {
+    throw new TypeError('Stripe event account is invalid.');
+  }
   stripeIdentifier(event.id, EVENT_ID, 'Stripe event id');
   const reversal = normalizeReversalObject(event.type, event.data.object, env);
   const eventCreatedAt = new Date(event.created * 1000);
@@ -793,6 +806,13 @@ function unboundReversalAlert(event, env) {
 export async function processStripeReversalEvent(raw, stripeSignature, env, adapters = {}) {
   const clock = adapters.clock || (() => new Date());
   const event = normalizeStripeReversalEvent(raw, stripeSignature, env, clock());
+  await verifyStripeEventOwnership({
+    eventId: event.eventId,
+    eventType: event.eventType,
+    livemode: event.livemode,
+    objectId: event.objectId,
+    objectType: event.kind === 'refund' ? 'refund' : event.kind === 'charge-refund' ? 'charge' : 'dispute',
+  }, env, { fetch: adapters.accountFetch });
   const paymentKey = paymentIntentIndexKey(event.paymentIntentId, env);
   const reservation = reversalEventReservation(event, env);
   // A verified reversal must become a durable PaymentIntent-level halt before

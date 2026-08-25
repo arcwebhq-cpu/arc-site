@@ -256,6 +256,7 @@ export function configuredEnvironment(env = process.env) {
     'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
     'ARC_FINAL_DELIVERY_ACK_SECRET',
     'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+    'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
     'ARC_STRIPE_REVERSAL_HMAC_SECRET',
     'ARC_STRIPE_REVERSAL_BINDING_SECRET',
     'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
@@ -279,6 +280,8 @@ export function configuredEnvironment(env = process.env) {
     'ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED',
     'ARC_STRIPE_REVERSAL_BINDING_ENABLED',
     'ARC_STRIPE_REVERSAL_RECHECK_ENABLED',
+    'ARC_STRIPE_CHECKOUT_LEDGER_ENABLED',
+    'ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED',
     'ARC_STRIPE_WEBHOOK_API_VERSION',
     'NETLIFY_ADMIN_PAT',
     'NETLIFY_TEAM_SLUG',
@@ -287,7 +290,7 @@ export function configuredEnvironment(env = process.env) {
     'NETLIFY_OAUTH_CLIENT_SECRET',
   ];
   const missing = required.filter((name) => !String(env[name] || '').trim());
-  const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name));
+  const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name) || name === 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY');
   const shortSecrets = secretNames.filter((name) => String(env[name] || '').length < 32 || String(env[name] || '').length > 512);
   const duplicateSecrets = new Set(secretNames.map((name) => String(env[name] || '')).filter(Boolean)).size !== secretNames.filter((name) => env[name]).length;
   const attestations = [
@@ -303,6 +306,7 @@ export function configuredEnvironment(env = process.env) {
     'ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED',
     'ARC_STRIPE_REVERSAL_BINDING_ENABLED',
     'ARC_STRIPE_REVERSAL_RECHECK_ENABLED',
+    'ARC_STRIPE_CHECKOUT_LEDGER_ENABLED',
   ];
   const invalidAttestations = attestations.filter((name) => env[name] !== 'true');
   const liveModeSetting = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || '');
@@ -311,6 +315,12 @@ export function configuredEnvironment(env = process.env) {
   const productionMode = liveModeSetting === 'true' && allowTestModeSetting === 'false' && env.ARC_HANDOFF_ENABLED === 'true' && runtimeEnvironment === 'production';
   const sandboxMode = liveModeSetting === 'false' && allowTestModeSetting === 'true' && env.ARC_HANDOFF_ENABLED === 'false' && runtimeEnvironment === 'sandbox';
   const liveModeValid = productionMode || sandboxMode;
+  const stripeAccountVerificationKeyValid = new RegExp(`^rk_${productionMode ? 'live' : 'test'}_[A-Za-z0-9_]{16,240}$`)
+    .test(String(env.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY || ''));
+  const checkoutLedgerRequiredSetting = String(env.ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED || '');
+  const checkoutLedgerRequiredValid = productionMode
+    ? checkoutLedgerRequiredSetting === 'true'
+    : sandboxMode && (checkoutLedgerRequiredSetting === 'true' || checkoutLedgerRequiredSetting === 'false');
   const checkoutKeyId = String(env.ARC_CHECKOUT_BINDING_KEY_ID || '').trim().toLowerCase();
   const retiredRegistryRaw = String(env.ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON || '');
   let retiredCheckoutKeys;
@@ -349,7 +359,7 @@ export function configuredEnvironment(env = process.env) {
   }
   return {
     enabled: resolved.conflicts.length === 0 && missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
-      liveModeValid && checkoutKeyRegistryValid && stripeWebhookApiVersionValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
+      liveModeValid && stripeAccountVerificationKeyValid && checkoutLedgerRequiredValid && checkoutKeyRegistryValid && stripeWebhookApiVersionValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
     missing,
     invalid: [
       ...resolved.conflicts,
@@ -357,6 +367,8 @@ export function configuredEnvironment(env = process.env) {
       ...(duplicateSecrets ? ['ARC_SECRETS_MUST_BE_DISTINCT'] : []),
       ...invalidAttestations,
       ...(liveModeValid ? [] : ['ARC_STRIPE_MODE_OR_TEST_SANDBOX_CONTEXT']),
+      ...(stripeAccountVerificationKeyValid ? [] : ['ARC_STRIPE_ACCOUNT_VERIFICATION_KEY']),
+      ...(checkoutLedgerRequiredValid ? [] : ['ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED']),
       ...(checkoutKeyRegistryValid ? [] : ['ARC_CHECKOUT_BINDING_KEY_REGISTRY']),
       ...(stripeWebhookApiVersionValid ? [] : ['ARC_STRIPE_WEBHOOK_API_VERSION']),
       ...(identifiersValid ? [] : ['ARC_EXPECTED_IDS_OR_NETLIFY_IDS']),

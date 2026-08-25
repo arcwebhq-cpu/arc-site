@@ -10,6 +10,8 @@ import {
   INTAKE_MAX_REQUEST_BYTES,
   INTAKE_RESPONSE_SCHEMA,
   INTAKE_STORE,
+  INTAKE_IDEMPOTENCY_SECRET_ENV,
+  intakeIdempotencyConfigured,
   normalizeIntakeForm,
 } from '../lib/intake-submission-core.mjs';
 import { dispatchIntakeToArc1Background } from '../lib/intake-arc1-dispatch-core.mjs';
@@ -71,7 +73,8 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER, run
   // The server rechecks the exact attestation at the irreversible storage
   // boundary. UI readiness is never authority, and revocation is immediate.
   if (!intakeEnabledFromBuildMarker(buildMarker) || process.env.ARC_BUILD_INTAKE_ENABLED !== 'true' ||
-      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) || !runtimeReady(request, process.env)) {
+      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) || !runtimeReady(request, process.env) ||
+      !intakeIdempotencyConfigured(process.env)) {
     return response(503, { error: 'intake_disabled' });
   }
   const contentType = request.headers.get('content-type') || '';
@@ -84,10 +87,29 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER, run
     if (Number(contentLength) > INTAKE_MAX_REQUEST_BYTES) return response(413, { error: 'intake_too_large' });
   }
   try {
-    const normalized = await normalizeIntakeForm(await boundedFormData(request, contentType), context.clock?.() || new Date(), context.uuid);
+    const normalized = await normalizeIntakeForm(
+      await boundedFormData(request, contentType),
+      context.clock?.() || new Date(),
+      context.uuid,
+      { idempotencySecret: process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] },
+    );
     const store = context.intakeStore || getStore({ name: INTAKE_STORE, consistency: 'strong' });
-    const result = await store.setJSON(normalized.key, normalized.record, { onlyIfNew: true });
-    if (!result?.modified) throw new Error('ARC_INTAKE_STORAGE_CONFLICT');
+    let created = false;
+    let existing = null;
+    try {
+      const result = await store.setJSON(normalized.key, normalized.record, { onlyIfNew: true });
+      created = result?.modified === true;
+    } catch (error) {
+      existing = (await store.getWithMetadata(normalized.key, { type: 'json', consistency: 'strong' }))?.data || null;
+      if (!existing) throw error;
+    }
+    if (!created) {
+      existing ||= (await store.getWithMetadata(normalized.key, { type: 'json', consistency: 'strong' }))?.data || null;
+      const exactRetry = existing?.schema === normalized.record.schema &&
+        existing.submission_id === normalized.record.submission_id &&
+        existing.submission_data_sha256 === normalized.record.submission_data_sha256;
+      if (!exactRetry) throw new Error('ARC_INTAKE_STORAGE_CONFLICT');
+    }
     // A same-deploy background invocation is best-effort and separately gated.
     // The accepted intake remains durable even if dispatch is paused or fails;
     // dispatch state records the failure for an authenticated recovery run.
@@ -96,7 +118,9 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER, run
         store, fetch: context.fetch, clock: context.clock,
       });
     } catch {}
-    return response(201, { schema: INTAKE_RESPONSE_SCHEMA, accepted: true, submission_id: normalized.record.submission_id });
+    return response(created ? 201 : 200, {
+      schema: INTAKE_RESPONSE_SCHEMA, accepted: true, submission_id: normalized.record.submission_id,
+    });
   } catch (error) {
     if (error instanceof IntakeRequestError) return response(error.status, { error: error.code });
     if (error instanceof TypeError || error?.name === 'SyntaxError') return response(400, { error: 'invalid_intake' });

@@ -37,6 +37,12 @@ const env = {
   NETLIFY_TEAM_ACCOUNT_ID: 'source-account-123',
   NETLIFY_TEAM_SLUG: 'arc-team',
   ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
+  ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'false',
+  ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
+  ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
+  ARC_ALLOW_TEST_MODE_EVENTS: 'true',
+  ARC_HANDOFF_ENABLED: 'false',
+  ARC_RUNTIME_ENVIRONMENT: 'sandbox',
 };
 const record = {
   schema: 'arc2-netlify-handoff-v1', handoff_id: handoffId, state: 'PRECLAIM_DEPLOY_READY', revision: 8,
