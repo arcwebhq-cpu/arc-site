@@ -38,9 +38,13 @@ const form = new FormData();
 for (const [field, value] of Object.entries({
   intake_version: 'arc-intake-v7', name: 'Private Test Owner', email: 'private-owner@example.test', business: 'Private Test Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement', main_call_to_action: 'Request Estimate',
+  lead_form_needed: 'Yes', lead_notification_email: 'private-owner@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',
 })) form.append(field, value);
 form.append('goals', 'More calls');
+form.append('lead_form_fields', 'Email');
+form.append('sections', 'Contact or quote form');
+form.append('assets', 'Logo');
 const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
 form.append('logo_file', new Blob([png], { type: 'image/png' }), 'logo.png');
 const submissionId = '11111111-1111-4111-8111-111111111111';

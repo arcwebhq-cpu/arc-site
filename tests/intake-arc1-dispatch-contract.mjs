@@ -34,8 +34,10 @@ class ProviderSequenceRecoveryStore extends FakeStore {
   }
 }
 const form = new FormData();
-for (const [field, value] of Object.entries({ intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing', industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Estimate', budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, 'bot-field': '' })) form.append(field, value);
-form.append('goals', 'Calls');
+for (const [field, value] of Object.entries({ intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing', industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact', lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern', budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, 'bot-field': '' })) form.append(field, value);
+form.append('goals', 'More calls');
+form.append('lead_form_fields', 'Email');
+form.append('sections', 'Contact or quote form');
 const submissionId = '11111111-1111-4111-8111-111111111111'; const now = new Date('2026-08-13T19:00:00.000Z');
 const normalized = await normalizeIntakeForm(form, now, () => submissionId);
 const env = { ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true', ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdefgh', ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefghijkl', URL: 'https://arcweb.onl' };

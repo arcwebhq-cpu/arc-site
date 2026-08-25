@@ -28,6 +28,7 @@ function safePublicFile(urlPath) {
 }
 
 const claimRequests = [];
+const intakeRequests = [];
 const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url?.split('?')[0] === '/api/intake/readiness') {
     response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ schema: 'arc-intake-readiness-v1', intake_enabled: true }));
@@ -35,6 +36,14 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url?.split('?')[0] === '/api/analytics/event') {
     response.writeHead(202, { 'cache-control': 'no-store' }).end();
+    return;
+  }
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/api/intake/submit') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    intakeRequests.push({ headers: request.headers, body: Buffer.concat(chunks) });
+    response.writeHead(201, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      .end(JSON.stringify({ schema: 'arc-intake-submission-accepted-v1', accepted: true, submission_id: '11111111-1111-4111-8111-111111111111' }));
     return;
   }
   if (request.method === 'POST' && request.url?.split('?')[0] === '/api/arc2/claim') {
@@ -178,6 +187,8 @@ try {
     await page.locator('#next').click({ position: { x: 20, y: 20 } });
     assert.equal(await page.locator('#stepCount').textContent(), '3 / 3', `${viewport.name}: could not advance to details step`);
     assert.equal(await page.locator('#structureDetails').getAttribute('open'), '', `${viewport.name}: required lead routing details are still collapsed`);
+    assert.equal(await page.locator('#contactFormSection').isChecked(), true,
+      `${viewport.name}: the Contact CTA did not keep the contact-form section and verified lead route aligned`);
     await page.waitForTimeout(400);
 
     await page.locator('#budget').check();
@@ -202,6 +213,16 @@ try {
       .map((element) => ({ text: element.textContent.trim(), ...element.getBoundingClientRect().toJSON() }))
       .filter((rect) => rect.width < 48 || rect.height < 48));
     assert.deepEqual(shortTargets, [], `${viewport.name}: ARC form action is smaller than the 48px design target`);
+    const priorIntakeRequests = intakeRequests.length;
+    await Promise.all([
+      page.waitForURL('**/thank-you/'),
+      page.locator('#submit').click(),
+    ]);
+    assert.equal(intakeRequests.length, priorIntakeRequests + 1, `${viewport.name}: complete brief was not submitted exactly once`);
+    const intakeRequest = intakeRequests.at(-1);
+    assert.match(intakeRequest.headers['content-type'] || '', /^multipart\/form-data;\s*boundary=/i,
+      `${viewport.name}: intake did not use a multipart request`);
+    assert.ok(intakeRequest.body.length > 0, `${viewport.name}: intake request body was empty`);
     assert.deepEqual(errors, [], `${viewport.name}: browser errors: ${errors.join('; ')}`);
     await page.close();
   }

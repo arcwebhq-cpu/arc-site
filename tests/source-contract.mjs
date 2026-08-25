@@ -130,10 +130,15 @@ assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subjec
 assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
 assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href=enabled\?'#start':'mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request'/,
   'Only exact live readiness may restore the online-intake CTA.');
-assert.match(home, /fetch\('\/api\/intake\/readiness'/);
+assert.match(home, /fetchWithTimeout\('\/api\/intake\/readiness'/);
 assert.match(home, /ARC_INTAKE_ENABLED|intake_enabled/);
 assert.match(home, /<form action="\/api\/intake\/submit"/);
-assert.match(home, /fetch\('\/api\/intake\/submit',\{method:'POST',body:new FormData\(form\)/);
+assert.match(home, /fetchWithTimeout\('\/api\/intake\/submit',\{method:'POST',body:new FormData\(form\)/);
+assert.match(home, /fetchWithTimeout\('\/api\/intake\/readiness',[\s\S]*?,8000\)/,
+  'Readiness requests must fail closed instead of hanging the intake UI.');
+assert.match(home, /fetchWithTimeout\('\/api\/intake\/submit',[\s\S]*?,60000\)/,
+  'Preview submission must have a bounded wait on slow or failed networks.');
+assert.match(home, /Your answers are still here—wait a moment, then try once or email ARC/);
 assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=/,
   'Even an enabled build must not register a native Netlify Form that bypasses runtime readiness.');
 assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
@@ -230,6 +235,8 @@ assert.match(home, /field\.setAttribute\('aria-invalid','true'\)/);
 assert.match(home, /data-required-group="sections" id="structureDetails"/);
 assert.match(home, /structureStatus\.textContent=show\?'Lead routing required':'Defaults selected'/);
 assert.match(home, /if\(show\)structureDetails\.open=true/);
+assert.match(home, /contactFormSection\.checked=show/,
+  'The selected site sections must stay consistent with the verified lead-route choice.');
 assert.match(home, /Confirm its routing email in the next step/);
 assert.match(home, /const clickedCta=/);
 assert.match(home, /track\('arc_cta_click',\{cta:clickedCta\}\)/);
