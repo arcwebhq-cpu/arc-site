@@ -7,8 +7,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = await readFile(path.join(root, ".github/workflows/arc-site-quality.yml"), "utf8");
 const dependabot = await readFile(path.join(root, ".github/dependabot.yml"), "utf8");
 const reviewed = new Map([
-  ["actions/checkout", { sha: "11d5960a326750d5838078e36cf38b85af677262", version: "v4.4.0", count: 2 }],
-  ["actions/setup-node", { sha: "49933ea5288caeca8642d1e84afbd3f7d6820020", version: "v4.4.0", count: 1 }]
+  ["actions/checkout", { sha: "3d3c42e5aac5ba805825da76410c181273ba90b1", version: "v7.0.1", count: 2 }],
+  ["actions/setup-node", { sha: "820762786026740c76f36085b0efc47a31fe5020", version: "v7.0.0", count: 1 }]
 ]);
 const uses = [...workflow.matchAll(/^[ \t]*-?[ \t]*uses:[ \t]+([^ \t#]+)(?:[ \t]+#[ \t]*(\S+))?[ \t]*$/gm)]
   .map(match => ({ action: match[1].split("@")[0], ref: match[1].split("@")[1], version: match[2] }));

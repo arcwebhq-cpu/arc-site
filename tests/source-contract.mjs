@@ -528,7 +528,7 @@ assert.equal(imageSizePackage.name, 'image-size');
 assert.equal(imageSizePackage.version, '3.0.0-arc-disabled.0');
 assert.match(imageSizeDisabled, /throw new Error\('Image parsing is intentionally disabled/);
 assert.equal(packageJson.devDependencies['@sparticuz/chromium'], '149.0.0');
-assert.equal(packageJson.devDependencies.playwright, '1.62.0');
+assert.equal(packageJson.devDependencies.playwright, '1.62.1');
 assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
 assert.equal(packageJson.scripts.preflight, 'node scripts/launch-preflight.mjs --mode=safety');
 assert.equal(packageJson.scripts['preflight:sandbox'], 'node scripts/launch-preflight.mjs --mode=sandbox');
