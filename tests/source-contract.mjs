@@ -424,6 +424,7 @@ assert.deepEqual(packageJson.scripts.test.split(' && '), [
   'node tests/intake-readiness-contract.mjs',
   'node tests/intake-private-asset-contract.mjs',
   'node tests/intake-arc1-bridge-contract.mjs',
+  'node tests/intake-arc1-adapter-contract.mjs',
   'node tests/intake-arc1-dispatch-contract.mjs',
   'node tests/stripe-reversal-contract.mjs',
   'node tests/retention-control-contract.mjs',

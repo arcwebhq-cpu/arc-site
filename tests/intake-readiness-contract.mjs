@@ -188,7 +188,7 @@ const completeAttestation = Object.freeze({
 const encodedCompleteAttestation = JSON.stringify(completeAttestation);
 const adapterProofSecret = 'arc-intake-adapter-proof-secret-unique-0123456789';
 const adapterProofNow = new Date();
-const adapterEndpoint = 'https://hooks.example.test/arc1/intake';
+const adapterEndpoint = 'https://arcweb.onl/internal/intake/arc1/adapter';
 const adapterAssetEndpoint = 'https://arcweb.onl/internal/intake/arc1/assets/retrieve';
 const adapterSiteId = '8f9d462c-952f-42fc-a3a0-50a2529e8f5d';
 const adapterProofValue = Object.freeze({
@@ -223,9 +223,12 @@ const saved = {
   adapterProofSecret: process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET,
 };
 const bridgeRuntimeEnv = {
+  ARC_INTAKE_ARC1_ADAPTER_ENABLED: 'true',
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
   ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
+  ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED: 'true',
   ARC_INTAKE_ARC1_ENDPOINT: adapterEndpoint,
+  ARC_INTAKE_ARC1_DOWNSTREAM_ENDPOINT: 'https://hooks.zapier.com/hooks/catch/123456/abcde_12345/',
   ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdef',
   ARC_INTAKE_ARC1_DESTINATION_BEARER: 'destination-bearer-unique-0123456789',
@@ -233,6 +236,8 @@ const bridgeRuntimeEnv = {
   ARC_INTAKE_ARC1_ACK_SECRET: 'ack-secret-unique-0123456789-abcdefghij',
   ARC_INTAKE_ARC1_STATE_SECRET: 'state-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ASSET_RETRIEVAL_SECRET: 'asset-retrieval-secret-unique-0123456789',
+  ARC1_ASSET_RECEIPT_SECRET: 'asset-receipt-secret-unique-0123456789-ab',
+  ARC_INTAKE_ARC1_DOWNSTREAM_BEARER: 'downstream-bearer-unique-0123456789-ab',
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   SITE_ID: adapterSiteId,
   ARC_EXPECTED_NETLIFY_SITE_ID: adapterSiteId,
@@ -288,7 +293,8 @@ try {
   assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
     'Private retrieval alone cannot open readiness before bound preview publication wiring is proven.');
   simulatedFutureRuntimeReady = true;
-  for (const field of ['ARC_INTAKE_ARC1_BRIDGE_ENABLED', 'ARC_INTAKE_ARC1_DISPATCH_ENABLED']) {
+  for (const field of ['ARC_INTAKE_ARC1_ADAPTER_ENABLED', 'ARC_INTAKE_ARC1_BRIDGE_ENABLED',
+    'ARC_INTAKE_ARC1_DISPATCH_ENABLED', 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED']) {
     const previous = process.env[field];
     delete process.env[field];
     assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, `${field} must block readiness.`);

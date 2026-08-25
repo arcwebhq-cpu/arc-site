@@ -3,6 +3,11 @@ import {
   INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED,
   intakeArc1AdapterAttested,
 } from './intake-arc1-bridge-core.mjs';
+import {
+  INTAKE_ARC1_ADAPTER_ENABLED_ENV,
+  INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV,
+  resolveArc1AdapterEnvironment,
+} from './intake-arc1-adapter-core.mjs';
 import { resolveSameDeployDispatcher } from './intake-arc1-dispatch-core.mjs';
 import { INTAKE_PRIVATE_ASSET_ENABLED_ENV, resolvePrivateAssetEnvironment } from './intake-private-asset-core.mjs';
 
@@ -82,10 +87,12 @@ export function intakeArc1AdapterProofFromEnvironment(env = process.env, now = n
 
 export function intakeArc1RuntimeReady(request, env = process.env, now = new Date()) {
   if (env.ARC_INTAKE_ARC1_BRIDGE_ENABLED !== 'true' || env.ARC_INTAKE_ARC1_DISPATCH_ENABLED !== 'true' ||
+      env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
       env[INTAKE_PRIVATE_ASSET_ENABLED_ENV] !== 'true' ||
       !INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED || !intakeArc1AdapterProofFromEnvironment(env, now)) return false;
   try {
     resolveSameDeployDispatcher(request, env);
+    resolveArc1AdapterEnvironment(env);
     // Full endpoint/evidence/ack/state configuration and distinctness are
     // validated by the delivery environment resolver before readiness opens.
     const required = [
@@ -93,6 +100,7 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
       'ARC_INTAKE_ARC1_STATE_SECRET', 'ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET', 'ARC_INTAKE_ARC1_DISPATCH_SECRET',
       'ARC_INTAKE_ARC1_RUN_SECRET',
       'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
+      'ARC1_ASSET_RECEIPT_SECRET', 'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER',
     ];
     const secrets = required.map((name) => env[name]);
     if (secrets.some((value) => typeof value !== 'string' || Buffer.byteLength(value, 'utf8') < 32 || Buffer.byteLength(value, 'utf8') > 256) ||
