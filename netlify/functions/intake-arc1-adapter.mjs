@@ -30,12 +30,14 @@ export function createIntakeArc1AdapterHandler() {
     if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
     if (process.env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' ||
         process.env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-        process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
+        process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true' ||
+        process.env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED !== 'true' ||
+        process.env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED !== 'true') {
       return json(503, { error: 'adapter_disabled' });
     }
     if (!authorizeArc1AdapterIngress(request, process.env)) return json(401, { error: 'unauthorized' });
-    const contentType = request.headers.get('content-type') || '';
-    if (!contentType.toLowerCase().startsWith('application/json')) return json(400, { error: 'invalid_request' });
+    const contentType = (request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+    if (contentType !== 'application/json') return json(400, { error: 'invalid_request' });
     let envelopeRaw;
     try {
       envelopeRaw = await readBoundedRequestText(request, INTAKE_ARC1_ADAPTER_MAX_PACKET_BYTES);
@@ -51,7 +53,8 @@ export function createIntakeArc1AdapterHandler() {
       // The exact acknowledgement is already durable at this point. Queueing
       // only starts a separately gated background delivery; Zapier is never in
       // the producer's synchronous acknowledgement path.
-      if (!['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(accepted.record.dispatch.status)) {
+      if (!['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(accepted.record.dispatch.status) &&
+          !['COMPLETED', 'REVIEW_REQUIRED'].includes(accepted.record.consumer.status)) {
         const queued = await queueArc1AdapterDispatch(accepted.deliveryId, request, process.env, {
           fetch: context.fetch,
         });
@@ -63,7 +66,8 @@ export function createIntakeArc1AdapterHandler() {
     } catch (error) {
       if (error?.message === 'ARC1_ADAPTER_DISABLED') return json(503, { error: 'adapter_disabled' });
       if (error?.message === 'ARC1_ADAPTER_UNAUTHORIZED') return json(401, { error: 'unauthorized' });
-      if (/ARC1_ADAPTER_(?:ENVELOPE|ASSET|INGRESS|PENDING_INDEX)_CONFLICT/.test(error?.message || '')) {
+      if (/ARC1_ADAPTER_(?:ENVELOPE|ASSET|INGRESS|PENDING_INDEX)_CONFLICT/.test(error?.message || '') ||
+          error?.message === 'ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED') {
         return json(409, { error: 'adapter_conflict' });
       }
       if (error instanceof TypeError) return json(400, { error: 'invalid_request' });

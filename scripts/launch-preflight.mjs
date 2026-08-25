@@ -28,8 +28,11 @@ export const AUTOMATION_FLAG_NAMES = Object.freeze([
   'ARC_HANDOFF_ENABLED',
   'ARC_INTAKE_ARC1_ADAPTER_ENABLED',
   'ARC_INTAKE_ARC1_BRIDGE_ENABLED',
+  'ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED',
+  'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED',
   'ARC_INTAKE_ARC1_DISPATCH_ENABLED',
   'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED',
+  'ARC_INTAKE_ARC1_LEGACY_MIGRATION_ENABLED',
   'ARC_INTAKE_ASSET_RETRIEVAL_ENABLED',
   'ARC_INTAKE_ENABLED',
   'ARC_OPERATIONS_AUDIT_ENABLED',
@@ -138,10 +141,13 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
   const liveModeExact = exactMode(env, 'live');
   const intakeBuildFlagEnabled = env.ARC_BUILD_INTAKE_ENABLED === 'true';
   const intakeAttestationValid = intakeEnabledFromAttestation(env[INTAKE_READINESS_ENV]);
+  const intakeConsumerClaimEnabled = env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED === 'true';
+  const intakeConsumerCompletionEnabled = env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED === 'true';
+  const intakeConsumerProtocolEnabled = intakeConsumerClaimEnabled && intakeConsumerCompletionEnabled;
   const intakeRuntimeReady = intakeBuildFlagEnabled && intakeAttestationValid &&
     safeRuntimeReadiness(env, now, runtimeReady);
   const intakeReady = intakeBuildFlagEnabled && intakeBuildMarkerEnabled &&
-    intakeAttestationValid && intakeRuntimeReady;
+    intakeAttestationValid && intakeRuntimeReady && intakeConsumerProtocolEnabled;
   const sandboxAutomationOff = SANDBOX_FORBIDDEN_FLAG_NAMES.every((name) =>
     !isPresent(env, name) || env[name] === 'false');
 
@@ -173,6 +179,10 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
       else if (!intakeBuildFlagEnabled) invalid.push('ARC_BUILD_INTAKE_ENABLED');
       if (!isPresent(env, INTAKE_READINESS_ENV)) missing.push(INTAKE_READINESS_ENV);
       else if (!intakeAttestationValid) invalid.push(INTAKE_READINESS_ENV);
+      for (const name of ['ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {
+        if (!isPresent(env, name)) missing.push(name);
+        else if (env[name] !== 'true') invalid.push(name);
+      }
       if (!intakeBuildMarkerEnabled) invalid.push('INTAKE_BUILD_MARKER');
       if (!intakeRuntimeReady) invalid.push('INTAKE_ARC1_RUNTIME_READINESS');
     }
@@ -202,6 +212,9 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
       intake_build_flag_enabled: intakeBuildFlagEnabled,
       intake_build_marker_enabled: intakeBuildMarkerEnabled,
       intake_attestation_valid: intakeAttestationValid,
+      intake_consumer_claim_enabled: intakeConsumerClaimEnabled,
+      intake_consumer_completion_enabled: intakeConsumerCompletionEnabled,
+      intake_consumer_protocol_enabled: intakeConsumerProtocolEnabled,
       intake_runtime_ready: intakeRuntimeReady,
       intake_ready: intakeReady,
       external_provider_state_checked: false,

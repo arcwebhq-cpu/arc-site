@@ -25,7 +25,9 @@ export function createIntakeArc1AdapterBackgroundHandler() {
     if (!authorizeArc1AdapterDispatch(request, process.env)) return response(401, { error: 'unauthorized' });
     if (process.env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' ||
         process.env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-        process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
+        process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true' ||
+        process.env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED !== 'true' ||
+        process.env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED !== 'true') {
       return response(503, { error: 'adapter_disabled' });
     }
     const contentType = request.headers.get('content-type') || '';

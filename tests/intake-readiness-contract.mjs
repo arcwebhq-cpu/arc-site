@@ -288,6 +288,8 @@ const bridgeRuntimeEnv = {
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
   ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
   ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED: 'true',
+  ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED: 'true',
+  ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED: 'true',
   ARC_INTAKE_ARC1_ENDPOINT: adapterEndpoint,
   ARC_INTAKE_ARC1_DOWNSTREAM_ENDPOINT: 'https://hooks.zapier.com/hooks/catch/123456/abcde_12345/',
   ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefgh',
@@ -299,6 +301,9 @@ const bridgeRuntimeEnv = {
   ARC_INTAKE_ASSET_RETRIEVAL_SECRET: 'asset-retrieval-secret-unique-0123456789',
   ARC1_ASSET_RECEIPT_SECRET: 'asset-receipt-secret-unique-0123456789-ab',
   ARC_INTAKE_ARC1_DOWNSTREAM_BEARER: 'downstream-bearer-unique-0123456789-ab',
+  ARC_INTAKE_ARC1_PACKET_SECRET: 'packet-secret-unique-0123456789-abcdefgh',
+  ARC_INTAKE_ARC1_CONSUMER_BEARER: 'consumer-bearer-unique-0123456789-abcdef',
+  ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET: 'consumer-receipt-secret-unique-0123456789',
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_IDEMPOTENCY_SECRET: 'intake-idempotency-secret-unique-0123456789',
   SITE_ID: adapterSiteId,
@@ -356,10 +361,19 @@ try {
     'Private retrieval alone cannot open readiness before bound preview publication wiring is proven.');
   simulatedFutureRuntimeReady = true;
   for (const field of ['ARC_INTAKE_ARC1_ADAPTER_ENABLED', 'ARC_INTAKE_ARC1_BRIDGE_ENABLED',
-    'ARC_INTAKE_ARC1_DISPATCH_ENABLED', 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED']) {
+    'ARC_INTAKE_ARC1_DISPATCH_ENABLED', 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED',
+    'ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {
     const previous = process.env[field];
     delete process.env[field];
     assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, `${field} must block readiness.`);
+    process.env[field] = previous;
+  }
+  for (const field of ['ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
+    'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET']) {
+    const previous = process.env[field];
+    delete process.env[field];
+    assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
+      `${field} must block readiness before any v2 packet can be emitted.`);
     process.env[field] = previous;
   }
   const savedAckSecret = process.env.ARC_INTAKE_ARC1_ACK_SECRET;

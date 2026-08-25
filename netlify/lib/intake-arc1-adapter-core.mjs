@@ -16,35 +16,77 @@ import { createPrivateAssetGrants, retrievePrivateAsset } from './intake-private
 export const INTAKE_ARC1_ADAPTER_ENABLED_ENV = 'ARC_INTAKE_ARC1_ADAPTER_ENABLED';
 export const INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV = 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED';
 export const INTAKE_ARC1_ADAPTER_STORE = 'arc-intake-arc1-adapter';
-export const INTAKE_ARC1_ADAPTER_RECORD_SCHEMA = 'arc-intake-arc1-adapter-ingress-v1';
+export const INTAKE_ARC1_ADAPTER_RECORD_SCHEMA = 'arc-intake-arc1-adapter-ingress-v2';
+export const INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA = 'arc-intake-arc1-adapter-ingress-v1';
 export const INTAKE_ARC1_ADAPTER_DISPATCH_SCHEMA = 'arc-intake-arc1-adapter-dispatch-v1';
-export const INTAKE_ARC1_ADAPTER_PACKET_SCHEMA = 'arc-intake-arc1-downstream-dispatch-v1';
+export const INTAKE_ARC1_ADAPTER_PACKET_SCHEMA = 'arc-intake-arc1-downstream-dispatch-v2';
+export const INTAKE_ARC1_ADAPTER_CONSUMER_STATE_SCHEMA = 'arc-intake-arc1-consumer-state-v1';
+export const INTAKE_ARC1_ADAPTER_CLAIM_REQUEST_SCHEMA = 'arc-intake-arc1-consumer-claim-request-v1';
+export const INTAKE_ARC1_ADAPTER_CLAIM_RESPONSE_SCHEMA = 'arc-intake-arc1-consumer-claim-v1';
+export const INTAKE_ARC1_ADAPTER_COMPLETION_REQUEST_SCHEMA = 'arc-intake-arc1-consumer-completion-request-v1';
+export const INTAKE_ARC1_ADAPTER_COMPLETION_RESPONSE_SCHEMA = 'arc-intake-arc1-consumer-completion-v1';
 export const INTAKE_ARC1_ADAPTER_PENDING_INDEX_SCHEMA = 'arc-intake-arc1-adapter-pending-index-v1';
+export const INTAKE_ARC1_ADAPTER_REVIEW_INDEX_SCHEMA = 'arc-intake-arc1-adapter-review-index-v1';
 export const INTAKE_ARC1_ADAPTER_BACKGROUND_SCHEMA = 'arc-intake-arc1-adapter-background-request-v1';
 export const INTAKE_ARC1_ADAPTER_ENDPOINT_PATH = '/internal/intake/arc1/adapter';
+export const INTAKE_ARC1_ADAPTER_CLAIM_ENDPOINT_PATH = '/internal/intake/arc1/adapter/claim';
+export const INTAKE_ARC1_ADAPTER_COMPLETION_ENDPOINT_PATH = '/internal/intake/arc1/adapter/complete';
+export const INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH = '/internal/intake/arc1/adapter/migrate-legacy';
 export const INTAKE_ARC1_ADAPTER_MAX_ATTEMPTS = 5;
 export const INTAKE_ARC1_ADAPTER_LEASE_MS = 2 * 60_000;
+export const INTAKE_ARC1_ADAPTER_CLAIM_DEADLINE_MS = 15 * 60_000;
+export const INTAKE_ARC1_ADAPTER_CONSUMER_LEASE_MS = 30 * 60_000;
 export const INTAKE_ARC1_ADAPTER_MAX_PACKET_BYTES = 1_000_000;
+export const INTAKE_ARC1_ADAPTER_MAX_CONTROL_BYTES = 4096;
 export const INTAKE_ARC1_ADAPTER_RECOVERY_MAX_READS = 100;
 export const INTAKE_ARC1_ADAPTER_RECOVERY_MAX_ATTEMPTS = 20;
 export const INTAKE_ARC1_ADAPTER_RECOVERY_MAX_PAGES = 20;
 export const INTAKE_ARC1_ADAPTER_RECOVERY_BUDGET_MS = 8_000;
+export const INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_MAX_READS = 100;
+
+export function arc1AdapterProtocolEnabled(env) {
+  return env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] === 'true' &&
+    env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] === 'true' &&
+    env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED === 'true' &&
+    env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED === 'true' &&
+    env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED === 'true';
+}
+
+export function arc1AdapterLegacyMigrationEnabled(env) {
+  return env.ARC_INTAKE_ARC1_LEGACY_MIGRATION_ENABLED === 'true' && [
+    'ARC_INTAKE_ARC1_ADAPTER_ENABLED', 'ARC_INTAKE_ARC1_BRIDGE_ENABLED',
+    'ARC_INTAKE_ARC1_DISPATCH_ENABLED', 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED',
+    'ARC_INTAKE_ASSET_RETRIEVAL_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED',
+    'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED',
+  ].every((name) => env[name] === 'false');
+}
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const CONSUMER_ATTEMPT_ID_PATTERN = /^arc1attempt_[a-f0-9]{40}$/;
 const RECOVERY_CURSOR_VERSION = 1;
+const LEGACY_MIGRATION_CURSOR_VERSION = 1;
 const RECOVERY_SHARD_COUNT = 256;
 const ADAPTER_RECORD_FIELDS = Object.freeze([
   'acknowledgement_json', 'acknowledgement_sha256', 'asset_count', 'asset_receipt_hmac_sha256',
   'asset_receipt_sha256', 'bridge_evidence_sha256', 'claim_created_at', 'consumer_claim_key_hmac_sha256',
-  'contains_direct_customer_content', 'delivery_id', 'dispatch', 'envelope_sha256', 'ingress_state_digest_sha256',
+  'consumer', 'contains_direct_customer_content', 'delivery_id', 'dispatch', 'envelope_sha256', 'ingress_state_digest_sha256',
   'ingress_state_key', 'packet_sha256', 'schema', 'source_submission_id', 'total_asset_bytes',
 ]);
+const LEGACY_ADAPTER_RECORD_FIELDS = Object.freeze(ADAPTER_RECORD_FIELDS.filter((field) => field !== 'consumer'));
 const DISPATCH_FIELDS = Object.freeze([
   'accepted_at', 'alert_code', 'alert_status', 'alert_updated_at', 'attempt_count', 'last_attempt_at',
   'lease_expires_at', 'lease_hmac_sha256', 'next_attempt_at', 'schema', 'status',
 ]);
+const CONSUMER_FIELDS = Object.freeze([
+  'claim_deadline_at', 'claim_expires_at', 'claim_request_sha256', 'claim_token_sha256', 'claimed_at',
+  'completed_at', 'completion_receipt_hmac_sha256', 'completion_receipt_sha256', 'consumer_attempt_id',
+  'packet_expires_at', 'packet_sha256', 'result_sha256', 'review_code', 'review_required_at', 'schema', 'status',
+]);
 const PENDING_INDEX_FIELDS = Object.freeze(['delivery_id_sha256', 'ingress_key', 'schema']);
+const REVIEW_INDEX_FIELDS = Object.freeze([
+  'delivery_id_sha256', 'ingress_key', 'review_code', 'review_required_at', 'schema',
+]);
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const hmac = (secret, value) => createHmac('sha256', secret).update(value).digest('hex');
@@ -64,7 +106,10 @@ const secret = (value, label) => {
   return value;
 };
 const iso = (value, label) => {
-  if (typeof value !== 'string' || new Date(value).toISOString() !== value) throw new TypeError(`${label} is invalid.`);
+  const milliseconds = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    throw new TypeError(`${label} is invalid.`);
+  }
   return value;
 };
 const nullableIso = (value, label) => value === null ? null : iso(value, label);
@@ -132,11 +177,65 @@ function requestRecoveryCursor(request, adapters) {
   return values[0] || null;
 }
 
+function migrationSequenceInitial(resolved) {
+  return hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET, 'arc-intake-arc1-adapter-legacy-migration-sequence-v1\ningress/');
+}
+
+function migrationSequenceNext(resolved, previous, key) {
+  return hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET,
+    `arc-intake-arc1-adapter-legacy-migration-sequence-step-v1\n${previous}\n${Buffer.byteLength(key, 'utf8')}\n${key}`);
+}
+
+function encodeLegacyMigrationCursor(value, resolved) {
+  if (!Number.isSafeInteger(value.position) || value.position < 0 ||
+      !(value.sequence_hmac_sha256 === null ? value.position === 0 : value.position > 0 && SHA256_PATTERN.test(value.sequence_hmac_sha256))) {
+    throw new TypeError('ARC1 adapter legacy migration cursor is invalid.');
+  }
+  const raw = Buffer.from(canonicalJson({
+    version: LEGACY_MIGRATION_CURSOR_VERSION, position: value.position,
+    sequence_hmac_sha256: value.sequence_hmac_sha256,
+  }), 'utf8').toString('base64url');
+  return `${raw}.${hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET,
+    `arc-intake-arc1-adapter-legacy-migration-cursor-v1\n${raw}`)}`;
+}
+
+function decodeLegacyMigrationCursor(token, resolved) {
+  if (token === null || token === undefined || token === '') return { position: 0, sequence_hmac_sha256: null };
+  if (typeof token !== 'string' || token.length > 512 || !/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token)) {
+    throw new TypeError('ARC1 adapter legacy migration cursor is invalid.');
+  }
+  const [raw, supplied] = token.split('.');
+  if (!safeEqual(supplied, hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET,
+    `arc-intake-arc1-adapter-legacy-migration-cursor-v1\n${raw}`))) {
+    throw new TypeError('ARC1 adapter legacy migration cursor signature mismatch.');
+  }
+  let value;
+  try { value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')); } catch {
+    throw new TypeError('ARC1 adapter legacy migration cursor is invalid.');
+  }
+  if (!exactKeys(value, ['position', 'sequence_hmac_sha256', 'version']) ||
+      value.version !== LEGACY_MIGRATION_CURSOR_VERSION || !Number.isSafeInteger(value.position) || value.position < 0 ||
+      !(value.sequence_hmac_sha256 === null ? value.position === 0 :
+        value.position > 0 && SHA256_PATTERN.test(value.sequence_hmac_sha256))) {
+    throw new TypeError('ARC1 adapter legacy migration cursor is invalid.');
+  }
+  return { position: value.position, sequence_hmac_sha256: value.sequence_hmac_sha256 };
+}
+
+function requestLegacyMigrationCursor(request, adapters) {
+  if (Object.hasOwn(adapters, 'cursor')) return adapters.cursor;
+  let url;
+  try { url = new URL(request.url); } catch { throw new TypeError('ARC1 adapter legacy migration request URL is invalid.'); }
+  const values = url.searchParams.getAll('cursor');
+  if (values.length > 1) throw new TypeError('ARC1 adapter legacy migration cursor is ambiguous.');
+  return values[0] || null;
+}
+
 function exactOrigin(value, label) {
   let url;
   try { url = new URL(value); } catch { throw new TypeError(`${label} is invalid.`); }
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash ||
-      !['arcweb.onl', 'arcsites.netlify.app'].includes(url.hostname)) throw new TypeError(`${label} is invalid.`);
+      url.hostname !== 'arcweb.onl') throw new TypeError(`${label} is invalid.`);
   return url.origin;
 }
 
@@ -159,15 +258,69 @@ export function resolveArc1AdapterEnvironment(env) {
   const assetReceiptSecret = secret(env.ARC1_ASSET_RECEIPT_SECRET, 'ARC1_ASSET_RECEIPT_SECRET');
   const downstreamBearer = secret(env.ARC_INTAKE_ARC1_DOWNSTREAM_BEARER, 'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER');
   const dispatchSecret = secret(env.ARC_INTAKE_ARC1_DISPATCH_SECRET, 'ARC_INTAKE_ARC1_DISPATCH_SECRET');
+  const packetSecret = secret(env.ARC_INTAKE_ARC1_PACKET_SECRET, 'ARC_INTAKE_ARC1_PACKET_SECRET');
+  const consumerBearer = secret(env.ARC_INTAKE_ARC1_CONSUMER_BEARER, 'ARC_INTAKE_ARC1_CONSUMER_BEARER');
+  const consumerReceiptSecret = secret(env.ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET,
+    'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET');
   const downstreamEndpoint = exactDownstreamEndpoint(env.ARC_INTAKE_ARC1_DOWNSTREAM_ENDPOINT);
   const allSecrets = [
     bridge.ARC_INTAKE_ARC1_RUN_SECRET, bridge.ARC_INTAKE_ARC1_DESTINATION_BEARER,
     bridge.ARC_INTAKE_ARC1_EVIDENCE_SECRET, bridge.ARC_INTAKE_ARC1_ACK_SECRET,
     bridge.ARC_INTAKE_ARC1_STATE_SECRET, bridge.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET,
     bridge.ARC_INTAKE_ASSET_RETRIEVAL_SECRET, assetReceiptSecret, downstreamBearer, dispatchSecret,
+    packetSecret, consumerBearer, consumerReceiptSecret,
   ];
   if (new Set(allSecrets).size !== allSecrets.length) throw new TypeError('ARC1 adapter secrets must be distinct.');
-  return { ...bridge, origin, assetReceiptSecret, downstreamBearer, dispatchSecret, downstreamEndpoint };
+  return {
+    ...bridge, origin, assetReceiptSecret, downstreamBearer, dispatchSecret, downstreamEndpoint,
+    packetSecret, consumerBearer, consumerReceiptSecret,
+  };
+}
+
+export function validateArc1AdapterConsumerState(value) {
+  if (!exactKeys(value, CONSUMER_FIELDS) || value.schema !== INTAKE_ARC1_ADAPTER_CONSUMER_STATE_SCHEMA ||
+      !['AWAITING_CLAIM', 'CLAIMED', 'COMPLETED', 'REVIEW_REQUIRED'].includes(value.status) ||
+      !SHA256_PATTERN.test(value.packet_sha256) ||
+      ![null, 'CLAIM_NOT_RECEIVED', 'CLAIM_EXPIRED', 'LEGACY_UNSIGNED_PACKET'].includes(value.review_code)) {
+    throw new TypeError('ARC1 adapter consumer state is invalid.');
+  }
+  iso(value.packet_expires_at, 'consumer packet_expires_at');
+  for (const field of ['claim_deadline_at', 'claim_expires_at', 'claimed_at', 'completed_at', 'review_required_at']) {
+    nullableIso(value[field], `consumer ${field}`);
+  }
+  for (const field of ['claim_request_sha256', 'claim_token_sha256', 'completion_receipt_hmac_sha256',
+    'completion_receipt_sha256', 'result_sha256']) nullableSha(value[field], `consumer ${field}`);
+  if (value.consumer_attempt_id !== null && !CONSUMER_ATTEMPT_ID_PATTERN.test(value.consumer_attempt_id)) {
+    throw new TypeError('ARC1 adapter consumer attempt id is invalid.');
+  }
+  const claimFieldsEmpty = value.consumer_attempt_id === null && value.claim_request_sha256 === null &&
+    value.claim_token_sha256 === null && value.claimed_at === null && value.claim_expires_at === null;
+  const completionFieldsEmpty = value.completed_at === null && value.completion_receipt_hmac_sha256 === null &&
+    value.completion_receipt_sha256 === null && value.result_sha256 === null;
+  const claimFieldsComplete = value.consumer_attempt_id !== null && value.claim_request_sha256 !== null &&
+    value.claim_token_sha256 !== null && value.claimed_at !== null && value.claim_expires_at !== null;
+  if (value.status === 'AWAITING_CLAIM' && (!claimFieldsEmpty || !completionFieldsEmpty ||
+      value.review_code !== null || value.review_required_at !== null)) {
+    throw new TypeError('Awaiting ARC1 consumer claim is inconsistent.');
+  }
+  if (['CLAIMED', 'COMPLETED'].includes(value.status) && (!value.claim_deadline_at || !claimFieldsComplete ||
+      value.review_code !== null || value.review_required_at !== null)) {
+    throw new TypeError('Claimed ARC1 consumer state is incomplete.');
+  }
+  if (value.status === 'CLAIMED' && !completionFieldsEmpty) throw new TypeError('Claimed ARC1 consumer state is inconsistent.');
+  if (value.status === 'COMPLETED' && (!value.completed_at || !value.completion_receipt_hmac_sha256 ||
+      !value.completion_receipt_sha256 || !value.result_sha256)) {
+    throw new TypeError('Completed ARC1 consumer state is incomplete.');
+  }
+  if (value.status === 'REVIEW_REQUIRED' && (!value.review_code || !value.review_required_at || !completionFieldsEmpty)) {
+    throw new TypeError('ARC1 consumer review state is incomplete.');
+  }
+  if (value.status === 'REVIEW_REQUIRED' && ['LEGACY_UNSIGNED_PACKET', 'CLAIM_NOT_RECEIVED'].includes(value.review_code) &&
+      !claimFieldsEmpty) throw new TypeError('Unclaimed ARC1 consumer review state is inconsistent.');
+  if (value.status === 'REVIEW_REQUIRED' && value.review_code === 'CLAIM_EXPIRED' && !claimFieldsComplete) {
+    throw new TypeError('Expired ARC1 consumer review state is inconsistent.');
+  }
+  return value;
 }
 
 export function validateArc1AdapterDispatch(value) {
@@ -202,7 +355,9 @@ export function validateArc1AdapterDispatch(value) {
 }
 
 export function validateArc1AdapterRecord(value) {
-  if (!exactKeys(value, ADAPTER_RECORD_FIELDS) || value.schema !== INTAKE_ARC1_ADAPTER_RECORD_SCHEMA ||
+  const legacy = value?.schema === INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA;
+  if (!(legacy ? exactKeys(value, LEGACY_ADAPTER_RECORD_FIELDS) : exactKeys(value, ADAPTER_RECORD_FIELDS)) ||
+      ![INTAKE_ARC1_ADAPTER_RECORD_SCHEMA, INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA].includes(value?.schema) ||
       !SHA256_PATTERN.test(value.delivery_id) || !SHA256_PATTERN.test(value.bridge_evidence_sha256) ||
       !UUID_PATTERN.test(value.source_submission_id) || !/^arc1-function-ingress-v1:[a-f0-9]{64}$/.test(value.ingress_state_key) ||
       value.ingress_state_key !== `arc1-function-ingress-v1:${value.ingress_state_digest_sha256}` ||
@@ -214,6 +369,48 @@ export function validateArc1AdapterRecord(value) {
       value.contains_direct_customer_content !== false) throw new TypeError('ARC1 adapter record is invalid.');
   iso(value.claim_created_at, 'adapter claim_created_at');
   validateArc1AdapterDispatch(value.dispatch);
+  if (!legacy) {
+    validateArc1AdapterConsumerState(value.consumer);
+    if (!safeEqual(value.packet_sha256, value.consumer.packet_sha256)) {
+      throw new TypeError('ARC1 adapter packet and consumer state are inconsistent.');
+    }
+    const transportPreHook = ['PENDING', 'CLAIMED'].includes(value.dispatch.status);
+    const legacyReview = value.consumer.status === 'REVIEW_REQUIRED' &&
+      value.consumer.review_code === 'LEGACY_UNSIGNED_PACKET';
+    if (transportPreHook && !legacyReview &&
+        (value.consumer.status !== 'AWAITING_CLAIM' || value.consumer.claim_deadline_at !== null)) {
+      throw new TypeError('Pre-hook ARC1 consumer state is inconsistent.');
+    }
+    if (value.dispatch.status === 'DEAD_LETTER' && value.consumer.status !== 'AWAITING_CLAIM' && !legacyReview) {
+      throw new TypeError('Dead-letter ARC1 consumer state is inconsistent.');
+    }
+    if (value.dispatch.status === 'HOOK_ACCEPTED' && value.consumer.status === 'AWAITING_CLAIM' &&
+        value.consumer.claim_deadline_at === null) throw new TypeError('Accepted ARC1 consumer claim deadline is missing.');
+    if (['CLAIMED', 'COMPLETED'].includes(value.consumer.status) && value.dispatch.status !== 'HOOK_ACCEPTED') {
+      throw new TypeError('Active ARC1 consumer requires hook acceptance.');
+    }
+    if (value.consumer.status === 'REVIEW_REQUIRED' && !legacyReview && value.dispatch.status !== 'HOOK_ACCEPTED') {
+      throw new TypeError('ARC1 consumer review state requires hook acceptance.');
+    }
+    if (value.consumer.claim_deadline_at &&
+        Date.parse(value.consumer.claim_deadline_at) > Date.parse(value.consumer.packet_expires_at)) {
+      throw new TypeError('ARC1 consumer claim deadline exceeds packet expiry.');
+    }
+    if (value.consumer.claimed_at && value.dispatch.accepted_at &&
+        Date.parse(value.consumer.claimed_at) < Date.parse(value.dispatch.accepted_at)) {
+      throw new TypeError('ARC1 consumer claim predates hook acceptance.');
+    }
+    if (value.consumer.claimed_at &&
+        (Date.parse(value.consumer.claim_expires_at) <= Date.parse(value.consumer.claimed_at) ||
+         Date.parse(value.consumer.claim_expires_at) > Date.parse(value.consumer.packet_expires_at))) {
+      throw new TypeError('ARC1 consumer lease deadline is inconsistent.');
+    }
+    if (value.consumer.completed_at &&
+        (Date.parse(value.consumer.completed_at) < Date.parse(value.consumer.claimed_at) ||
+         Date.parse(value.consumer.completed_at) > Date.parse(value.consumer.claim_expires_at))) {
+      throw new TypeError('ARC1 consumer completion is outside its lease.');
+    }
+  }
   return value;
 }
 
@@ -225,11 +422,33 @@ function pendingKey(deliveryId, resolved) {
   return `pending/${hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET, `arc-intake-arc1-adapter-pending-v1\n${deliveryId}`)}`;
 }
 
+function reviewKey(deliveryId, resolved) {
+  return `review/${hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET, `arc-intake-arc1-adapter-review-v1\n${deliveryId}`)}`;
+}
+
 function initialDispatch(now) {
   return {
     schema: INTAKE_ARC1_ADAPTER_DISPATCH_SCHEMA, status: 'PENDING', attempt_count: 0,
     next_attempt_at: now.toISOString(), lease_hmac_sha256: null, lease_expires_at: null,
     last_attempt_at: null, accepted_at: null, alert_status: 'NONE', alert_code: null, alert_updated_at: null,
+  };
+}
+
+function initialConsumer(packetSha256, packetExpiresAt) {
+  return {
+    schema: INTAKE_ARC1_ADAPTER_CONSUMER_STATE_SCHEMA, status: 'AWAITING_CLAIM',
+    packet_sha256: packetSha256, packet_expires_at: packetExpiresAt, claim_deadline_at: null,
+    consumer_attempt_id: null, claim_request_sha256: null, claim_token_sha256: null,
+    claimed_at: null, claim_expires_at: null, completed_at: null, result_sha256: null,
+    completion_receipt_sha256: null, completion_receipt_hmac_sha256: null,
+    review_code: null, review_required_at: null,
+  };
+}
+
+function legacyReviewConsumer(record) {
+  return {
+    ...initialConsumer(record.packet_sha256, record.claim_created_at), status: 'REVIEW_REQUIRED',
+    review_code: 'LEGACY_UNSIGNED_PACKET', review_required_at: record.claim_created_at,
   };
 }
 
@@ -313,8 +532,11 @@ function deriveAdapterArtifacts(record, envelopeRaw, resolved, claimCreatedAt, n
   const acknowledgementRaw = canonicalJson(acknowledgement);
   const acknowledgementJson = canonicalJson({ acknowledgement, hmac_sha256: hmac(resolved.ARC_INTAKE_ARC1_ACK_SECRET,
     `arc-intake-arc1-consumer-ack-v1\n${acknowledgementRaw}`) });
-  const packet = {
+  const unsignedPacket = {
     schema: INTAKE_ARC1_ADAPTER_PACKET_SCHEMA, bridge_envelope_json: envelopeRaw,
+    protocol_version: 2, packet_issued_at: claimCreatedAt, packet_expires_at: evidence.evidence_expires_at,
+    claim_endpoint: `${resolved.origin}${INTAKE_ARC1_ADAPTER_CLAIM_ENDPOINT_PATH}`,
+    completion_endpoint: `${resolved.origin}${INTAKE_ARC1_ADAPTER_COMPLETION_ENDPOINT_PATH}`,
     consumer_schema: INTAKE_ARC1_CONSUMER_SCHEMA, bridge_contract_sha256: INTAKE_ARC1_CONTRACT_SHA256,
     bridge_delivery_id: evidence.delivery_id, bridge_evidence_sha256: bridgeEvidenceSha256,
     bridge_evidence_expires_at: evidence.evidence_expires_at, bridge_evidence_issued_at: evidence.evidence_issued_at,
@@ -327,12 +549,14 @@ function deriveAdapterArtifacts(record, envelopeRaw, resolved, claimCreatedAt, n
     ingress_claim_bridge_evidence_sha256: bridgeEvidenceSha256,
     ingress_claim_asset_receipt_sha256: assetReceiptSha256, ingress_claim_created_at: claimCreatedAt,
   };
+  const packet = { ...unsignedPacket, packet_hmac_sha256: hmac(resolved.packetSecret,
+    `arc-intake-arc1-downstream-packet-v2\n${canonicalJson(unsignedPacket)}`) };
   const packetRaw = canonicalJson(packet);
   if (Buffer.byteLength(packetRaw, 'utf8') > INTAKE_ARC1_ADAPTER_MAX_PACKET_BYTES) throw new Error('ARC1_ADAPTER_PACKET_TOO_LARGE');
   return {
     acknowledgementJson, assetCount: assetManifest.length, assetReceiptHmacSha256, assetReceiptSha256,
     bridgeEvidenceSha256, consumerClaimKeyHmacSha256, ingressStateDigestSha256, ingressStateKey,
-    packetRaw, packetSha256: sha256(packetRaw), totalAssetBytes,
+    packetExpiresAt: evidence.evidence_expires_at, packetRaw, packetSha256: sha256(packetRaw), totalAssetBytes,
   };
 }
 
@@ -349,7 +573,9 @@ async function verifyAuthoritativePrivateAssets(record, evidence, env, resolved,
 
 async function readEntry(store, key) {
   const entry = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
-  return entry ? { value: validateArc1AdapterRecord(entry.data), etag: entry.etag } : null;
+  if (!entry) return null;
+  const value = validateArc1AdapterRecord(entry.data);
+  return { value, etag: entry.etag, legacy: value.schema === INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA };
 }
 
 async function replaceEntry(store, key, entry, value) {
@@ -381,6 +607,49 @@ async function removePendingIndex(store, deliveryId, resolved) {
   if (typeof store.delete === 'function') await store.delete(pendingKey(deliveryId, resolved));
 }
 
+async function ensureReviewIndex(store, record, resolved) {
+  const review = record.consumer.status === 'REVIEW_REQUIRED' ? {
+    code: record.consumer.review_code, at: record.consumer.review_required_at,
+  } : record.dispatch.status === 'DEAD_LETTER' ? {
+    code: 'TRANSPORT_DEAD_LETTER', at: record.dispatch.alert_updated_at,
+  } : null;
+  if (!review?.code || !review.at) throw new TypeError('ARC1 adapter review index requires terminal review evidence.');
+  const key = reviewKey(record.delivery_id, resolved);
+  const expected = {
+    schema: INTAKE_ARC1_ADAPTER_REVIEW_INDEX_SCHEMA, delivery_id_sha256: sha256(record.delivery_id),
+    ingress_key: adapterKey(record.delivery_id, resolved), review_code: review.code,
+    review_required_at: review.at,
+  };
+  const existing = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+  if (existing) {
+    if (!exactKeys(existing.data, REVIEW_INDEX_FIELDS) || canonicalJson(existing.data) !== canonicalJson(expected)) {
+      throw new Error('ARC1_ADAPTER_REVIEW_INDEX_CONFLICT');
+    }
+    return;
+  }
+  const result = await store.setJSON(key, expected, { onlyIfNew: true });
+  if (result?.modified) return;
+  const raced = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+  if (!raced || !exactKeys(raced.data, REVIEW_INDEX_FIELDS) || canonicalJson(raced.data) !== canonicalJson(expected)) {
+    throw new Error('ARC1_ADAPTER_REVIEW_INDEX_CONFLICT');
+  }
+}
+
+async function finalizeTerminalIndex(store, record, resolved) {
+  if (record.consumer.status === 'REVIEW_REQUIRED' || record.dispatch.status === 'DEAD_LETTER') {
+    await ensureReviewIndex(store, record, resolved);
+  }
+  await removePendingIndex(store, record.delivery_id, resolved);
+}
+
+function consumerTerminal(record) {
+  return ['COMPLETED', 'REVIEW_REQUIRED'].includes(record.consumer.status);
+}
+
+function recordTerminal(record) {
+  return record.dispatch.status === 'DEAD_LETTER' || consumerTerminal(record);
+}
+
 function immutableRecordFrom(artifacts, evidence, envelopeRaw, claimCreatedAt) {
   return {
     schema: INTAKE_ARC1_ADAPTER_RECORD_SCHEMA, delivery_id: evidence.delivery_id,
@@ -396,13 +665,13 @@ function immutableRecordFrom(artifacts, evidence, envelopeRaw, claimCreatedAt) {
 }
 
 function sameImmutableRecord(stored, expected) {
-  const projection = (value) => Object.fromEntries(ADAPTER_RECORD_FIELDS.filter((field) => field !== 'dispatch').map((field) => [field, value[field]]));
+  const projection = (value) => Object.fromEntries(ADAPTER_RECORD_FIELDS
+    .filter((field) => !['consumer', 'dispatch'].includes(field)).map((field) => [field, value[field]]));
   return safeEqual(canonicalJson(projection(stored)), canonicalJson(expected));
 }
 
 export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, stores, adapters = {}) {
-  if (env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-      env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
+  if (!arc1AdapterProtocolEnabled(env)) {
     throw new Error('ARC1_ADAPTER_DISABLED');
   }
   const now = new Date((adapters.clock || (() => new Date()))());
@@ -427,10 +696,13 @@ export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, store
   const key = adapterKey(parsed.evidence.delivery_id, resolved);
   let existing = await readEntry(stores.adapter, key);
   if (existing) {
+    if (existing.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
     if (!safeEqual(existing.value.envelope_sha256, sha256(envelopeRaw)) ||
         !safeEqual(existing.value.bridge_evidence_sha256, sha256(evidenceRaw)) ||
         existing.value.source_submission_id !== parsed.evidence.submission_id) throw new Error('ARC1_ADAPTER_INGRESS_CONFLICT');
-    if (!['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(existing.value.dispatch.status)) {
+    if (recordTerminal(existing.value)) {
+      await finalizeTerminalIndex(stores.adapter, existing.value, resolved);
+    } else {
       await ensurePendingIndex(stores.adapter, parsed.evidence.delivery_id, resolved);
     }
     return { acknowledgementJson: existing.value.acknowledgement_json, created: false,
@@ -445,7 +717,9 @@ export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, store
   await verifyAuthoritativePrivateAssets(sourceEntry.data, parsed.evidence, env, resolved, stores.source, now);
   let immutable = immutableRecordFrom(artifacts, parsed.evidence, envelopeRaw, claimCreatedAt);
   let created = false;
-  const value = { ...immutable, dispatch: initialDispatch(now) };
+  const value = {
+    ...immutable, dispatch: initialDispatch(now), consumer: initialConsumer(artifacts.packetSha256, artifacts.packetExpiresAt),
+  };
   validateArc1AdapterRecord(value);
   const result = await stores.adapter.setJSON(key, value, { onlyIfNew: true });
   if (result?.modified) {
@@ -459,8 +733,11 @@ export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, store
       immutable = immutableRecordFrom(artifacts, parsed.evidence, envelopeRaw, claimCreatedAt);
     }
   }
+  if (existing?.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
   if (!existing || !sameImmutableRecord(existing.value, immutable)) throw new Error('ARC1_ADAPTER_INGRESS_CONFLICT');
-  if (!['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(existing.value.dispatch.status)) {
+  if (recordTerminal(existing.value)) {
+    await finalizeTerminalIndex(stores.adapter, existing.value, resolved);
+  } else {
     await ensurePendingIndex(stores.adapter, parsed.evidence.delivery_id, resolved);
   }
   return { acknowledgementJson: existing.value.acknowledgement_json, created, deliveryId: parsed.evidence.delivery_id, record: existing.value };
@@ -470,6 +747,7 @@ async function convergeDispatch(store, key, mutate) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const current = await readEntry(store, key);
     if (!current) throw new Error('ARC1_ADAPTER_SOURCE_MISSING');
+    if (current.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
     const desired = mutate(current.value);
     if (desired === current.value) return current;
     try { return await replaceEntry(store, key, current, desired); } catch (error) {
@@ -483,7 +761,7 @@ export async function markArc1AdapterQueueUnavailable(deliveryId, env, store, ad
   const resolved = resolveArc1AdapterEnvironment(env);
   const now = new Date((adapters.clock || (() => new Date()))()).toISOString();
   return convergeDispatch(store, adapterKey(deliveryId, resolved), (record) => {
-    if (['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(record.dispatch.status)) return record;
+    if (recordTerminal(record) || record.dispatch.status === 'HOOK_ACCEPTED') return record;
     // A lost 202 response does not prove the background Function failed to
     // start. Preserve an active lease so the foreground caller cannot reopen
     // a record while its downstream request may already be in flight.
@@ -498,8 +776,7 @@ export async function markArc1AdapterQueueUnavailable(deliveryId, env, store, ad
 }
 
 export async function queueArc1AdapterDispatch(deliveryId, request, env, adapters = {}) {
-  if (env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-      env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
+  if (!arc1AdapterProtocolEnabled(env)) {
     return { state: 'ADAPTER_DISABLED' };
   }
   if (!SHA256_PATTERN.test(deliveryId)) throw new TypeError('ARC1 adapter delivery id is invalid.');
@@ -533,9 +810,227 @@ export function authorizeArc1AdapterIngress(request, env) {
   } catch { return false; }
 }
 
+export function authorizeArc1AdapterConsumer(request, env) {
+  try {
+    const supplied = request.headers.get('authorization') || '';
+    return supplied.startsWith('Bearer ') && safeEqual(supplied.slice(7),
+      secret(env.ARC_INTAKE_ARC1_CONSUMER_BEARER, 'consumer bearer'));
+  } catch { return false; }
+}
+
+function parseCanonicalControlRequest(raw, schema, fields) {
+  let value;
+  try { value = JSON.parse(raw); } catch { throw new TypeError('ARC1 consumer control request is not JSON.'); }
+  if (!exactKeys(value, fields) || value.schema !== schema || canonicalJson(value) !== raw ||
+      !SHA256_PATTERN.test(value.delivery_id) || !SHA256_PATTERN.test(value.packet_sha256) ||
+      !CONSUMER_ATTEMPT_ID_PATTERN.test(value.consumer_attempt_id)) {
+    throw new TypeError('ARC1 consumer control request is invalid.');
+  }
+  return value;
+}
+
+function claimResponse(record, token, idempotentReplay) {
+  return {
+    schema: INTAKE_ARC1_ADAPTER_CLAIM_RESPONSE_SCHEMA, status: 'CLAIMED',
+    delivery_id: record.delivery_id, packet_sha256: record.consumer.packet_sha256,
+    consumer_attempt_id: record.consumer.consumer_attempt_id, claim_token: token,
+    claimed_at: record.consumer.claimed_at, claim_expires_at: record.consumer.claim_expires_at,
+    idempotent_replay: idempotentReplay,
+  };
+}
+
+function completionResponse(record, idempotentReplay) {
+  return {
+    schema: INTAKE_ARC1_ADAPTER_COMPLETION_RESPONSE_SCHEMA, status: 'COMPLETED',
+    delivery_id: record.delivery_id, packet_sha256: record.consumer.packet_sha256,
+    consumer_attempt_id: record.consumer.consumer_attempt_id, completed_at: record.consumer.completed_at,
+    result_sha256: record.consumer.result_sha256,
+    completion_receipt_sha256: record.consumer.completion_receipt_sha256,
+    idempotent_replay: idempotentReplay,
+  };
+}
+
+function claimToken(record, consumerAttemptId, claimedAt, resolved) {
+  return hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET,
+    `arc-intake-arc1-consumer-claim-token-v1\n${record.delivery_id}\n${record.consumer.packet_sha256}\n${consumerAttemptId}\n${claimedAt}`);
+}
+
+function reviewConsumer(record, code, now) {
+  return { ...record, consumer: {
+    ...record.consumer, status: 'REVIEW_REQUIRED', review_code: code, review_required_at: now.toISOString(),
+  } };
+}
+
+async function markConsumerReview(store, key, entry, code, now) {
+  if (entry.value.consumer.status === 'REVIEW_REQUIRED') return entry;
+  return replaceEntry(store, key, entry, reviewConsumer(entry.value, code, now));
+}
+
+export async function claimArc1AdapterConsumer(raw, request, env, store, adapters = {}) {
+  if (!arc1AdapterProtocolEnabled(env)) {
+    throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_DISABLED');
+  }
+  if (!authorizeArc1AdapterConsumer(request, env)) throw new Error('ARC1_ADAPTER_CONSUMER_UNAUTHORIZED');
+  const input = parseCanonicalControlRequest(raw, INTAKE_ARC1_ADAPTER_CLAIM_REQUEST_SCHEMA,
+    ['consumer_attempt_id', 'delivery_id', 'packet_sha256', 'requested_at', 'schema']);
+  iso(input.requested_at, 'consumer requested_at');
+  if (request.headers.get('idempotency-key') !== input.consumer_attempt_id) {
+    throw new TypeError('ARC1 consumer claim idempotency key mismatch.');
+  }
+  const resolved = resolveArc1AdapterEnvironment(env);
+  if (new URL(request.url).toString() !== `${resolved.origin}${INTAKE_ARC1_ADAPTER_CLAIM_ENDPOINT_PATH}`) {
+    throw new TypeError('ARC1 consumer claim endpoint mismatch.');
+  }
+  const key = adapterKey(input.delivery_id, resolved);
+  const requestSha256 = sha256(raw);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let entry = await readEntry(store, key);
+    if (!entry) throw new Error('ARC1_ADAPTER_CONSUMER_NOT_FOUND');
+    if (entry.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
+    if (!safeEqual(entry.value.packet_sha256, input.packet_sha256) ||
+        !safeEqual(entry.value.consumer.packet_sha256, input.packet_sha256) ||
+        input.requested_at !== entry.value.claim_created_at) throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_CONFLICT');
+    const now = new Date((adapters.clock || (() => new Date()))());
+    if (!Number.isFinite(now.getTime())) throw new TypeError('ARC1 consumer claim clock is invalid.');
+    const consumer = entry.value.consumer;
+    if (consumer.status === 'CLAIMED') {
+      if (Date.parse(consumer.claim_expires_at) <= now.getTime()) {
+        try {
+          entry = await markConsumerReview(store, key, entry, 'CLAIM_EXPIRED', now);
+          await finalizeTerminalIndex(store, entry.value, resolved);
+        } catch (error) {
+          if (error?.message === 'ARC1_ADAPTER_STATE_CONTENTION' && attempt < 3) continue;
+          throw error;
+        }
+        throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_STALE');
+      }
+      if (consumer.consumer_attempt_id !== input.consumer_attempt_id ||
+          !safeEqual(consumer.claim_request_sha256, requestSha256)) {
+        throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_CONFLICT');
+      }
+      return claimResponse(entry.value,
+        claimToken(entry.value, input.consumer_attempt_id, consumer.claimed_at, resolved), true);
+    }
+    if (['COMPLETED', 'REVIEW_REQUIRED'].includes(consumer.status)) {
+      await finalizeTerminalIndex(store, entry.value, resolved);
+      throw new Error('ARC1_ADAPTER_CONSUMER_TERMINAL');
+    }
+    if (entry.value.dispatch.status !== 'HOOK_ACCEPTED' || !consumer.claim_deadline_at) {
+      throw new Error('ARC1_ADAPTER_CONSUMER_NOT_READY');
+    }
+    if (Date.parse(consumer.claim_deadline_at) <= now.getTime() || Date.parse(consumer.packet_expires_at) <= now.getTime()) {
+      try {
+        entry = await markConsumerReview(store, key, entry, 'CLAIM_NOT_RECEIVED', now);
+        await finalizeTerminalIndex(store, entry.value, resolved);
+      } catch (error) {
+        if (error?.message === 'ARC1_ADAPTER_STATE_CONTENTION' && attempt < 3) continue;
+        throw error;
+      }
+      throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_STALE');
+    }
+    const claimedAt = now.toISOString();
+    const expiresAt = new Date(Math.min(
+      now.getTime() + INTAKE_ARC1_ADAPTER_CONSUMER_LEASE_MS,
+      Date.parse(consumer.packet_expires_at),
+    )).toISOString();
+    const token = claimToken(entry.value, input.consumer_attempt_id, claimedAt, resolved);
+    const next = { ...entry.value, consumer: {
+      ...consumer, status: 'CLAIMED', consumer_attempt_id: input.consumer_attempt_id,
+      claim_request_sha256: requestSha256, claim_token_sha256: sha256(token),
+      claimed_at: claimedAt, claim_expires_at: expiresAt,
+    } };
+    try {
+      entry = await replaceEntry(store, key, entry, next);
+      return claimResponse(entry.value, token, false);
+    } catch (error) {
+      if (error?.message !== 'ARC1_ADAPTER_STATE_CONTENTION' || attempt === 3) throw error;
+    }
+  }
+  throw new Error('ARC1_ADAPTER_STATE_CONTENTION');
+}
+
+export async function completeArc1AdapterConsumer(raw, request, env, store, adapters = {}) {
+  if (!arc1AdapterProtocolEnabled(env)) {
+    throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_DISABLED');
+  }
+  if (!authorizeArc1AdapterConsumer(request, env)) throw new Error('ARC1_ADAPTER_CONSUMER_UNAUTHORIZED');
+  const input = parseCanonicalControlRequest(raw, INTAKE_ARC1_ADAPTER_COMPLETION_REQUEST_SCHEMA,
+    ['claim_token', 'completed_at', 'consumer_attempt_id', 'delivery_id', 'packet_sha256', 'result_sha256', 'schema']);
+  iso(input.completed_at, 'consumer completed_at');
+  if (!SHA256_PATTERN.test(input.claim_token) || !SHA256_PATTERN.test(input.result_sha256)) {
+    throw new TypeError('ARC1 consumer completion receipt is invalid.');
+  }
+  if (request.headers.get('idempotency-key') !== `arc1complete_${input.result_sha256.slice(0, 40)}`) {
+    throw new TypeError('ARC1 consumer completion idempotency key mismatch.');
+  }
+  const resolved = resolveArc1AdapterEnvironment(env);
+  if (new URL(request.url).toString() !== `${resolved.origin}${INTAKE_ARC1_ADAPTER_COMPLETION_ENDPOINT_PATH}`) {
+    throw new TypeError('ARC1 consumer completion endpoint mismatch.');
+  }
+  const suppliedHmac = request.headers.get('x-arc-completion-hmac-sha256') || '';
+  const expectedHmac = hmac(resolved.consumerReceiptSecret, `arc-intake-arc1-consumer-completion-v1\n${raw}`);
+  if (!SHA256_PATTERN.test(suppliedHmac) || !safeEqual(suppliedHmac, expectedHmac)) {
+    throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_UNAUTHORIZED');
+  }
+  const receiptSha256 = sha256(raw);
+  const key = adapterKey(input.delivery_id, resolved);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let entry = await readEntry(store, key);
+    if (!entry) throw new Error('ARC1_ADAPTER_CONSUMER_NOT_FOUND');
+    if (entry.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
+    const consumer = entry.value.consumer;
+    if (consumer.status === 'COMPLETED') {
+      if (!safeEqual(consumer.completion_receipt_sha256, receiptSha256) ||
+          !safeEqual(consumer.completion_receipt_hmac_sha256, suppliedHmac)) {
+        throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_CONFLICT');
+      }
+      await finalizeTerminalIndex(store, entry.value, resolved);
+      return completionResponse(entry.value, true);
+    }
+    if (consumer.status === 'REVIEW_REQUIRED') {
+      await finalizeTerminalIndex(store, entry.value, resolved);
+      throw new Error('ARC1_ADAPTER_CONSUMER_TERMINAL');
+    }
+    if (consumer.status !== 'CLAIMED' || entry.value.dispatch.status !== 'HOOK_ACCEPTED') {
+      throw new Error('ARC1_ADAPTER_CONSUMER_NOT_READY');
+    }
+    if (!safeEqual(entry.value.packet_sha256, input.packet_sha256) ||
+        !safeEqual(consumer.packet_sha256, input.packet_sha256) ||
+        consumer.consumer_attempt_id !== input.consumer_attempt_id ||
+        !safeEqual(consumer.claim_token_sha256, sha256(input.claim_token))) {
+      throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_CONFLICT');
+    }
+    const now = new Date((adapters.clock || (() => new Date()))());
+    const completedMs = Date.parse(input.completed_at);
+    if (!Number.isFinite(now.getTime()) || completedMs < Date.parse(consumer.claimed_at) ||
+        completedMs > now.getTime() + 5 * 60_000) throw new TypeError('ARC1 consumer completion timestamp is invalid.');
+    if (Date.parse(consumer.claim_expires_at) <= now.getTime() || completedMs > Date.parse(consumer.claim_expires_at)) {
+      try {
+        entry = await markConsumerReview(store, key, entry, 'CLAIM_EXPIRED', now);
+        await finalizeTerminalIndex(store, entry.value, resolved);
+      } catch (error) {
+        if (error?.message === 'ARC1_ADAPTER_STATE_CONTENTION' && attempt < 3) continue;
+        throw error;
+      }
+      throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_STALE');
+    }
+    const next = { ...entry.value, consumer: {
+      ...consumer, status: 'COMPLETED', completed_at: input.completed_at, result_sha256: input.result_sha256,
+      completion_receipt_sha256: receiptSha256, completion_receipt_hmac_sha256: suppliedHmac,
+    } };
+    try {
+      entry = await replaceEntry(store, key, entry, next);
+      await finalizeTerminalIndex(store, entry.value, resolved);
+      return completionResponse(entry.value, false);
+    } catch (error) {
+      if (error?.message !== 'ARC1_ADAPTER_STATE_CONTENTION' || attempt === 3) throw error;
+    }
+  }
+  throw new Error('ARC1_ADAPTER_STATE_CONTENTION');
+}
+
 export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapters = {}) {
-  if (env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-      env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
+  if (!arc1AdapterProtocolEnabled(env)) {
     return { state: 'ADAPTER_DISABLED' };
   }
   if (!SHA256_PATTERN.test(deliveryId)) throw new TypeError('ARC1 adapter delivery id is invalid.');
@@ -543,8 +1038,33 @@ export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapter
   const key = adapterKey(deliveryId, resolved);
   let entry = await readEntry(stores.adapter, key);
   if (!entry) return { state: 'NOT_FOUND' };
-  if (entry.value.dispatch.status === 'HOOK_ACCEPTED') return { state: 'HOOK_ACCEPTED', idempotentReplay: true };
-  if (entry.value.dispatch.status === 'DEAD_LETTER') return { state: 'DEAD_LETTER', idempotentReplay: true };
+  if (entry.legacy) return { state: 'LEGACY_MIGRATION_REQUIRED', idempotentReplay: true };
+  if (entry.value.consumer.status === 'REVIEW_REQUIRED') {
+    await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
+    return { state: 'REVIEW_REQUIRED', idempotentReplay: true };
+  }
+  if (entry.value.consumer.status === 'COMPLETED') {
+    await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
+    return { state: 'COMPLETED', idempotentReplay: true };
+  }
+  if (entry.value.dispatch.status === 'HOOK_ACCEPTED') {
+    const now = new Date((adapters.clock || (() => new Date()))());
+    if (!Number.isFinite(now.getTime())) throw new TypeError('ARC1 adapter clock is invalid.');
+    const consumer = entry.value.consumer;
+    const reviewCode = consumer.status === 'AWAITING_CLAIM' && consumer.claim_deadline_at &&
+      Date.parse(consumer.claim_deadline_at) <= now.getTime() ? 'CLAIM_NOT_RECEIVED' :
+      consumer.status === 'CLAIMED' && Date.parse(consumer.claim_expires_at) <= now.getTime() ? 'CLAIM_EXPIRED' : null;
+    if (reviewCode) {
+      entry = await markConsumerReview(stores.adapter, key, entry, reviewCode, now);
+      await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
+      return { state: 'REVIEW_REQUIRED', code: reviewCode, idempotentReplay: false };
+    }
+    return { state: 'HOOK_ACCEPTED', idempotentReplay: true };
+  }
+  if (entry.value.dispatch.status === 'DEAD_LETTER') {
+    await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
+    return { state: 'DEAD_LETTER', idempotentReplay: true };
+  }
   let now = new Date((adapters.clock || (() => new Date()))());
   if (!Number.isFinite(now.getTime())) throw new TypeError('ARC1 adapter clock is invalid.');
   if (entry.value.dispatch.status === 'CLAIMED' && Date.parse(entry.value.dispatch.lease_expires_at) > now.getTime()) {
@@ -562,7 +1082,7 @@ export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapter
     entry = await replaceEntry(stores.adapter, key, entry, { ...entry.value, dispatch: { ...entry.value.dispatch,
       status: 'DEAD_LETTER', lease_hmac_sha256: null, lease_expires_at: null, accepted_at: null,
       alert_status: 'PENDING', alert_code: 'DOWNSTREAM_MAX_ATTEMPTS', alert_updated_at: now.toISOString() } });
-    await removePendingIndex(stores.adapter, deliveryId, resolved);
+    await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
     return { state: 'DEAD_LETTER' };
   }
   const leaseHmac = hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET,
@@ -612,15 +1132,21 @@ export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapter
     ...entry.value.dispatch, status: 'PENDING', next_attempt_at: new Date(now.getTime() + retryDelayMs(entry.value.dispatch.attempt_count)).toISOString(),
     lease_hmac_sha256: null, lease_expires_at: null, accepted_at: null, alert_status: 'PENDING', alert_code: code, alert_updated_at: now.toISOString(),
   };
-  entry = await replaceEntry(stores.adapter, key, entry, { ...entry.value, dispatch });
-  if (['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(dispatch.status)) await removePendingIndex(stores.adapter, deliveryId, resolved);
+  const consumer = accepted ? {
+    ...entry.value.consumer,
+    claim_deadline_at: new Date(Math.min(
+      now.getTime() + INTAKE_ARC1_ADAPTER_CLAIM_DEADLINE_MS,
+      Date.parse(entry.value.consumer.packet_expires_at),
+    )).toISOString(),
+  } : entry.value.consumer;
+  entry = await replaceEntry(stores.adapter, key, entry, { ...entry.value, dispatch, consumer });
+  if (recordTerminal(entry.value)) await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
   return { state: dispatch.status, code: dispatch.alert_code, idempotentReplay: false };
 }
 
 export async function recoverPendingArc1AdapterDispatches(request, env, stores, adapters = {}) {
-  if (env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
-      env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true') {
-    return { state: 'ADAPTER_DISABLED', scanned: 0, attempted: 0, invalid: 0, next_cursor: null };
+  if (!arc1AdapterProtocolEnabled(env)) {
+    return { state: 'ADAPTER_DISABLED', scanned: 0, attempted: 0, reviewed: 0, migration_required: 0, invalid: 0, next_cursor: null };
   }
   const resolved = resolveArc1AdapterEnvironment(env);
   const resume = decodeRecoveryCursor(requestRecoveryCursor(request, adapters), resolved);
@@ -628,11 +1154,16 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
   const deadlineMs = startedAt + INTAKE_ARC1_ADAPTER_RECOVERY_BUDGET_MS;
   let scanned = 0;
   let attempted = 0;
+  let reviewed = 0;
+  let migrationRequired = 0;
   let invalid = 0;
   let processedPages = 0;
   let cursor = { ...resume };
   const initialCursor = (shard) => ({ shard, position: 0, sequence_hmac_sha256: null });
-  const partial = () => ({ state: 'RECOVERY_PARTIAL', scanned, attempted, invalid, next_cursor: encodeRecoveryCursor(cursor, resolved) });
+  const partial = () => ({
+    state: 'RECOVERY_PARTIAL', scanned, attempted, reviewed, migration_required: migrationRequired,
+    invalid, next_cursor: encodeRecoveryCursor(cursor, resolved),
+  });
   const quarantine = async (key) => {
     const identity = hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET, `arc-intake-arc1-adapter-quarantine-v1\n${key}`);
     await stores.adapter.setJSON(`quarantine/${identity}`, {
@@ -704,12 +1235,35 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
           advance();
           continue;
         }
-        if (['HOOK_ACCEPTED', 'DEAD_LETTER'].includes(entry.value.dispatch.status)) {
-          if (typeof stores.adapter.delete === 'function') await stores.adapter.delete(blob.key);
+        if (entry.legacy) {
+          migrationRequired += 1;
+          advance();
+          continue;
+        }
+        if (recordTerminal(entry.value)) {
+          await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
           advance();
           continue;
         }
         const nowMs = new Date((adapters.clock || (() => new Date()))()).getTime();
+        if (!Number.isFinite(nowMs)) throw new TypeError('ARC1 adapter recovery clock is invalid.');
+        if (entry.value.dispatch.status === 'HOOK_ACCEPTED') {
+          const consumer = entry.value.consumer;
+          const reviewCode = consumer.status === 'AWAITING_CLAIM' && consumer.claim_deadline_at &&
+            Date.parse(consumer.claim_deadline_at) <= nowMs ? 'CLAIM_NOT_RECEIVED' :
+            consumer.status === 'CLAIMED' && Date.parse(consumer.claim_expires_at) <= nowMs ? 'CLAIM_EXPIRED' : null;
+          if (reviewCode) {
+            try {
+              entry = await markConsumerReview(stores.adapter, index.data.ingress_key, entry, reviewCode, new Date(nowMs));
+              await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
+              reviewed += 1;
+            } catch (error) {
+              if (error?.message !== 'ARC1_ADAPTER_STATE_CONTENTION') throw error;
+            }
+          }
+          advance();
+          continue;
+        }
         const due = entry.value.dispatch.status === 'CLAIMED' ? Date.parse(entry.value.dispatch.lease_expires_at) <= nowMs :
           Date.parse(entry.value.dispatch.next_attempt_at) <= nowMs;
         if (due) {
@@ -728,5 +1282,90 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
     if (shard + 1 < RECOVERY_SHARD_COUNT) cursor = initialCursor(shard + 1);
     if (shard + 1 < RECOVERY_SHARD_COUNT && (emptyShards >= 64 || wallNow(adapters) >= deadlineMs)) return partial();
   }
-  return { state: 'RECOVERY_COMPLETE', scanned, attempted, invalid, next_cursor: null };
+  return { state: 'RECOVERY_COMPLETE', scanned, attempted, reviewed, migration_required: migrationRequired,
+    invalid, next_cursor: null };
+}
+
+export async function migrateLegacyArc1AdapterRecords(request, env, store, adapters = {}) {
+  if (!arc1AdapterLegacyMigrationEnabled(env)) {
+    return { state: 'MIGRATION_DISABLED', scanned: 0, migrated: 0, invalid: 0, next_cursor: null };
+  }
+  const resolved = resolveArc1AdapterEnvironment(env);
+  const url = new URL(request.url);
+  if (url.origin !== resolved.origin || url.pathname !== INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH ||
+      url.hash || [...url.searchParams.keys()].some((key) => key !== 'cursor')) {
+    throw new TypeError('ARC1 adapter legacy migration endpoint mismatch.');
+  }
+  const resume = decodeLegacyMigrationCursor(requestLegacyMigrationCursor(request, adapters), resolved);
+  const iterable = store.list({ prefix: 'ingress/', paginate: true });
+  if (!iterable || typeof iterable[Symbol.asyncIterator] !== 'function') {
+    throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_PAGINATION_REQUIRED');
+  }
+  let position = 0;
+  let sequence = migrationSequenceInitial(resolved);
+  let checkpointVerified = resume.position === 0;
+  let cursor = { ...resume };
+  let scanned = 0;
+  let migrated = 0;
+  let invalid = 0;
+  const partial = () => ({
+    state: 'MIGRATION_PARTIAL', scanned, migrated, invalid,
+    next_cursor: encodeLegacyMigrationCursor(cursor, resolved),
+  });
+  for await (const page of iterable) {
+    if (!page || !Array.isArray(page.blobs)) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_PAGINATION_REQUIRED');
+    for (const blob of page.blobs) {
+      if (typeof blob?.key !== 'string' || !/^ingress\/[a-f0-9]{64}$/.test(blob.key)) {
+        throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_PAGINATION_REQUIRED');
+      }
+      const nextSequence = migrationSequenceNext(resolved, sequence, blob.key);
+      position += 1;
+      if (!checkpointVerified) {
+        sequence = nextSequence;
+        if (position < resume.position) continue;
+        if (position === resume.position && sequence === resume.sequence_hmac_sha256) {
+          checkpointVerified = true;
+          continue;
+        }
+        throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_ORDER_CHANGED');
+      }
+      if (scanned >= INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_MAX_READS) return partial();
+      scanned += 1;
+      const raw = await store.getWithMetadata(blob.key, { type: 'json', consistency: 'strong' });
+      if (!raw) {
+        sequence = nextSequence;
+        cursor = { position, sequence_hmac_sha256: sequence };
+        continue;
+      }
+      let record;
+      try { record = validateArc1AdapterRecord(raw.data); } catch {
+        invalid += 1;
+        sequence = nextSequence;
+        cursor = { position, sequence_hmac_sha256: sequence };
+        continue;
+      }
+      if (record.schema === INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA) {
+        const upgraded = {
+          ...record, schema: INTAKE_ARC1_ADAPTER_RECORD_SCHEMA, consumer: legacyReviewConsumer(record),
+        };
+        validateArc1AdapterRecord(upgraded);
+        const written = await store.setJSON(blob.key, upgraded, { onlyIfMatch: raw.etag });
+        if (written?.modified) {
+          record = upgraded;
+          migrated += 1;
+        } else {
+          const raced = await store.getWithMetadata(blob.key, { type: 'json', consistency: 'strong' });
+          if (!raced) throw new Error('ARC1_ADAPTER_STATE_CONTENTION');
+          record = validateArc1AdapterRecord(raced.data);
+        }
+      }
+      if (record.schema === INTAKE_ARC1_ADAPTER_RECORD_SCHEMA && recordTerminal(record)) {
+        await finalizeTerminalIndex(store, record, resolved);
+      }
+      sequence = nextSequence;
+      cursor = { position, sequence_hmac_sha256: sequence };
+    }
+  }
+  if (!checkpointVerified) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_ORDER_CHANGED');
+  return { state: 'MIGRATION_COMPLETE', scanned, migrated, invalid, next_cursor: null };
 }

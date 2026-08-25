@@ -26,6 +26,9 @@ const secretNames = [
   'ARC_EMAIL_CLAIM_BINDING_SECRET',
   'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
   'ARC_FINAL_DELIVERY_ACK_SECRET',
+  'ARC_INTAKE_ARC1_PACKET_SECRET',
+  'ARC_INTAKE_ARC1_CONSUMER_BEARER',
+  'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET',
   'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
   'ARC_STRIPE_REVERSAL_HMAC_SECRET',
   'ARC_STRIPE_REVERSAL_BINDING_SECRET',
@@ -99,6 +102,8 @@ const liveEnv = {
   ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true',
   ARC_BUILD_INTAKE_ENABLED: 'true',
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
+  ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED: 'true',
+  ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED: 'true',
   ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_READINESS_ATTESTATION: JSON.stringify(completeIntakeAttestation),
@@ -148,8 +153,16 @@ const live = createLaunchPreflightReport(liveEnv, {
 assert.equal(live.state, 'LIVE_CONFIGURED');
 assert.equal(live.ok, true);
 assert.equal(live.checks.intake_ready, true);
+assert.equal(live.checks.intake_consumer_protocol_enabled, true);
 assert.deepEqual(live.missing, []);
 assert.deepEqual(live.invalid, []);
+for (const name of ['ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {
+  const halfWired = createLaunchPreflightReport({ ...liveEnv, [name]: 'false' }, {
+    mode: 'live', buildMarker: enabledBuildMarker, runtimeReady: () => true,
+  });
+  assert.equal(halfWired.ok, false, `${name}=false must block LIVE_CONFIGURED even with a stubbed runtime probe.`);
+  assert.ok(halfWired.invalid.includes(name));
+}
 const liveWithoutCheckoutGate = createLaunchPreflightReport({
   ...liveEnv,
   ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',

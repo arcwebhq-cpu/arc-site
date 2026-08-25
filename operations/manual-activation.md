@@ -200,20 +200,68 @@ Function submit a byte-bounded envelope (never inline asset bytes) to the exact
 Catch Raw Hook. Its five-attempt state uses compare-and-set leases, signed
 cursor/shard recovery, quarantine for corrupt indexes, and terminal dead-letter
 alert fields. No consumer delivers those alerts yet. Exact HTTP 200 means only
-**HOOK_ACCEPTED**. It does not prove that the
-Zap ran, deduplicated an ambiguous hook retry, completed preview work, or
-delivered any receipt. Those consumer-side create-only/CAS and signed completion
-proofs remain external blockers.
+**HOOK_ACCEPTED**. The adapter keeps the pending index after that response and
+starts a 15-minute claim deadline. The signed v2 packet binds its exact claim and
+completion endpoints, issue/expiry times, bridge identifiers, and complete
+canonical payload with `ARC_INTAKE_ARC1_PACKET_SECRET`.
+
+The unpublished consumer must then POST one canonical, bearer-authenticated
+claim to `/internal/intake/arc1/adapter/claim`. A compare-and-set claim accepts
+one stable `consumer_attempt_id`, returns a 30-minute lease token, stores only
+its digest, returns an exact replay to the same attempt, and rejects a competing
+attempt. A claim racing hook persistence receives retryable HTTP 425. There is
+no automatic reassignment in this release: a missing or expired claim becomes
+terminal `REVIEW_REQUIRED` because downstream writes are not yet universally
+generation-fenced. Review evidence is create-only and durable before the
+pending index can be removed.
+
+After a durable downstream result exists, the same attempt must POST a canonical
+receipt to `/internal/intake/arc1/adapter/complete`. The receipt is bound to the
+delivery, full packet digest, attempt, lease token, completion time, and immutable
+result digest, and authenticated with `ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET`.
+Only its successful compare-and-set transition to **COMPLETED** clears ordinary
+pending work. Exact completion replay self-heals an interrupted terminal-index
+cleanup; altered receipt replay fails closed. None of this proves the external
+Zap or generator has been configured or exercised.
 
 All of these runtime switches must remain absent or `false` until the disabled
 provider proof is reviewed: `ARC_INTAKE_ARC1_ADAPTER_ENABLED`,
 `ARC_INTAKE_ARC1_BRIDGE_ENABLED`, `ARC_INTAKE_ARC1_DISPATCH_ENABLED`,
 `ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED`, and
-`ARC_INTAKE_ASSET_RETRIEVAL_ENABLED`. The required adapter attestation is valid
+`ARC_INTAKE_ASSET_RETRIEVAL_ENABLED`,
+`ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED`, and
+`ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED`. The required private values are
+`ARC_INTAKE_ARC1_PACKET_SECRET`, `ARC_INTAKE_ARC1_CONSUMER_BEARER`, and
+`ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET`; each must be 32–256 UTF-8 bytes and
+distinct from every other ARC1 secret. The v2 packet producer and paired
+consumer are pinned to `https://arcweb.onl`; the Netlify alias may serve public
+fallback pages but cannot originate this private protocol. The required adapter
+attestation is valid
 for at most 24 hours; no static value is an ongoing health proof, so its safe
 rotation procedure is also a pre-activation requirement. The recovery endpoint
 has no schedule and must be called with each authenticated `next_cursor` until
 `RECOVERY_COMPLETE` during a disabled test.
+
+The safe committed/runtime baseline is:
+
+```dotenv
+ARC_INTAKE_ARC1_ADAPTER_ENABLED=false
+ARC_INTAKE_ARC1_BRIDGE_ENABLED=false
+ARC_INTAKE_ARC1_DISPATCH_ENABLED=false
+ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED=false
+ARC_INTAKE_ASSET_RETRIEVAL_ENABLED=false
+ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED=false
+ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED=false
+ARC_INTAKE_ARC1_LEGACY_MIGRATION_ENABLED=false
+```
+
+Legacy unsigned v1 ingress records require the separate bounded
+`/internal/intake/arc1/adapter/migrate-legacy` maintenance endpoint. It converts
+them to `REVIEW_REQUIRED` and creates the review index; it never replays their
+old hook. Its kill switch may be `true` only while every intake, dispatch,
+downstream, asset, claim, and completion switch above is exactly `false`, and it
+must be returned to `false` after every signed-cursor scan reaches
+`MIGRATION_COMPLETE`.
 
 Public intake remains disabled until the deployed adapter is exercised through a
 provider-disabled test and its exact ACK, asset, retry, dedupe, secret-boundary,
