@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { deterministicSiteName, hmacHex } from '../netlify/lib/arc2-handoff-core.mjs';
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const previewsRoot = path.resolve(process.env.ARC_PREVIEWS_DIR || path.join(siteRoot, '../arc-previews-finalize'));
+const previewsRoot = path.resolve(process.env.ARC_PREVIEWS_DIR || path.join(siteRoot, '../arc-previews'));
 const producerPath = path.join(previewsRoot, 'zapier/arc2_verify_lead_route_staging.js');
 const producerTestPath = path.join(previewsRoot, 'tests/arc2_lead_route_staging_contract.mjs');
 const resolverPath = path.join(previewsRoot, 'zapier/arc2_resolve_and_finalize.js');

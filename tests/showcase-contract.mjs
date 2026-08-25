@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const previewsRoot = path.resolve(process.env.ARC_PREVIEWS_DIR || path.join(siteRoot, '../arc-previews-finalize'));
+const previewsRoot = path.resolve(process.env.ARC_PREVIEWS_DIR || path.join(siteRoot, '../arc-previews'));
 const home = await readFile(path.join(siteRoot, 'index.html'), 'utf8');
 const manifest = JSON.parse(await readFile(path.join(previewsRoot, 'showcases/manifest.json'), 'utf8'));
 const expected = Object.freeze({

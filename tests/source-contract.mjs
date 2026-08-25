@@ -48,7 +48,10 @@ const stripeWebhook = await readFile(new URL('netlify/functions/stripe-reversal-
 
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
-assert.match(home, /<meta property="og:image" content="https:\/\/arcweb\.onl\/assets\/showcases\//);
+assert.match(home, /<meta property="og:image" content="https:\/\/arcweb\.onl\/assets\/arc-social-card\.png">/);
+assert.match(home, /<meta property="og:image:width" content="1200">/);
+assert.match(home, /<meta property="og:image:height" content="630">/);
+assert.match(home, /<meta name="twitter:image" content="https:\/\/arcweb\.onl\/assets\/arc-social-card\.png">/);
 assert.match(home, /<meta name="twitter:card" content="summary_large_image">/);
 for (const category of ['roofing', 'dental', 'finance']) {
   assert.match(home, new RegExp(`https:\\/\\/arcwebhq-cpu\\.github\\.io\\/arc-previews\\/showcases\\/${category}\\/`));
@@ -533,6 +536,7 @@ assert.equal(packageJson.scripts['preflight:live'], 'node scripts/launch-preflig
 assert.deepEqual(packageJson.scripts.test.split(' && '), [
   'npm run preflight',
   'node tests/launch-preflight-contract.mjs',
+  'node tests/workflow-supply-chain-contract.mjs',
   'node tests/source-contract.mjs',
   'node tests/analytics-contract.mjs',
   'node tests/intake-readiness-contract.mjs',
