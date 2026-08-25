@@ -1,7 +1,6 @@
 import { getStore } from '@netlify/blobs';
 
 import {
-  INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH,
   INTAKE_ARC1_ADAPTER_STORE,
   arc1AdapterLegacyMigrationEnabled,
   authorizeArc1AdapterDispatch,
@@ -35,7 +34,8 @@ export function createIntakeArc1AdapterLegacyMigrationHandler() {
 }
 
 export default createIntakeArc1AdapterLegacyMigrationHandler();
+// Netlify extracts route configuration at build time, so keep these values literal.
 export const config = {
-  path: INTAKE_ARC1_ADAPTER_LEGACY_MIGRATION_ENDPOINT_PATH, method: 'POST',
+  path: '/internal/intake/arc1/adapter/migrate-legacy', method: 'POST',
   rateLimit: { windowLimit: 1, windowSize: 60, aggregateBy: ['ip', 'domain'] },
 };
