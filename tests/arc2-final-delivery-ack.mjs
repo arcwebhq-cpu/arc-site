@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
 import {
   HANDOFF_SCHEMA,
   LEGACY_HANDOFF_SCHEMA,
@@ -78,11 +85,29 @@ const secretNames = [
   'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
 ];
 const secrets = Object.fromEntries(secretNames.map((name, index) => [
   name,
   `${name.toLowerCase()}-${String(index).padStart(2, '0')}-unique-test-secret-0123456789`,
 ]));
+const activationNow = new Date();
+const activationDeploymentSha = '9'.repeat(40);
+const activationStage = 'CLAIM_SANDBOX';
+const activationManifest = signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage: activationStage,
+  authority_mode: 'ROLLOUT',
+  issued_at: new Date(activationNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(activationNow.getTime() + 60 * 60_000).toISOString(),
+  deployment_sha: activationDeploymentSha,
+  evidence: ACTIVATION_EVIDENCE_BY_STAGE[activationStage].map((kind) => ({
+    kind,
+    receipt_ref: `audit:${createHash('sha256').update(`receipt:${kind}`).digest('hex').slice(0, 24)}`,
+    sha256: createHash('sha256').update(`evidence:${kind}`).digest('hex'),
+  })),
+}, secrets.ARC_ACTIVATION_MANIFEST_HMAC_SECRET);
 const env = {
   ...secrets,
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'test_arcDeliveryRestrictedAccountRead0123456789',
@@ -119,6 +144,8 @@ const env = {
   NETLIFY_TEAM_SLUG: 'arc-team',
   NETLIFY_TEAM_ACCOUNT_ID: 'account-source-123',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
+  COMMIT_REF: activationDeploymentSha,
+  ARC_ACTIVATION_MANIFEST: activationManifest,
 };
 assert.equal(configuredEnvironment(env).enabled, true);
 assert.equal(configuredEnvironment({ ...env, ARC_FINAL_DELIVERY_RECEIPT_SECRET: env.ARC_EMAIL_CLAIM_BINDING_SECRET }).enabled, false,

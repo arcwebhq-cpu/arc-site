@@ -1,3 +1,5 @@
+import { validateActivationManifestEnvironment } from './activation-manifest-core.mjs';
+
 export const ANALYTICS_SCHEMA = 'arc-analytics-event-v1';
 export const ANALYTICS_STORE = 'arc-analytics';
 export const RETENTION_DAYS = 90;
@@ -15,6 +17,12 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const PATH_PATTERN = /^\/[a-z0-9/_-]{0,119}$/i;
 const CTA_LABELS = new Set(['Get Free Preview', 'Build My Free Preview']);
 const STEP_LABELS = Object.freeze({ 1: 'Business', 2: 'Offer', 3: 'Details & consent', 4: 'Review' });
+
+export function analyticsCollectionReady(env = process.env, now = new Date()) {
+  return env.ARC_ANALYTICS_COLLECTION_ENABLED === 'true' &&
+    env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED === 'true' &&
+    validateActivationManifestEnvironment(env, { minimumStage: 'PUBLIC_INTAKE', now }).valid;
+}
 
 function requirePlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {

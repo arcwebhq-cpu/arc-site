@@ -11,6 +11,7 @@ import {
 import { resolveSameDeployDispatcher } from './intake-arc1-dispatch-core.mjs';
 import { INTAKE_PRIVATE_ASSET_ENABLED_ENV, resolvePrivateAssetEnvironment } from './intake-private-asset-core.mjs';
 import { INTAKE_IDEMPOTENCY_SECRET_ENV, intakeIdempotencyConfigured } from './intake-submission-core.mjs';
+import { publicIntakeAuthorityReady } from './activation-manifest-core.mjs';
 
 export const INTAKE_READINESS_ENV = 'ARC_INTAKE_READINESS_ATTESTATION';
 export const INTAKE_READINESS_SCHEMA = 'arc-intake-readiness-attestation-v1';
@@ -86,7 +87,12 @@ export function intakeArc1AdapterProofFromEnvironment(env = process.env, now = n
   );
 }
 
+export function intakeActivationReady(env = process.env, now = new Date()) {
+  return publicIntakeAuthorityReady(env, now);
+}
+
 export function intakeArc1RuntimeReady(request, env = process.env, now = new Date()) {
+  if (!intakeActivationReady(env, now)) return false;
   if (env.ARC_INTAKE_ARC1_BRIDGE_ENABLED !== 'true' || env.ARC_INTAKE_ARC1_DISPATCH_ENABLED !== 'true' ||
       env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' || env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
       env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED !== 'true' ||

@@ -31,6 +31,7 @@ assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');
 const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
+const activationBuildIdentity = await readFile(path.join(root, 'netlify/lib/activation-build-identity.mjs'), 'utf8');
 assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/, 'Disabled production build must not register or expose a directly postable Netlify form.');
 assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
 assert.match(home, /data-intake-enabled="false"/);
@@ -42,6 +43,8 @@ assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subjec
 assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
+assert.match(activationBuildIdentity, /"deployment_sha": null/,
+  'A local/default build without COMMIT_REF must leave activation authority fail-closed.');
 assert.match(home, /data-analytics-build-enabled="false"/,
   'Default production build must not invoke automatic analytics collection.');
 assert.match(await readFile(path.join(dist, 'thank-you/index.html'), 'utf8'), /data-analytics-build-enabled="false"/,

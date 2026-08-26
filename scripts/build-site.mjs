@@ -1,12 +1,14 @@
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { activationBuildIdentityModule } from './activation-build-identity.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'dist');
 const intakeBuildEnabled = process.env.ARC_BUILD_INTAKE_ENABLED === 'true';
 const analyticsBuildEnabled = process.env.ARC_BUILD_ANALYTICS_ENABLED === 'true';
 const intakeBuildMarkerPath = path.join(root, 'netlify/lib/intake-build-marker.mjs');
+const activationBuildIdentityPath = path.join(root, 'netlify/lib/activation-build-identity.mjs');
 const publicEntries = Object.freeze([
   'index.html',
   'favicon.svg',
@@ -31,6 +33,11 @@ export const INTAKE_BUILD_MARKER = Object.freeze({
   intake_enabled: ${intakeBuildEnabled},
 });
 `);
+
+// COMMIT_REF exists in Netlify's build environment, but is not a dependable
+// Functions runtime variable. Capture it once and bundle the immutable identity.
+// Local builds without COMMIT_REF deliberately produce a closed identity.
+await writeFile(activationBuildIdentityPath, activationBuildIdentityModule(process.env.COMMIT_REF));
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });

@@ -10,6 +10,7 @@ import {
 } from '../netlify/lib/intake-private-asset-core.mjs';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
 import { validateDecodableImageAsset, validateImageAsset } from '../netlify/lib/image-asset-validation.mjs';
+import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 const framedButUndecodableJpeg = Buffer.from([
   0xff,0xd8,
@@ -74,7 +75,7 @@ for (const [key, value] of Object.entries({
   intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
   lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
-  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',
+  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed rights and no visible watermark v1', 'bot-field': '',
 })) undecodableForm.append(key, value);
 undecodableForm.append('goals', 'More calls');
 undecodableForm.append('lead_form_fields', 'Email');
@@ -103,7 +104,7 @@ for (const [key, value] of Object.entries({
   intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
   lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
-  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed',
+  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed rights and no visible watermark v1',
   'bot-field': '',
 })) form.append(key, value);
 form.append('goals', 'More calls');
@@ -116,6 +117,7 @@ const now = new Date('2026-08-13T20:00:00.000Z');
 const submissionId = '11111111-1111-4111-8111-111111111111';
 const normalized = await normalizeIntakeForm(form, now, () => submissionId);
 const env = {
+  ...testActivationAuthority(new Date()),
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_ASSET_RETRIEVAL_SECRET: 'asset-retrieval-secret-unique-0123456789',
   ARC_INTAKE_ARC1_STATE_SECRET: 'state-secret-unique-0123456789-abcdefgh', URL: 'https://arcweb.onl',
@@ -148,9 +150,14 @@ try {
   const request = () => new Request('https://arcweb.onl/internal/intake/arc1/assets/retrieve', { method: 'POST', headers: {
     authorization: `Bearer ${env.ARC_INTAKE_ASSET_RETRIEVAL_SECRET}`, 'content-type': 'application/json',
   }, body: JSON.stringify({ schema: INTAKE_PRIVATE_ASSET_REQUEST_SCHEMA, asset_id: uploadGrant.asset_id, delivery_id: deliveryId, evidence_sha256: evidenceSha256 }) });
-  assert.equal((await assetHandler(request(), { get intakeStore() { throw new Error('Disabled asset endpoint must not touch storage.'); } })).status, 503);
+  assert.equal((await assetHandler(request(), {
+    clock: () => now,
+    get intakeStore() { throw new Error('Disabled asset endpoint must not touch storage.'); },
+  })).status, 503);
   process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED = 'true';
-  assert.equal((await assetHandler(new Request('https://arcweb.onl/internal/intake/arc1/assets/retrieve', { method: 'POST' }))).status, 401);
+  assert.equal((await assetHandler(new Request('https://arcweb.onl/internal/intake/arc1/assets/retrieve', { method: 'POST' }), {
+    clock: () => now,
+  })).status, 401);
 } finally { for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]; Object.assign(process.env, saved); }
 assert.equal(assetConfig.path, '/internal/intake/arc1/assets/retrieve');
 assert.equal(assetConfig.method, 'POST');

@@ -1,4 +1,5 @@
 import { getStore } from '@netlify/blobs';
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import {
   authorizeBackgroundDispatch,
   INTAKE_ARC1_DISPATCH_ENABLED_ENV,
@@ -34,6 +35,9 @@ async function boundedJson(request) {
 export function createIntakeArc1BackgroundHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return response(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizeBackgroundDispatch(request, process.env)) return response(401, { error: 'unauthorized' });
     // A queued background invocation can outlive the foreground dispatch that
     // created it. Re-check the kill switch at execution time so revocation is

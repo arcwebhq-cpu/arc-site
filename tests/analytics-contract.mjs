@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
 import {
   aggregateAnalytics,
+  analyticsCollectionReady,
   eventKey,
   expirationTimestamp,
   expirationTimestampFromMetadata,
@@ -17,6 +25,24 @@ import {
 } from '../netlify/functions/analytics-prune.mjs';
 
 const now = new Date('2026-08-11T20:00:00.000Z');
+const activationNow = new Date();
+const activationSecret = 'analytics-activation-manifest-secret-0123456789abcdef';
+const activationDeploymentSha = '9'.repeat(40);
+const activationManifest = (stage, overrides = {}) => signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage,
+  authority_mode: 'ROLLOUT',
+  issued_at: new Date(activationNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(activationNow.getTime() + 60 * 60_000).toISOString(),
+  deployment_sha: activationDeploymentSha,
+  evidence: ACTIVATION_EVIDENCE_BY_STAGE[stage].map((kind) => ({
+    kind,
+    receipt_ref: `audit:${createHash('sha256').update(`receipt:${kind}`).digest('hex').slice(0, 24)}`,
+    sha256: createHash('sha256').update(`evidence:${kind}`).digest('hex'),
+  })),
+  ...overrides,
+}, activationSecret);
 const base = {
   event: 'arc_page_view',
   event_id: '11111111-1111-4111-8111-111111111111',
@@ -60,12 +86,38 @@ assert.equal(aggregate[7].conversion_rate, 100, 'Request-only sessions must not 
 assert.equal(eventConfig.path, '/api/analytics/event');
 assert.deepEqual(eventConfig.rateLimit.aggregateBy, ['ip', 'domain']);
 assert.equal(dashboardConfig.path, '/internal/analytics');
-const savedCollectionEnabled = process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
+const analyticsAuthorityNames = [
+  'ARC_ANALYTICS_COLLECTION_ENABLED',
+  'ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+  'ARC_ACTIVATION_MANIFEST',
+  'COMMIT_REF',
+];
+const savedAnalyticsAuthority = Object.fromEntries(analyticsAuthorityNames.map((name) => [name, process.env[name]]));
 delete process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
+delete process.env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED;
+delete process.env.ARC_ACTIVATION_MANIFEST_HMAC_SECRET;
+delete process.env.ARC_ACTIVATION_MANIFEST;
+delete process.env.COMMIT_REF;
 assert.equal((await analyticsEventHandler(new Request('https://arcweb.onl/api/analytics/event', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base),
 }))).status, 503, 'Analytics collection must be an exact default-off no-op.');
 process.env.ARC_ANALYTICS_COLLECTION_ENABLED = 'true';
+assert.equal(analyticsCollectionReady(process.env, activationNow), false,
+  'Collection cannot start before exact prune automation is enabled.');
+assert.equal((await analyticsEventHandler(new Request('https://arcweb.onl/api/analytics/event', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base),
+}))).status, 503);
+process.env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED = 'true';
+assert.equal(analyticsCollectionReady(process.env, activationNow), false,
+  'Mutable analytics flags cannot bypass a missing activation authority.');
+process.env.ARC_ACTIVATION_MANIFEST_HMAC_SECRET = activationSecret;
+process.env.COMMIT_REF = activationDeploymentSha;
+process.env.ARC_ACTIVATION_MANIFEST = activationManifest('LIVE_CHECKOUT');
+assert.equal(analyticsCollectionReady(process.env, activationNow), false,
+  'Analytics cannot precede the PUBLIC_INTAKE stage.');
+process.env.ARC_ACTIVATION_MANIFEST = activationManifest('PUBLIC_INTAKE');
+assert.equal(analyticsCollectionReady(process.env, activationNow), true);
 const wrongHost = await analyticsEventHandler(new Request('https://example.com/api/analytics/event', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base),
 }));
@@ -91,8 +143,10 @@ const oversizedChunked = await analyticsEventHandler(new Request('https://arcweb
 }));
 assert.equal(oversizedChunked.status, 413, 'A headerless/chunked body must be capped while streaming.');
 assert.equal(oversizedCancelled, true, 'The oversized analytics stream must be cancelled immediately.');
-if (savedCollectionEnabled === undefined) delete process.env.ARC_ANALYTICS_COLLECTION_ENABLED;
-else process.env.ARC_ANALYTICS_COLLECTION_ENABLED = savedCollectionEnabled;
+for (const [name, value] of Object.entries(savedAnalyticsAuthority)) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 const savedUser = process.env.ARC_ANALYTICS_DASHBOARD_USER;
 const savedPassword = process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;

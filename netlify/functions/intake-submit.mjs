@@ -2,6 +2,7 @@ import { getStore } from '@netlify/blobs';
 import { INTAKE_BUILD_MARKER } from '../lib/intake-build-marker.mjs';
 import {
   INTAKE_READINESS_ENV,
+  intakeActivationReady,
   intakeArc1RuntimeReady,
   intakeEnabledFromAttestation,
   intakeEnabledFromBuildMarker,
@@ -73,7 +74,8 @@ export function createIntakeSubmitHandler(buildMarker = INTAKE_BUILD_MARKER, run
   // The server rechecks the exact attestation at the irreversible storage
   // boundary. UI readiness is never authority, and revocation is immediate.
   if (!intakeEnabledFromBuildMarker(buildMarker) || process.env.ARC_BUILD_INTAKE_ENABLED !== 'true' ||
-      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) || !runtimeReady(request, process.env) ||
+      !intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) || !intakeActivationReady(process.env) ||
+      !runtimeReady(request, process.env) ||
       !intakeIdempotencyConfigured(process.env)) {
     return response(503, { error: 'intake_disabled' });
   }

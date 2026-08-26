@@ -6,6 +6,21 @@ until every evidence item below is independently verified. Do not place identity
 documents, tax records, bank data, API secrets, raw customer data, or account IDs
 in Git, public URLs, email links, or chat.
 
+The runtime also requires the signed, expiring, deployment-bound ordered
+authority in [`activation-manifest.md`](./activation-manifest.md). It is a local
+fail-closed backstop, not evidence that an external dashboard is configured or
+disabled. The current committed baseline is `OFF`; no activation manifest or
+activation secret belongs in Git.
+
+Operators must create the exact v2 unsigned object and sign it with
+`signActivationManifest` as shown in that document; never hand-format JSON or
+put the HMAC secret on a command line. `COMMIT_REF` is captured only during
+`npm run build` into the Function bundle and is not a runtime variable. For
+reviewed `PILOT`/`OUTREACH` steady state, use the documented current/NEXT
+seven-day overlap procedure and independent dual review before the current
+authority expires. This repository does not itself verify or disable external
+provider dashboards.
+
 The repository should leave only the following human/account-holder work.
 
 ## 1. Name the accountable business
@@ -322,7 +337,7 @@ base64 transport is 5,333,336 bytes, leaving 666,664 bytes below Netlify's
 1.25 MB per-file and 3 MB total limits. Folder-link imports are unavailable and
 the server rejects that legacy field until a bounded, authenticated provider
 adapter is implemented and verified. The Function also requires
-`asset_permission` to equal exactly `Confirmed` whenever a file is submitted.
+`asset_permission` to equal exactly `Confirmed rights and no visible watermark v1` whenever a file is submitted. Earlier confirmation values are intentionally rejected so a submission cannot inherit the stronger v1 meaning without a fresh confirmation.
 Client visibility or checkbox state is not authority.
 Legacy `ARC_INTAKE_ENABLED` and `ARC_LEAD_ROUTE_VERIFIED` values do not open
 public intake. Remove the record immediately when any evidence fails or becomes

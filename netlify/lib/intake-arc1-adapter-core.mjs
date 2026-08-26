@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
+import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import {
   INTAKE_ARC1_ACK_SCHEMA,
   INTAKE_ARC1_ADAPTER_PROOF_ENV,
@@ -672,10 +673,11 @@ function sameImmutableRecord(stored, expected) {
 }
 
 export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, stores, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const now = new Date((adapters.clock || (() => new Date()))());
   if (!arc1AdapterProtocolEnabled(env)) {
     throw new Error('ARC1_ADAPTER_DISABLED');
   }
-  const now = new Date((adapters.clock || (() => new Date()))());
   if (!Number.isFinite(now.getTime())) throw new TypeError('ARC1 adapter clock is invalid.');
   const resolved = resolveArc1AdapterEnvironment(env);
   if (new URL(request.url).toString() !== resolved.endpoint) throw new TypeError('ARC1 adapter request endpoint mismatch.');
@@ -759,8 +761,10 @@ async function convergeDispatch(store, key, mutate) {
 }
 
 export async function markArc1AdapterQueueUnavailable(deliveryId, env, store, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const authorityNow = new Date((adapters.clock || (() => new Date()))());
   const resolved = resolveArc1AdapterEnvironment(env);
-  const now = new Date((adapters.clock || (() => new Date()))()).toISOString();
+  const now = authorityNow.toISOString();
   return convergeDispatch(store, adapterKey(deliveryId, resolved), (record) => {
     if (recordTerminal(record) || record.dispatch.status === 'HOOK_ACCEPTED') return record;
     // A lost 202 response does not prove the background Function failed to
@@ -777,6 +781,7 @@ export async function markArc1AdapterQueueUnavailable(deliveryId, env, store, ad
 }
 
 export async function queueArc1AdapterDispatch(deliveryId, request, env, adapters = {}) {
+  assertPublicIntakeAuthority(env);
   if (!arc1AdapterProtocolEnabled(env)) {
     return { state: 'ADAPTER_DISABLED' };
   }
@@ -868,6 +873,7 @@ async function markConsumerReview(store, key, entry, code, now) {
 }
 
 export async function claimArc1AdapterConsumer(raw, request, env, store, adapters = {}) {
+  assertPublicIntakeAuthority(env);
   if (!arc1AdapterProtocolEnabled(env)) {
     throw new Error('ARC1_ADAPTER_CONSUMER_CLAIM_DISABLED');
   }
@@ -951,6 +957,7 @@ export async function claimArc1AdapterConsumer(raw, request, env, store, adapter
 }
 
 export async function completeArc1AdapterConsumer(raw, request, env, store, adapters = {}) {
+  assertPublicIntakeAuthority(env);
   if (!arc1AdapterProtocolEnabled(env)) {
     throw new Error('ARC1_ADAPTER_CONSUMER_COMPLETION_DISABLED');
   }
@@ -1031,6 +1038,8 @@ export async function completeArc1AdapterConsumer(raw, request, env, store, adap
 }
 
 export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const authorityNow = new Date((adapters.clock || (() => new Date()))());
   if (!arc1AdapterProtocolEnabled(env)) {
     return { state: 'ADAPTER_DISABLED' };
   }
@@ -1066,7 +1075,7 @@ export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapter
     await finalizeTerminalIndex(stores.adapter, entry.value, resolved);
     return { state: 'DEAD_LETTER', idempotentReplay: true };
   }
-  let now = new Date((adapters.clock || (() => new Date()))());
+  let now = authorityNow;
   if (!Number.isFinite(now.getTime())) throw new TypeError('ARC1 adapter clock is invalid.');
   if (entry.value.dispatch.status === 'CLAIMED' && Date.parse(entry.value.dispatch.lease_expires_at) > now.getTime()) {
     return { state: 'IN_PROGRESS', retryAt: entry.value.dispatch.lease_expires_at };
@@ -1146,6 +1155,7 @@ export async function dispatchArc1AdapterRecord(deliveryId, env, stores, adapter
 }
 
 export async function recoverPendingArc1AdapterDispatches(request, env, stores, adapters = {}) {
+  assertPublicIntakeAuthority(env);
   if (!arc1AdapterProtocolEnabled(env)) {
     return { state: 'ADAPTER_DISABLED', scanned: 0, attempted: 0, reviewed: 0, migration_required: 0, invalid: 0, next_cursor: null };
   }
@@ -1288,6 +1298,7 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
 }
 
 export async function migrateLegacyArc1AdapterRecords(request, env, store, adapters = {}) {
+  assertPublicIntakeAuthority(env);
   if (!arc1AdapterLegacyMigrationEnabled(env)) {
     return { state: 'MIGRATION_DISABLED', scanned: 0, migrated: 0, invalid: 0, next_cursor: null };
   }
