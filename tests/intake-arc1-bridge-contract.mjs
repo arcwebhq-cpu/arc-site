@@ -13,6 +13,7 @@ import {
   validateIntakeSubmissionForBridge,
 } from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
+import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 class FakeStore {
   constructor() { this.values = new Map(); this.sequence = 0; this.writeCalls = 0; this.writeTrace = []; }
@@ -39,7 +40,7 @@ for (const [field, value] of Object.entries({
   intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Test Owner', email: 'private-owner@example.test', business: 'Private Test Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement', main_call_to_action: 'Request Estimate',
   lead_form_needed: 'Yes', lead_notification_email: 'private-owner@example.test', primary_style: 'Modern',
-  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',
+  budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed rights and no visible watermark v1', 'bot-field': '',
 })) form.append(field, value);
 form.append('goals', 'More calls');
 form.append('lead_form_fields', 'Email');
@@ -53,6 +54,7 @@ const normalized = await normalizeIntakeForm(form, receivedAt, () => submissionI
 validateIntakeSubmissionForBridge(normalized.record);
 
 const env = {
+  ...testActivationAuthority(new Date()),
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
   ARC_INTAKE_ARC1_ENDPOINT: 'https://hooks.example.test/arc1/intake',
   ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefgh',
@@ -231,8 +233,11 @@ try {
   const makeRequest = (authorization = `Bearer ${env.ARC_INTAKE_ARC1_RUN_SECRET}`) => new Request('https://arcweb.onl/internal/intake/arc1/deliver', {
     method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: requestBody,
   });
-  assert.equal((await handler(makeRequest('Bearer wrong'))).status, 401);
-  const disabled = await handler(makeRequest(), { get intakeStore() { throw new Error('Disabled endpoint must not touch storage.'); } });
+  assert.equal((await handler(makeRequest('Bearer wrong'), { clock: () => receivedAt })).status, 401);
+  const disabled = await handler(makeRequest(), {
+    clock: () => receivedAt,
+    get intakeStore() { throw new Error('Disabled endpoint must not touch storage.'); },
+  });
   assert.equal(disabled.status, 503);
   assert.deepEqual(await disabled.json(), { error: 'bridge_disabled' });
   assert.equal((await bridgeHandler(new Request('https://arcweb.onl/internal/intake/arc1/deliver'))).status, 405);

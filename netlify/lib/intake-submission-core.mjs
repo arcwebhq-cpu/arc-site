@@ -13,6 +13,7 @@ export const INTAKE_REQUEST_ID_PREFIX = 'arc-intake-request-id-v1\n';
 export const BUDGET_CONFIRMATION = 'Yes, understands the finished ARC website is a fixed five-page website with a $5,000 subtotal plus applicable sales tax only after preview approval';
 export const TERMS_CONFIRMATION = 'Accepted ARC preview terms, privacy policy, refund policy, and fixed five-page service scope dated 2026-08-25; separate adult checkout acceptance required';
 export const OFFER_CONTRACT_ID = 'arc-fixed-five-page-offer-v1';
+export const ASSET_PERMISSION_CONFIRMATION = 'Confirmed rights and no visible watermark v1';
 export const INTAKE_MAX_REQUEST_BYTES = 4_000_000;
 export const INTAKE_MAX_FILE_BYTES = 1_250_000;
 export const INTAKE_MAX_TOTAL_FILE_BYTES = 3_000_000;
@@ -209,7 +210,7 @@ function validatePublicBrief(values, files) {
   }
   const assets = presentList(values, 'assets');
   const hasSubmittedAsset = files.size > 0;
-  if ((hasSubmittedAsset || assets.includes('Logo') || assets.includes('Photos')) && values.get('asset_permission') !== 'Confirmed') {
+  if ((hasSubmittedAsset || assets.includes('Logo') || assets.includes('Photos')) && values.get('asset_permission') !== ASSET_PERMISSION_CONFIRMATION) {
     throw new TypeError('Exact asset permission is required for submitted assets.');
   }
   if (files.has('logo_file') && !assets.includes('Logo')) throw new TypeError('Logo upload is missing its asset selection.');

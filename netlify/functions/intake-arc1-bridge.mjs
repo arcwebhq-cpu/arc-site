@@ -1,4 +1,5 @@
 import { getStore } from '@netlify/blobs';
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import {
   INTAKE_ARC1_BRIDGE_ENABLED_ENV,
   INTAKE_ARC1_REQUEST_SCHEMA,
@@ -43,6 +44,9 @@ async function boundedJson(request) {
 export function createIntakeArc1BridgeHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return response(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizeBridgeRun(request, process.env)) return response(401, { error: 'unauthorized' });
     if (process.env[INTAKE_ARC1_BRIDGE_ENABLED_ENV] !== 'true') return response(503, { error: 'bridge_disabled' });
     const contentType = request.headers.get('content-type') || '';

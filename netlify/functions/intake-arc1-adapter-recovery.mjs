@@ -1,5 +1,6 @@
 import { getStore } from '@netlify/blobs';
 
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import {
   INTAKE_ARC1_ADAPTER_ENABLED_ENV,
   INTAKE_ARC1_ADAPTER_STORE,
@@ -16,6 +17,9 @@ const response = (status, value) => new Response(JSON.stringify(value), { status
 export function createIntakeArc1AdapterRecoveryHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return response(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizeArc1AdapterDispatch(request, process.env)) return response(401, { error: 'unauthorized' });
     if (process.env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' ||
         process.env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||

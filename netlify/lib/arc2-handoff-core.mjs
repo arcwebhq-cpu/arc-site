@@ -4,6 +4,11 @@ import {
   randomUUID,
   timingSafeEqual,
 } from 'node:crypto';
+import {
+  ACTIVATION_MANIFEST_ENV,
+  ACTIVATION_MANIFEST_SECRET_ENV,
+  validateActivationManifestEnvironment,
+} from './activation-manifest-core.mjs';
 import { imageTypeForPath, validateImageAsset } from './image-asset-validation.mjs';
 
 export const HANDOFF_STORE = 'arc2-handoffs';
@@ -125,7 +130,7 @@ function productionContentSha256(artifacts) {
 export const ARC2_CONTENT_SECURITY_POLICY = "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; connect-src 'none'; font-src 'self' data:; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 export const ARC2_PRODUCTION_HEADERS_FILE = `/*\n  Content-Security-Policy: ${ARC2_CONTENT_SECURITY_POLICY}\n  X-Content-Type-Options: nosniff\n  X-Frame-Options: DENY\n  Referrer-Policy: strict-origin-when-cross-origin\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n`;
 export const ARC2_PRECLAIM_HEADERS_FILE = `${ARC2_PRODUCTION_HEADERS_FILE}  X-Robots-Tag: noindex, nofollow, noarchive\n`;
-const PAYMENT_FIELDS = Object.freeze([
+const LEGACY_PAYMENT_FIELDS = Object.freeze([
   'adult_purchaser_acknowledgement',
   'approval_content_sha256',
   'amount_total_minor_units',
@@ -180,6 +185,11 @@ const PAYMENT_FIELDS = Object.freeze([
   'terms_of_service_consent',
   'terms_version',
   'version',
+]);
+const PAYMENT_FIELDS = Object.freeze([
+  ...LEGACY_PAYMENT_FIELDS,
+  'taxability_reasons',
+  'line_item_taxes_sha256',
 ]);
 
 function plainObject(value, label) {
@@ -285,7 +295,7 @@ function requireResolvedHandoffEnvironment(env) {
   return resolved.environment;
 }
 
-export function configuredEnvironment(env = process.env) {
+export function configuredEnvironment(env = process.env, now = new Date()) {
   const resolved = resolveHandoffEnvironment(env);
   env = resolved.environment;
   const required = [
@@ -334,6 +344,8 @@ export function configuredEnvironment(env = process.env) {
     'NETLIFY_TEAM_ACCOUNT_ID',
     'NETLIFY_OAUTH_CLIENT_ID',
     'NETLIFY_OAUTH_CLIENT_SECRET',
+    ACTIVATION_MANIFEST_ENV,
+    ACTIVATION_MANIFEST_SECRET_ENV,
   ];
   const missing = required.filter((name) => !String(env[name] || '').trim());
   const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name) || name === 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY');
@@ -361,6 +373,10 @@ export function configuredEnvironment(env = process.env) {
   const productionMode = liveModeSetting === 'true' && allowTestModeSetting === 'false' && env.ARC_HANDOFF_ENABLED === 'true' && runtimeEnvironment === 'production';
   const sandboxMode = liveModeSetting === 'false' && allowTestModeSetting === 'true' && env.ARC_HANDOFF_ENABLED === 'false' && runtimeEnvironment === 'sandbox';
   const liveModeValid = productionMode || sandboxMode;
+  const activationManifest = validateActivationManifestEnvironment(env, {
+    minimumStage: productionMode ? 'LIVE_CHECKOUT' : 'CLAIM_SANDBOX',
+    now,
+  });
   const stripeAccountVerificationKeyValid = new RegExp(`^rk_${productionMode ? 'live' : 'test'}_[A-Za-z0-9_]{16,240}$`)
     .test(String(env.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY || ''));
   const checkoutLedgerRequiredSetting = String(env.ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED || '');
@@ -405,6 +421,7 @@ export function configuredEnvironment(env = process.env) {
   }
   return {
     enabled: resolved.conflicts.length === 0 && missing.length === 0 && shortSecrets.length === 0 && !duplicateSecrets && invalidAttestations.length === 0 &&
+      activationManifest.valid &&
       liveModeValid && stripeAccountVerificationKeyValid && checkoutLedgerRequiredValid && checkoutKeyRegistryValid && stripeWebhookApiVersionValid && identifiersValid && originValid && runtimeSiteValid && runtimeOriginsValid,
     missing,
     invalid: [
@@ -412,6 +429,7 @@ export function configuredEnvironment(env = process.env) {
       ...shortSecrets,
       ...(duplicateSecrets ? ['ARC_SECRETS_MUST_BE_DISTINCT'] : []),
       ...invalidAttestations,
+      ...(activationManifest.valid ? [] : ['ARC_ACTIVATION_MANIFEST_AUTHORITY']),
       ...(liveModeValid ? [] : ['ARC_STRIPE_MODE_OR_TEST_SANDBOX_CONTEXT']),
       ...(stripeAccountVerificationKeyValid ? [] : ['ARC_STRIPE_ACCOUNT_VERIFICATION_KEY']),
       ...(checkoutLedgerRequiredValid ? [] : ['ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED']),
@@ -680,8 +698,9 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   env = requireResolvedHandoffEnvironment(env);
   const canonical = stringValue(raw, 'Payment evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Payment evidence');
-  exactKeys(value, PAYMENT_FIELDS, 'Payment evidence');
-  const legacyV3 = value.version === LEGACY_PAYMENT_EVIDENCE_VERSION && options.allowLegacyV3 === true;
+  const legacyPaymentVersion = value.version === LEGACY_PAYMENT_EVIDENCE_VERSION;
+  exactKeys(value, legacyPaymentVersion ? LEGACY_PAYMENT_FIELDS : PAYMENT_FIELDS, 'Payment evidence');
+  const legacyV3 = legacyPaymentVersion && options.allowLegacyV3 === true;
   if (canonicalJson(value) !== canonical || (!legacyV3 && value.version !== PAYMENT_EVIDENCE_VERSION) || value.scope !== PAYMENT_EVIDENCE_SCOPE ||
       (legacyV3 ? artifactEvidence.version !== LEGACY_ARTIFACT_EVIDENCE_VERSION : artifactEvidence.version !== ARTIFACT_EVIDENCE_VERSION)) {
     throw new TypeError('Payment evidence is invalid or not canonical.');
@@ -792,6 +811,21 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   const amountsValid = Number.isSafeInteger(value.subtotal_amount_minor_units) && value.subtotal_amount_minor_units === 500000 &&
     Number.isSafeInteger(value.tax_amount_minor_units) && value.tax_amount_minor_units >= 0 && value.tax_amount_minor_units <= 500000 &&
     Number.isSafeInteger(value.amount_total_minor_units) && value.amount_total_minor_units === value.subtotal_amount_minor_units + value.tax_amount_minor_units;
+  const knownTaxabilityReasons = new Set(['customer_exempt', 'not_collecting', 'not_subject_to_tax', 'not_supported', 'portion_product_exempt', 'portion_reduced_rated',
+    'portion_standard_rated', 'product_exempt', 'product_exempt_holiday', 'proportionally_rated', 'reduced_rated', 'reverse_charge', 'standard_rated',
+    'taxable_basis_reduced', 'zero_rated']);
+  const ratedTaxabilityReasons = new Set(['portion_reduced_rated', 'portion_standard_rated', 'proportionally_rated', 'reduced_rated', 'standard_rated', 'taxable_basis_reduced']);
+  const taxabilityReasonsValid = legacyV3 || (
+    Array.isArray(value.taxability_reasons) && value.taxability_reasons.length >= 1 &&
+    value.taxability_reasons.length <= knownTaxabilityReasons.size &&
+    value.taxability_reasons.every(reason => typeof reason === 'string' && knownTaxabilityReasons.has(reason)) &&
+    JSON.stringify(value.taxability_reasons) === JSON.stringify([...new Set(value.taxability_reasons)].sort()) &&
+    (value.tax_amount_minor_units > 0
+      ? value.taxability_reasons.includes('standard_rated')
+      : !value.taxability_reasons.some(reason => ratedTaxabilityReasons.has(reason)) &&
+        !value.taxability_reasons.some(reason => ['customer_exempt', 'not_supported', 'reverse_charge'].includes(reason)) &&
+        !(value.taxability_reasons.includes('not_collecting') && value.product_tax_code !== 'txcd_00000000'))
+  );
   const countryValid = /^[A-Z]{2}$/.test(value.customer_address_country);
   const regionValid = value.customer_address_country === 'US'
     ? /^[A-Z]{2}$/.test(value.customer_address_state)
@@ -804,7 +838,7 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
       value.handoff_artifact_evidence_sha256 !== sha256Hex(canonicalJson(artifactEvidence)) ||
       value.bundle_fingerprint !== artifactEvidence.bundle_fingerprint ||
       value.livemode !== (expectedStripeMode === 'live') || value.mode !== 'payment' || value.status !== 'complete' ||
-      value.payment_status !== 'paid' || value.currency !== 'usd' || !amountsValid ||
+      value.payment_status !== 'paid' || value.currency !== 'usd' || !amountsValid || !taxabilityReasonsValid ||
       value.automatic_tax_enabled !== true || value.automatic_tax_status !== 'complete' ||
       value.price_tax_behavior !== 'exclusive' || value.product_tax_code !== snapshot.product_tax_code || value.product_id !== snapshot.product_id ||
       value.tax_contract_version !== 'arc-tax-v1' || !destinationValid || value.customer_address_status !== 'verified' ||
@@ -821,6 +855,7 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   hex64(value.payer_email_sha256, 'Payer email sha256');
   hex64(value.client_reference_id_sha256, 'Client reference id sha256');
   hex64(value.customer_address_sha256, 'Customer address sha256');
+  if (!legacyV3) hex64(value.line_item_taxes_sha256, 'Line-item taxes sha256');
   hex64(value.tax_registrations_sha256, 'Tax registrations sha256');
   if (value.tax_registrations_sha256 !== snapshot.tax_registrations_sha256 ||
       snapshot.asset_publication_receipt_sha256 !== value.asset_publication_receipt_sha256 ||

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
+import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
 import {
   ARC2_CONTENT_SECURITY_POLICY,
   ARC2_PRECLAIM_HEADERS_FILE,
@@ -87,7 +93,25 @@ const secrets = Object.fromEntries([
   'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
 ].map((name, index) => [name, `${name.toLowerCase()}-${String(index).padStart(2, '0')}-unique-test-secret-0123456789`]));
+const activationNow = new Date();
+const activationDeploymentSha = '9'.repeat(40);
+const activationManifest = (stage, overrides = {}) => signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage,
+  authority_mode: 'ROLLOUT',
+  issued_at: new Date(activationNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(activationNow.getTime() + 60 * 60_000).toISOString(),
+  deployment_sha: activationDeploymentSha,
+  evidence: ACTIVATION_EVIDENCE_BY_STAGE[stage].map((kind) => ({
+    kind,
+    receipt_ref: `audit:${createHash('sha256').update(`receipt:${kind}`).digest('hex').slice(0, 24)}`,
+    sha256: createHash('sha256').update(`evidence:${kind}`).digest('hex'),
+  })),
+  ...overrides,
+}, secrets.ARC_ACTIVATION_MANIFEST_HMAC_SECRET);
 const env = {
   ...secrets,
   ARC_HANDOFF_ENABLED: 'false',
@@ -125,11 +149,19 @@ const env = {
   NETLIFY_TEAM_SLUG: 'arc-team',
   NETLIFY_TEAM_ACCOUNT_ID: 'account-source-123',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
+  COMMIT_REF: activationDeploymentSha,
+  ARC_ACTIVATION_MANIFEST: activationManifest('CLAIM_SANDBOX'),
 };
 assert.equal(configuredEnvironment({ ...env, ARC_HANDOFF_ENABLED: 'true' }).enabled, false,
   'Test-mode events require a disabled handoff on an explicit nonproduction sandbox.');
 const sandboxEnv = { ...env };
 assert.deepEqual(configuredEnvironment(sandboxEnv), { enabled: true, missing: [], invalid: [] });
+assert.equal(configuredEnvironment({ ...sandboxEnv, ARC_ACTIVATION_MANIFEST: '' }).enabled, false,
+  'Sandbox ARC2 mutations must require a signed activation authority.');
+assert.equal(configuredEnvironment({
+  ...sandboxEnv,
+  ARC_ACTIVATION_MANIFEST: activationManifest('EMAIL_SANDBOX'),
+}).enabled, false, 'Sandbox ARC2 claim controls must not open below CLAIM_SANDBOX.');
 const productionEnv = {
   ...env,
   ARC_STRIPE_LIVE_MODE_ENABLED: 'true',
@@ -139,8 +171,20 @@ const productionEnv = {
   ARC_HANDOFF_ENABLED: 'true',
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_' + 'live_arcHandoffRestrictedAccountRead0123456789',
   SITE_NAME: 'arcsites',
+  ARC_ACTIVATION_MANIFEST: activationManifest('LIVE_CHECKOUT'),
 };
 assert.deepEqual(configuredEnvironment(productionEnv), { enabled: true, missing: [], invalid: [] });
+assert.equal(configuredEnvironment({
+  ...productionEnv,
+  ARC_ACTIVATION_MANIFEST: activationManifest('CLAIM_SANDBOX'),
+}).enabled, false, 'Production ARC2 mutations must not open below LIVE_CHECKOUT.');
+assert.equal(configuredEnvironment({
+  ...productionEnv,
+  ARC_ACTIVATION_MANIFEST: activationManifest('LIVE_CHECKOUT', {
+    issued_at: new Date(activationNow.getTime() - 2 * 60 * 60_000).toISOString(),
+    expires_at: new Date(activationNow.getTime() - 60_000).toISOString(),
+  }),
+}).enabled, false, 'An expired production activation authority must revoke ARC2 mutations.');
 const tokenAliasEnv = { ...productionEnv, NETLIFY_ACCESS_TOKEN: productionEnv.NETLIFY_ADMIN_PAT };
 delete tokenAliasEnv.NETLIFY_ADMIN_PAT;
 assert.equal(configuredEnvironment(tokenAliasEnv).enabled, true, 'Workflow-facing Netlify token alias must satisfy runtime readiness.');
@@ -358,6 +402,8 @@ const paymentEvidenceObject = {
   currency: 'usd',
   subtotal_amount_minor_units: 500000,
   tax_amount_minor_units: 50000,
+  taxability_reasons: ['standard_rated'],
+  line_item_taxes_sha256: sha256Hex(canonicalJson([{ amount_minor_units: 50000, taxability_reason: 'standard_rated' }])),
   amount_total_minor_units: 550000,
   automatic_tax_enabled: true,
   automatic_tax_status: 'complete',
@@ -430,8 +476,13 @@ const legacyV3ArtifactObject = {
   artifacts: legacyV3Artifacts,
 };
 const legacyV3ArtifactEvidence = canonicalJson(legacyV3ArtifactObject);
+const {
+  taxability_reasons: _legacyV3TaxabilityReasons,
+  line_item_taxes_sha256: _legacyV3LineItemTaxesSha256,
+  ...legacyV3PaymentBase
+} = paymentEvidenceObject;
 const legacyV3PaymentObject = {
-  ...paymentEvidenceObject,
+  ...legacyV3PaymentBase,
   version: 'arc2-payment-evidence-v3',
   client_reference_id: legacyV3Reference,
   client_reference_id_sha256: legacyV3ReferenceSha,
@@ -467,6 +518,22 @@ assert.throws(() => normalizeStartPayload(legacyV3Input, env, now), /version|inv
   'A newly submitted v3 artifact/payment envelope must fail closed.');
 const normalizedLegacyV3 = normalizeStartPayload(legacyV3Input, env, now, { allowLegacyV3: true });
 assert.equal(normalizedLegacyV3.legacyV3, true, 'Frozen v3 parsing must be explicit and recognizable by the resume gate.');
+assert.equal(Object.hasOwn(legacyV3PaymentObject, 'taxability_reasons'), false,
+  'The frozen v3 fixture must not contain the v4 taxability-reasons field.');
+assert.equal(Object.hasOwn(legacyV3PaymentObject, 'line_item_taxes_sha256'), false,
+  'The frozen v3 fixture must not contain the v4 line-item-tax digest field.');
+const legacyV3WithV4TaxFields = canonicalJson({
+  ...legacyV3PaymentObject,
+  taxability_reasons: paymentEvidenceObject.taxability_reasons,
+  line_item_taxes_sha256: paymentEvidenceObject.line_item_taxes_sha256,
+});
+assert.throws(() => normalizeStartPayload({
+  ...legacyV3Input,
+  payment_evidence: legacyV3WithV4TaxFields,
+  payment_evidence_hmac_sha256: hmacHex(env.ARC_CHECKOUT_BINDING_SECRET,
+    `arc2-payment-evidence-signature-v3\ntest\n${legacyV3WithV4TaxFields}`),
+}, env, now, { allowLegacyV3: true }), /fields are invalid/,
+'Frozen v3 payment evidence must reject v4-only tax audit fields even when re-signed.');
 assert.throws(() => normalizeStartPayload({
   ...legacyV3Input,
   payment_evidence: paymentEvidence,
@@ -506,6 +573,12 @@ assert.throws(() => normalizeStartPayload({
 for (const mutation of [
   { amount_total_minor_units: 500000 },
   { tax_amount_minor_units: 0 },
+  { taxability_reasons: [] },
+  { taxability_reasons: ['future_reason'] },
+  { taxability_reasons: ['standard_rated', 'customer_exempt'] },
+  { tax_amount_minor_units: 0, amount_total_minor_units: 500000, customer_address_state: 'OR', taxability_reasons: ['customer_exempt'] },
+  { tax_amount_minor_units: 0, amount_total_minor_units: 500000, customer_address_state: 'OR', taxability_reasons: ['reverse_charge'] },
+  { line_item_taxes_sha256: 'not-a-hash' },
   { automatic_tax_enabled: false },
   { automatic_tax_status: 'requires_location_inputs' },
   { price_tax_behavior: 'inclusive' },
@@ -528,6 +601,14 @@ for (const mutation of [
     payment_evidence_hmac_sha256: hmacHex(env.ARC_CHECKOUT_BINDING_SECRET, `${PAYMENT_SIGNATURE_PREFIX}test\n${tampered}`),
   }, env, now), /invalid|Payment evidence bindings/i);
 }
+const { taxability_reasons: _legacyReasons, line_item_taxes_sha256: _legacyTaxDigest, ...preAuditPaymentEvidenceObject } = paymentEvidenceObject;
+const preAuditPaymentEvidence = canonicalJson(preAuditPaymentEvidenceObject);
+assert.throws(() => normalizeStartPayload({
+  ...input,
+  payment_evidence: preAuditPaymentEvidence,
+  payment_evidence_hmac_sha256: hmacHex(env.ARC_CHECKOUT_BINDING_SECRET, `${PAYMENT_SIGNATURE_PREFIX}test\n${preAuditPaymentEvidence}`),
+}, env, now), /fields are invalid/,
+'A pre-audit V4 payment evidence object must fail closed even when re-signed.');
 const livePaymentObject = { ...paymentEvidenceObject, livemode: true, checkout_session_id: 'cs_live_arc2_handoff_contract' };
 const livePayment = canonicalJson(livePaymentObject);
 assert.throws(() => normalizeStartPayload({

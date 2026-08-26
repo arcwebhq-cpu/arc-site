@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { normalizeStoredIntakeSubmissionForBridge, validateIntakeSubmissionForBridge } from './intake-arc1-bridge-core.mjs';
 
 export const INTAKE_ARC1_DISPATCH_ENABLED_ENV = 'ARC_INTAKE_ARC1_DISPATCH_ENABLED';
@@ -149,10 +150,12 @@ async function convergeDispatchState(store, key, desired) {
 }
 
 export async function dispatchIntakeToArc1Background(submissionId, request, env, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const clock = adapters.clock || (() => new Date());
+  const now = new Date(clock());
   if (env[INTAKE_ARC1_DISPATCH_ENABLED_ENV] !== 'true') return { state: 'DISPATCH_DISABLED' };
   const resolved = resolveSameDeployDispatcher(request, env);
   const store = adapters.store;
-  const clock = adapters.clock || (() => new Date());
   const fetchImpl = adapters.fetch || fetch;
   const key = `submissions/${submissionId}`;
   let entry = await readRecord(store, key);
@@ -160,7 +163,6 @@ export async function dispatchIntakeToArc1Background(submissionId, request, env,
   const force = adapters.force === true;
   if (entry.record.arc1_dispatch.status === 'DEAD_LETTER') return { state: 'DEAD_LETTER', idempotentReplay: true };
   if (entry.record.arc1_dispatch.status === 'ACCEPTED' && !force) return { state: 'ACCEPTED', idempotentReplay: true };
-  const now = new Date(clock());
   const leaseExpiresAt = entry.record.arc1_dispatch.attempt_lease_expires_at ?
     Date.parse(entry.record.arc1_dispatch.attempt_lease_expires_at) : null;
   if (Number.isFinite(leaseExpiresAt)) {
@@ -253,6 +255,9 @@ export async function dispatchIntakeToArc1Background(submissionId, request, env,
 }
 
 export async function recoverPendingArc1Dispatches(request, env, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const clock = adapters.clock || (() => new Date());
+  const authorityNow = new Date(clock());
   if (env[INTAKE_ARC1_DISPATCH_ENABLED_ENV] !== 'true') {
     return { state: 'DISPATCH_DISABLED', scanned: 0, attempted: 0, invalid: 0, next_cursor: null };
   }
@@ -266,7 +271,7 @@ export async function recoverPendingArc1Dispatches(request, env, adapters = {}) 
   let attempted = 0;
   let invalid = 0;
   let processedPages = 0;
-  const nowMs = new Date((adapters.clock || (() => new Date()))()).getTime();
+  const nowMs = authorityNow.getTime();
   const initialCursor = (shard) => ({ shard, position: 0, sequence_hmac_sha256: null });
   const partial = () => ({
     state: 'RECOVERY_PARTIAL', scanned, attempted, invalid,

@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { validateImageAsset } from './image-asset-validation.mjs';
+import { ASSET_PERMISSION_CONFIRMATION } from './intake-submission-core.mjs';
 
 export const INTAKE_PRIVATE_ASSET_ENABLED_ENV = 'ARC_INTAKE_ASSET_RETRIEVAL_ENABLED';
 export const INTAKE_PRIVATE_ASSET_GRANT_SCHEMA = 'arc-intake-private-asset-grant-v1';
@@ -126,6 +128,7 @@ function validateGrant(value) {
 }
 
 export async function retrievePrivateAsset(input, env, { store, now = new Date() } = {}) {
+  assertPublicIntakeAuthority(env);
   if (!exactKeys(input, ['asset_id', 'delivery_id', 'evidence_sha256', 'schema']) ||
       input.schema !== INTAKE_PRIVATE_ASSET_REQUEST_SCHEMA || !ASSET_ID_PATTERN.test(input.asset_id) ||
       !SHA256_PATTERN.test(input.delivery_id) || !SHA256_PATTERN.test(input.evidence_sha256)) throw new TypeError('Private asset request is invalid.');
@@ -143,7 +146,7 @@ export async function retrievePrivateAsset(input, env, { store, now = new Date()
   }
   const source = await store.getWithMetadata(value.source_key, { type: 'json', consistency: 'strong' });
   const record = source?.data;
-  if (!record || record.data?.asset_permission !== 'Confirmed' || !Array.isArray(record.assets)) throw new Error('ARC_INTAKE_ASSET_PERMISSION_REQUIRED');
+  if (!record || record.data?.asset_permission !== ASSET_PERMISSION_CONFIRMATION || !Array.isArray(record.assets)) throw new Error('ARC_INTAKE_ASSET_PERMISSION_REQUIRED');
   const matches = record.assets.filter((asset) => {
     const item = metadata(asset);
     return item.kind === grant.kind && item.role === grant.role && item.content_type === grant.content_type &&

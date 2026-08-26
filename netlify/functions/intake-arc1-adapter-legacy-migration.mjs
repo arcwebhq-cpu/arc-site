@@ -1,5 +1,6 @@
 import { getStore } from '@netlify/blobs';
 
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import {
   INTAKE_ARC1_ADAPTER_STORE,
   arc1AdapterLegacyMigrationEnabled,
@@ -17,6 +18,9 @@ const json = (status, value) => new Response(JSON.stringify(value), { status, he
 export function createIntakeArc1AdapterLegacyMigrationHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return json(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizeArc1AdapterDispatch(request, process.env)) return json(401, { error: 'unauthorized' });
     if (!arc1AdapterLegacyMigrationEnabled(process.env)) {
       return json(503, { error: 'migration_disabled' });

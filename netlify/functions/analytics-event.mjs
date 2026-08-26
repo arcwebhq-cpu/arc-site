@@ -1,6 +1,7 @@
 import { getStore } from '@netlify/blobs';
 import {
   ANALYTICS_STORE,
+  analyticsCollectionReady,
   eventKey,
   expirationTimestamp,
   normalizeAnalyticsEvent,
@@ -42,7 +43,7 @@ function response(status) {
 }
 
 export default async (request) => {
-  if (process.env.ARC_ANALYTICS_COLLECTION_ENABLED !== 'true') return response(503);
+  if (!analyticsCollectionReady(process.env)) return response(503);
   if (request.method !== 'POST') return response(405);
   const requestUrl = new URL(request.url);
   if (!ALLOWED_HOSTS.has(requestUrl.hostname)) return response(403);

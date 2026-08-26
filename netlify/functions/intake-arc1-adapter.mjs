@@ -1,5 +1,6 @@
 import { getStore } from '@netlify/blobs';
 
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 import {
   INTAKE_ARC1_ADAPTER_ENABLED_ENV,
@@ -28,6 +29,9 @@ const json = (status, value) => new Response(JSON.stringify(value), { status, he
 export function createIntakeArc1AdapterHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return json(503, { error: 'public_intake_authority_required' });
+    }
     if (process.env[INTAKE_ARC1_ADAPTER_ENABLED_ENV] !== 'true' ||
         process.env[INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV] !== 'true' ||
         process.env.ARC_INTAKE_ASSET_RETRIEVAL_ENABLED !== 'true' ||

@@ -33,6 +33,7 @@ import {
 } from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import { retrievePrivateAsset } from '../netlify/lib/intake-private-asset-core.mjs';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
+import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 class FakeStore {
   constructor() { this.values = new Map(); this.sequence = 0; this.writes = []; this.reads = 0; this.failReviewWrites = false; }
@@ -68,7 +69,7 @@ for (const [field, value] of Object.entries({
   business: 'Private Adapter Roofing', industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement',
   main_call_to_action: 'Request Estimate', budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION,
   lead_form_needed: 'Yes', lead_notification_email: 'adapter-owner@example.test', primary_style: 'Modern',
-  asset_permission: 'Confirmed', 'bot-field': '',
+  asset_permission: 'Confirmed rights and no visible watermark v1', 'bot-field': '',
 })) form.append(field, value);
 form.append('goals', 'More calls');
 form.append('lead_form_fields', 'Email');
@@ -79,6 +80,7 @@ form.append('logo_file', new Blob([png], { type: 'image/png' }), 'logo.png');
 const normalized = await normalizeIntakeForm(form, now, () => submissionId);
 
 const env = {
+  ...testActivationAuthority(new Date()),
   ARC_INTAKE_ARC1_ADAPTER_ENABLED: 'true',
   ARC_INTAKE_ARC1_BRIDGE_ENABLED: 'true',
   ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED: 'true',

@@ -43,7 +43,10 @@ const offerContract = JSON.parse(offerContractText);
 const packageJson = JSON.parse(packageText);
 const imageSizePackage = JSON.parse(imageSizePackageText);
 const intakeBuildMarker = await readFile(new URL('netlify/lib/intake-build-marker.mjs', root), 'utf8');
+const activationManifestCore = await readFile(new URL('netlify/lib/activation-manifest-core.mjs', root), 'utf8');
+const activationManifestDoc = await readFile(new URL('operations/activation-manifest.md', root), 'utf8');
 const buildScript = await readFile(new URL('scripts/build-site.mjs', root), 'utf8');
+const intakeArc1BridgeCore = await readFile(new URL('netlify/lib/intake-arc1-bridge-core.mjs', root), 'utf8');
 const stripeCheckoutCore = await readFile(new URL('netlify/lib/stripe-checkout-core.mjs', root), 'utf8');
 const stripeAccountVerification = await readFile(new URL('netlify/lib/stripe-account-verification.mjs', root), 'utf8');
 const stripeWebhook = await readFile(new URL('netlify/functions/stripe-reversal-webhook.mjs', root), 'utf8');
@@ -157,6 +160,8 @@ assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=/,
 assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
 assert.match(home, /const draftTtlMs=7\*24\*60\*60\*1000/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
+assert.match(home, /they contain no visible watermarks or branding I’m not authorized to publish/,
+  'Customer asset intake must require an explicit visible-watermark and publishing-rights confirmation.');
 assert.match(home, /freshConfirmationFields\.has\(field\.name\)/);
 assert.match(home, /JSON\.stringify\(\{savedAt,expiresAt:savedAt\+draftTtlMs,requestId:ensureSubmissionRequestId\(\),data:draftData\(\)\}\)/);
 assert.match(home, /submissionRequestIdPattern\.test\(saved\.requestId\|\|''\)/,
@@ -575,12 +580,16 @@ assert.equal(packageJson.scripts['preflight:sandbox'], 'node scripts/launch-pref
 assert.equal(packageJson.scripts['preflight:live'], 'node scripts/launch-preflight.mjs --mode=live');
 assert.deepEqual(packageJson.scripts.test.split(' && '), [
   'npm run preflight',
+  'node scripts/prepare-test-build.mjs',
+  'node tests/activation-build-identity-contract.mjs',
+  'node tests/activation-manifest-contract.mjs',
   'node tests/launch-preflight-contract.mjs',
   'node tests/workflow-supply-chain-contract.mjs',
   'node tests/netlify-function-config-contract.mjs',
   'node tests/source-contract.mjs',
   'node tests/analytics-contract.mjs',
   'node tests/intake-readiness-contract.mjs',
+  'node tests/intake-activation-authority-contract.mjs',
   'node tests/intake-private-asset-contract.mjs',
   'node tests/intake-arc1-bridge-contract.mjs',
   'node tests/intake-arc1-adapter-contract.mjs',
@@ -603,8 +612,23 @@ assert.match(analyticsCore, /STEP_LABELS = Object\.freeze\(\{ 1: 'Business', 2: 
 assert.match(analyticsCore, /Unexpected analytics field/);
 assert.match(analyticsEvent, /new Set\(\['arcweb\.onl', 'arcsites\.netlify\.app'\]\)/);
 assert.match(analyticsEvent, /onlyIfNew: true/);
-assert.match(analyticsEvent, /ARC_ANALYTICS_COLLECTION_ENABLED !== 'true'/,
+assert.match(analyticsCore, /ARC_ANALYTICS_COLLECTION_ENABLED === 'true'/,
   'The analytics receiver must remain exact default-off while automation is disabled.');
+assert.match(analyticsCore, /ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED === 'true'/,
+  'Collection must not open without its retention automation control.');
+assert.match(analyticsCore, /minimumStage: 'PUBLIC_INTAKE'/,
+  'Collection must require the current ordered activation authority.');
+assert.match(analyticsEvent, /analyticsCollectionReady\(process\.env\)/);
+assert.match(activationManifestCore, /timingSafeEqual/);
+assert.match(activationManifestCore, /ACTIVATION_MANIFEST_MAX_LIFETIME_MS = 24 \* 60 \* 60 \* 1000/);
+assert.match(activationManifestCore, /ACTIVATION_BUILD_IDENTITY/,
+  'Runtime activation must consume the immutable generated build identity.');
+assert.doesNotMatch(activationManifestCore, /env\[['"]COMMIT_REF['"]\]/,
+  'Runtime activation must never trust COMMIT_REF from the Functions environment.');
+assert.match(buildScript, /activationBuildIdentityModule\(process\.env\.COMMIT_REF\)/,
+  'The build must capture the build-scoped deployment identity into the Function bundle.');
+assert.match(activationManifestDoc, /does not turn on Stripe, Netlify, email, Zapier, Apollo/);
+assert.match(manualActivation, /current committed baseline is `OFF`/);
 assert.match(analyticsEvent, /windowLimit: 60/);
 assert.doesNotMatch(analyticsEvent, /user-agent|x-forwarded|client-ip/i);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_USER/);
@@ -719,7 +743,11 @@ assert.match(intakeSubmissionCore, /INTAKE_MAX_REQUEST_BYTES = 4_000_000/);
 assert.match(intakeSubmissionCore, /INTAKE_MAX_FILE_BYTES = 1_250_000/);
 assert.match(intakeSubmissionCore, /INTAKE_MAX_TOTAL_FILE_BYTES = 3_000_000/);
 assert.match(intakeSubmissionCore, /'primary_style'/);
-assert.match(intakeSubmissionCore, /values\.get\('asset_permission'\) !== 'Confirmed'/);
+assert.match(intakeSubmissionCore, /ASSET_PERMISSION_CONFIRMATION = 'Confirmed rights and no visible watermark v1'/);
+assert.match(intakeSubmissionCore, /values\.get\('asset_permission'\) !== ASSET_PERMISSION_CONFIRMATION/);
+assert.match(intakeArc1BridgeCore, /INTAKE_ARC1_CONTRACT_VERSION = 'arc-intake-to-arc1-contract-v2'/);
+assert.match(intakeArc1BridgeCore, /ASSET_PERMISSION_CONFIRMATION/);
+assert.match(intakeArc1BridgeCore, /arc1-asset-visual-review-v1/);
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/);
 assert.match(buildScript, /intakeBuildMarkerPath/);

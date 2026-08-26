@@ -3,6 +3,7 @@ import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '..
 import { dispatchIntakeToArc1Background, recoverPendingArc1Dispatches, resolveSameDeployDispatcher } from '../netlify/lib/intake-arc1-dispatch-core.mjs';
 import backgroundHandler, { config as backgroundConfig } from '../netlify/functions/intake-arc1-background.mjs';
 import recoveryHandler, { config as recoveryConfig } from '../netlify/functions/intake-arc1-recovery.mjs';
+import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 class FakeStore {
   constructor() { this.values = new Map(); this.sequence = 0; }
@@ -40,7 +41,13 @@ form.append('lead_form_fields', 'Email');
 form.append('sections', 'Contact or quote form');
 const submissionId = '11111111-1111-4111-8111-111111111111'; const now = new Date('2026-08-13T19:00:00.000Z');
 const normalized = await normalizeIntakeForm(form, now, () => submissionId);
-const env = { ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true', ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdefgh', ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefghijkl', URL: 'https://arcweb.onl' };
+const env = {
+  ...testActivationAuthority(new Date()),
+  ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
+  ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdefgh',
+  ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefghijkl',
+  URL: 'https://arcweb.onl',
+};
 const request = new Request('https://arcweb.onl/api/intake/submit', { method: 'POST' });
 assert.equal(resolveSameDeployDispatcher(request, env).endpoint, 'https://arcweb.onl/.netlify/functions/intake-arc1-background');
 assert.equal(resolveSameDeployDispatcher(new Request('https://arcsites.netlify.app/api/intake/submit'), env).endpoint,
@@ -359,7 +366,7 @@ assert.equal(deadStore.values.get(normalized.key).data.arc1_dispatch.alert_code,
 assert.equal(backgroundConfig.background, true); assert.equal(Object.hasOwn(backgroundConfig, 'schedule'), false); assert.equal(recoveryConfig.path, '/internal/intake/arc1/recover'); assert.equal(recoveryConfig.method, 'POST'); assert.equal(recoveryConfig.rateLimit.windowLimit, 1);
 const saved = { ...process.env };
 try {
-  Object.assign(process.env, env);
+  Object.assign(process.env, env, testActivationAuthority(new Date()));
   assert.equal((await backgroundHandler(new Request('https://arcweb.onl/.netlify/functions/intake-arc1-background', { method: 'POST' }))).status, 401);
   assert.equal((await recoveryHandler(new Request('https://arcweb.onl/internal/intake/arc1/recover', { method: 'POST' }))).status, 401);
   process.env.ARC_INTAKE_ARC1_DISPATCH_ENABLED = 'false';

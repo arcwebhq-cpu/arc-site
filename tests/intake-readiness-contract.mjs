@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
 import handler, { config, createIntakeReadinessHandler } from '../netlify/functions/intake-readiness.mjs';
 import submitHandler, { config as submitConfig, createIntakeSubmitHandler } from '../netlify/functions/intake-submit.mjs';
 import {
@@ -19,6 +25,7 @@ import {
   INTAKE_READINESS_ENV,
   INTAKE_READINESS_SCHEMA,
   INTAKE_READINESS_VERSION,
+  intakeActivationReady,
   intakeEnabledFromAttestation,
   intakeEnabledFromBuildMarker,
   intakeArc1RuntimeReady,
@@ -134,7 +141,7 @@ const allNamedControlForm = () => {
   const form = new FormData();
   const exactValues = {
     'bot-field': '',
-    asset_permission: 'Confirmed',
+    asset_permission: 'Confirmed rights and no visible watermark v1',
     budget_confirmed: BUDGET_CONFIRMATION,
     business: 'Test Roofing',
     city: 'Everett, WA',
@@ -199,6 +206,14 @@ assert.deepEqual(
 );
 assert.deepEqual(normalizedRealForm.record.asset_manifest.map(({ role }) => role).sort(), [...INTAKE_FILE_FIELDS].sort());
 
+const legacyAssetPermissionForm = allNamedControlForm();
+legacyAssetPermissionForm.set('asset_permission', 'Confirmed');
+await assert.rejects(
+  normalizeIntakeForm(legacyAssetPermissionForm),
+  /Exact asset permission is required/,
+  'A pre-v1 asset confirmation must fail closed instead of inheriting the stronger watermark assertion.',
+);
+
 const invalidCtaForm = validForm();
 invalidCtaForm.set('main_call_to_action', 'Invent a CTA');
 await assert.rejects(normalizeIntakeForm(invalidCtaForm), /main_call_to_action is invalid/i);
@@ -222,12 +237,12 @@ invalidRequestIdentityForm.set('submission_request_id', 'caller-controlled-id');
 await assert.rejects(normalizeIntakeForm(invalidRequestIdentityForm), /request identity is invalid/i);
 
 const tooLargeFileForm = validForm();
-tooLargeFileForm.append('asset_permission', 'Confirmed');
+tooLargeFileForm.append('asset_permission', 'Confirmed rights and no visible watermark v1');
 tooLargeFileForm.append('assets', 'Logo');
 tooLargeFileForm.append('logo_file', pngBlob(INTAKE_MAX_FILE_BYTES + 1), 'logo.png');
 await assert.rejects(normalizeIntakeForm(tooLargeFileForm), /file size is invalid/i);
 const tooLargeTotalForm = validForm();
-tooLargeTotalForm.append('asset_permission', 'Confirmed');
+tooLargeTotalForm.append('asset_permission', 'Confirmed rights and no visible watermark v1');
 tooLargeTotalForm.append('assets', 'Logo');
 tooLargeTotalForm.append('assets', 'Photos');
 for (const field of INTAKE_FILE_FIELDS) {
@@ -249,6 +264,23 @@ const completeAttestation = Object.freeze({
 const encodedCompleteAttestation = JSON.stringify(completeAttestation);
 const adapterProofSecret = 'arc-intake-adapter-proof-secret-unique-0123456789';
 const adapterProofNow = new Date();
+const activationSecret = 'intake-activation-manifest-hmac-secret-0123456789abcdef';
+const activationDeploymentSha = '9'.repeat(40);
+const activationStage = 'PUBLIC_INTAKE';
+const activationManifest = signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage: activationStage,
+  authority_mode: 'ROLLOUT',
+  issued_at: new Date(adapterProofNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(adapterProofNow.getTime() + 60 * 60_000).toISOString(),
+  deployment_sha: activationDeploymentSha,
+  evidence: ACTIVATION_EVIDENCE_BY_STAGE[activationStage].map((kind) => ({
+    kind,
+    receipt_ref: `audit:${createHash('sha256').update(`receipt:${kind}`).digest('hex').slice(0, 24)}`,
+    sha256: createHash('sha256').update(`evidence:${kind}`).digest('hex'),
+  })),
+}, activationSecret);
 const adapterEndpoint = 'https://arcweb.onl/internal/intake/arc1/adapter';
 const adapterAssetEndpoint = 'https://arcweb.onl/internal/intake/arc1/assets/retrieve';
 const adapterSiteId = '8f9d462c-952f-42fc-a3a0-50a2529e8f5d';
@@ -310,6 +342,9 @@ const bridgeRuntimeEnv = {
   ARC_EXPECTED_NETLIFY_SITE_ID: adapterSiteId,
   SITE_NAME: 'arcsites',
   URL: 'https://arcweb.onl',
+  ARC_ACTIVATION_MANIFEST_HMAC_SECRET: activationSecret,
+  ARC_ACTIVATION_MANIFEST: activationManifest,
+  COMMIT_REF: activationDeploymentSha,
 };
 const bridgeRuntimeSaved = Object.fromEntries(Object.keys(bridgeRuntimeEnv).map((key) => [key, process.env[key]]));
 
@@ -357,6 +392,16 @@ try {
   process.env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET = adapterProofSecret;
   Object.assign(process.env, bridgeRuntimeEnv);
   const readinessRequest = new Request('https://arcweb.onl/api/intake/readiness');
+  assert.equal(intakeActivationReady(process.env, adapterProofNow), true);
+  const savedActivationManifest = process.env.ARC_ACTIVATION_MANIFEST;
+  delete process.env.ARC_ACTIVATION_MANIFEST;
+  assert.equal(intakeActivationReady(process.env, adapterProofNow), false,
+    'Mutable intake booleans cannot bypass the signed deployment-bound activation authority.');
+  const manifestBlockedSubmit = await enabledSubmitHandler(submitRequest(), {
+    get intakeStore() { throw new Error('A missing activation manifest must block before storage.'); },
+  });
+  assert.equal(manifestBlockedSubmit.status, 503);
+  process.env.ARC_ACTIVATION_MANIFEST = savedActivationManifest;
   assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
     'Private retrieval alone cannot open readiness before bound preview publication wiring is proven.');
   simulatedFutureRuntimeReady = true;
@@ -481,7 +526,7 @@ try {
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
   const metadataFile = validForm();
-  metadataFile.append('asset_permission', 'Confirmed');
+  metadataFile.append('asset_permission', 'Confirmed rights and no visible watermark v1');
   metadataFile.append('logo_file', new Blob([pngWithChunk('tEXt')], { type: 'image/png' }), 'metadata.png');
   const metadataResponse = await enabledSubmitHandler(submitRequest(metadataFile), {
     get intakeStore() { throw new Error('Metadata-bearing uploads must be rejected before storage.'); },

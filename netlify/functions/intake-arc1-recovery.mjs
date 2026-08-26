@@ -1,4 +1,5 @@
 import { getStore } from '@netlify/blobs';
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import { INTAKE_STORE } from '../lib/intake-submission-core.mjs';
 import { authorizeBackgroundDispatch, recoverPendingArc1Dispatches } from '../lib/intake-arc1-dispatch-core.mjs';
 
@@ -9,6 +10,9 @@ const response = (status, value) => new Response(JSON.stringify(value), { status
 export function createIntakeArc1RecoveryHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return response(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizeBackgroundDispatch(request, process.env)) return response(401, { error: 'unauthorized' });
     try {
       const result = await recoverPendingArc1Dispatches(request, process.env, {

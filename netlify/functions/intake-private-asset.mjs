@@ -1,4 +1,5 @@
 import { getStore } from '@netlify/blobs';
+import { publicIntakeAuthorityReady } from '../lib/activation-manifest-core.mjs';
 import {
   INTAKE_PRIVATE_ASSET_ENABLED_ENV,
   INTAKE_PRIVATE_ASSET_REQUEST_SCHEMA,
@@ -34,6 +35,9 @@ async function boundedJson(request) {
 export function createIntakePrivateAssetHandler() {
   return async (request, context = {}) => {
     if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+    if (!publicIntakeAuthorityReady(process.env)) {
+      return json(503, { error: 'public_intake_authority_required' });
+    }
     if (!authorizePrivateAssetRetrieval(request, process.env)) return json(401, { error: 'unauthorized' });
     if (process.env[INTAKE_PRIVATE_ASSET_ENABLED_ENV] !== 'true') return json(503, { error: 'asset_retrieval_disabled' });
     const type = request.headers.get('content-type') || '';

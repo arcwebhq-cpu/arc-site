@@ -1,6 +1,7 @@
 import { INTAKE_BUILD_MARKER } from '../lib/intake-build-marker.mjs';
 import {
   INTAKE_READINESS_ENV,
+  intakeActivationReady,
   intakeArc1RuntimeReady,
   intakeEnabledFromAttestation,
   intakeEnabledFromBuildMarker,
@@ -22,7 +23,8 @@ export function createIntakeReadinessHandler(buildMarker = INTAKE_BUILD_MARKER, 
   if (request.method !== 'GET') return response(405, { error: 'method_not_allowed' });
   if (!ALLOWED_HOSTS.has(new URL(request.url).hostname)) return response(403, { error: 'forbidden' });
   const enabled = intakeEnabledFromBuildMarker(buildMarker) && process.env.ARC_BUILD_INTAKE_ENABLED === 'true' &&
-    intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) && runtimeReady(request, process.env);
+    intakeEnabledFromAttestation(process.env[INTAKE_READINESS_ENV]) && intakeActivationReady(process.env) &&
+    runtimeReady(request, process.env);
   return response(200, { schema: 'arc-intake-readiness-v1', intake_enabled: enabled });
   };
 }

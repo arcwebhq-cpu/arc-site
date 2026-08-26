@@ -8,6 +8,12 @@ import {
   runLaunchPreflightCli,
 } from '../scripts/launch-preflight.mjs';
 import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
+import {
   INTAKE_BUILD_MARKER_SCHEMA,
   INTAKE_BUILD_MARKER_VERSION,
   INTAKE_READINESS_BOOLEAN_FIELDS,
@@ -37,11 +43,30 @@ const secretNames = [
   'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
 ];
 const secretMarkers = secretNames.map((_, index) =>
   `TOP_SECRET_MARKER_${String(index).padStart(2, '0')}_abcdefghijklmnopqrstuvwxyz`);
 const secrets = Object.fromEntries(secretNames.map((name, index) => [name, secretMarkers[index]]));
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const preflightNow = new Date();
+const deploymentSha = '9'.repeat(40);
+const activationEvidence = (stage) => ACTIVATION_EVIDENCE_BY_STAGE[stage].map((kind) => ({
+  kind,
+  receipt_ref: `audit:${sha256(`receipt:${kind}`).slice(0, 24)}`,
+  sha256: sha256(`evidence:${kind}`),
+}));
+const activationManifest = (stage, overrides = {}) => signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage,
+  authority_mode: 'ROLLOUT',
+  issued_at: new Date(preflightNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(preflightNow.getTime() + 60 * 60_000).toISOString(),
+  deployment_sha: deploymentSha,
+  evidence: activationEvidence(stage),
+  ...overrides,
+}, secrets.ARC_ACTIVATION_MANIFEST_HMAC_SECRET);
 
 const common = {
   ...secrets,
@@ -70,6 +95,7 @@ const common = {
   NETLIFY_TEAM_SLUG: 'arc-team',
   NETLIFY_TEAM_ACCOUNT_ID: 'account-source-123',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
+  COMMIT_REF: deploymentSha,
 };
 
 const sandboxEnv = {
@@ -80,6 +106,7 @@ const sandboxEnv = {
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_RUNTIME_ENVIRONMENT: 'sandbox',
   SITE_NAME: 'arc2-sandbox',
+  ARC_ACTIVATION_MANIFEST: activationManifest('CLAIM_SANDBOX'),
 };
 
 const completeIntakeAttestation = Object.fromEntries([
@@ -108,6 +135,7 @@ const liveEnv = {
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_READINESS_ATTESTATION: JSON.stringify(completeIntakeAttestation),
   SITE_NAME: 'arcsites',
+  ARC_ACTIVATION_MANIFEST: activationManifest('PUBLIC_INTAKE'),
 };
 
 const safe = createLaunchPreflightReport({}, { mode: 'safety' });
@@ -144,6 +172,21 @@ assert.equal(sandbox.checks.sandbox_mode_exact, true);
 assert.equal(sandbox.checks.live_mode_exact, false);
 assert.deepEqual(sandbox.missing, []);
 assert.deepEqual(sandbox.invalid, []);
+assert.equal(sandbox.activation.stage, 'CLAIM_SANDBOX');
+assert.equal(sandbox.checks.activation_manifest_current, true);
+assert.equal(sandbox.checks.activation_manifest_deployment_bound, true);
+const sandboxWithoutManifest = createLaunchPreflightReport({
+  ...sandboxEnv,
+  ARC_ACTIVATION_MANIFEST: '',
+}, { mode: 'sandbox', now: preflightNow });
+assert.equal(sandboxWithoutManifest.ok, false);
+assert.ok(sandboxWithoutManifest.missing.includes('ARC_ACTIVATION_MANIFEST'));
+const sandboxBelowStage = createLaunchPreflightReport({
+  ...sandboxEnv,
+  ARC_ACTIVATION_MANIFEST: activationManifest('EMAIL_SANDBOX'),
+}, { mode: 'sandbox', now: preflightNow });
+assert.equal(sandboxBelowStage.ok, false);
+assert.equal(sandboxBelowStage.checks.activation_manifest_stage_sufficient, false);
 
 const live = createLaunchPreflightReport(liveEnv, {
   mode: 'live',
@@ -156,6 +199,16 @@ assert.equal(live.checks.intake_ready, true);
 assert.equal(live.checks.intake_consumer_protocol_enabled, true);
 assert.deepEqual(live.missing, []);
 assert.deepEqual(live.invalid, []);
+assert.equal(live.activation.stage, 'PUBLIC_INTAKE');
+const liveBelowStage = createLaunchPreflightReport({
+  ...liveEnv,
+  ARC_ACTIVATION_MANIFEST: activationManifest('LIVE_CHECKOUT'),
+}, {
+  mode: 'live', now: preflightNow, buildMarker: enabledBuildMarker, runtimeReady: () => true,
+});
+assert.equal(liveBelowStage.ok, false);
+assert.equal(liveBelowStage.checks.activation_manifest_stage_sufficient, false);
+assert.equal(liveBelowStage.checks.intake_ready, false);
 for (const name of ['ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {
   const halfWired = createLaunchPreflightReport({ ...liveEnv, [name]: 'false' }, {
     mode: 'live', buildMarker: enabledBuildMarker, runtimeReady: () => true,

@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import {
+  ASSET_PERMISSION_CONFIRMATION,
   BUDGET_CONFIRMATION,
   INTAKE_ARC1_DELIVERY_SCHEMA,
   INTAKE_ARC1_DISPATCH_SCHEMA,
@@ -38,18 +40,23 @@ export const INTAKE_ARC1_MAX_ACK_BYTES = 32 * 1024;
 // and public Git retention/purge is verified. Update this literal only with
 // those external proofs.
 export const INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED = false;
+export const INTAKE_ARC1_CONTRACT_VERSION = 'arc-intake-to-arc1-contract-v2';
 export const INTAKE_ARC1_CONTRACT_TEXT = [
-  'arc-intake-to-arc1-contract-v1',
+  INTAKE_ARC1_CONTRACT_VERSION,
   INTAKE_SUBMISSION_SCHEMA,
   INTAKE_ARC1_BRIDGE_EVIDENCE_SCHEMA,
   INTAKE_ARC1_CONSUMER_SCHEMA,
   BUDGET_CONFIRMATION,
   TERMS_CONFIRMATION,
+  ASSET_PERMISSION_CONFIRMATION,
   'create-only-ingress-claim-required-before-ack',
   INTAKE_PRIVATE_ASSET_GRANT_SCHEMA,
   'authenticated-content-addressed-private-asset-retrieval',
   'folder-link-intake-rejected-until-private-provider-adapter',
   'signed-asset-receipt-required-before-ingress-claim-and-ack',
+  'arc1-asset-visual-review-v1',
+  'arc-deterministic-image-screen-v1',
+  'authority-pinned-human-review-required-before-publication',
   'immutable-evidence-replay',
 ].join('\n');
 export const INTAKE_ARC1_CONTRACT_SHA256 = createHash('sha256').update(INTAKE_ARC1_CONTRACT_TEXT).digest('hex');
@@ -422,11 +429,12 @@ async function failDelivery(store, key, entry, code, now) {
 }
 
 export async function deliverIntakeToArc1(submissionId, env, adapters = {}) {
+  assertPublicIntakeAuthority(env);
+  const clock = adapters.clock || (() => new Date());
+  let now = new Date(clock());
   submissionId = String(submissionId || '').toLowerCase();
   if (!UUID_PATTERN.test(submissionId)) throw new TypeError('Submission identity is invalid.');
   if (env[INTAKE_ARC1_BRIDGE_ENABLED_ENV] !== 'true') throw new Error('ARC1_BRIDGE_DISABLED');
-  const clock = adapters.clock || (() => new Date());
-  let now = new Date(clock());
   if (!Number.isFinite(now.getTime())) throw new TypeError('Bridge clock is invalid.');
   const store = adapters.store;
   if (!store) throw new TypeError('ARC1 bridge store is required.');

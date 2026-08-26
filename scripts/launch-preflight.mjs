@@ -1,6 +1,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  ACTIVATION_MANIFEST_ENV,
+  ACTIVATION_MANIFEST_SECRET_ENV,
+  activationManifestSecretIsDistinct,
+  validateActivationManifestEnvironment,
+} from '../netlify/lib/activation-manifest-core.mjs';
 import { configuredEnvironment } from '../netlify/lib/arc2-handoff-core.mjs';
 import { INTAKE_BUILD_MARKER } from '../netlify/lib/intake-build-marker.mjs';
 import {
@@ -136,7 +142,7 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
   else offFlags.push('INTAKE_BUILD_MARKER');
   const automationOff = automationFlagsValid && enabledFlags.length === 0;
 
-  const handoff = configuredEnvironment(env);
+  const handoff = configuredEnvironment(env, now);
   const sandboxModeExact = exactMode(env, 'sandbox');
   const liveModeExact = exactMode(env, 'live');
   const intakeBuildFlagEnabled = env.ARC_BUILD_INTAKE_ENABLED === 'true';
@@ -144,15 +150,25 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
   const intakeConsumerClaimEnabled = env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED === 'true';
   const intakeConsumerCompletionEnabled = env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED === 'true';
   const intakeConsumerProtocolEnabled = intakeConsumerClaimEnabled && intakeConsumerCompletionEnabled;
+  const requiredActivationStage = {
+    sandbox: 'CLAIM_SANDBOX',
+    live: 'PUBLIC_INTAKE',
+  }[mode] || 'OFF';
+  const activationManifest = validateActivationManifestEnvironment(env, {
+    minimumStage: requiredActivationStage,
+    now,
+  });
+  const activationManifestSecretDistinct = activationManifestSecretIsDistinct(env);
+  const activationManifestReady = activationManifest.valid && activationManifestSecretDistinct;
   const intakeRuntimeReady = intakeBuildFlagEnabled && intakeAttestationValid &&
     safeRuntimeReadiness(env, now, runtimeReady);
   const intakeReady = intakeBuildFlagEnabled && intakeBuildMarkerEnabled &&
-    intakeAttestationValid && intakeRuntimeReady && intakeConsumerProtocolEnabled;
+    intakeAttestationValid && intakeRuntimeReady && intakeConsumerProtocolEnabled && activationManifestReady;
   const sandboxAutomationOff = SANDBOX_FORBIDDEN_FLAG_NAMES.every((name) =>
     !isPresent(env, name) || env[name] === 'false');
 
   let state = 'INVALID';
-  if (malformedBooleanFlags.length === 0 && handoff.enabled && sandboxModeExact &&
+  if (malformedBooleanFlags.length === 0 && handoff.enabled && sandboxModeExact && activationManifestReady &&
       sandboxAutomationOff && !intakeBuildMarkerEnabled) {
     state = 'SANDBOX_CONFIGURED';
   } else if (malformedBooleanFlags.length === 0 && handoff.enabled && liveModeExact && intakeReady) {
@@ -171,6 +187,11 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
     const modeProblems = modeFieldProblems(env, mode);
     missing.push(...modeProblems.missing);
     invalid.push(...modeProblems.invalid);
+    if (!isPresent(env, ACTIVATION_MANIFEST_ENV)) missing.push(ACTIVATION_MANIFEST_ENV);
+    else if (!activationManifest.valid) invalid.push(ACTIVATION_MANIFEST_ENV);
+    if (!isPresent(env, ACTIVATION_MANIFEST_SECRET_ENV)) missing.push(ACTIVATION_MANIFEST_SECRET_ENV);
+    else if (!activationManifestSecretDistinct) invalid.push(ACTIVATION_MANIFEST_SECRET_ENV);
+    if (!activationManifest.checks.deployment_bound) invalid.push('ACTIVATION_BUILD_IDENTITY');
     if (mode === 'sandbox') {
       invalid.push(...SANDBOX_FORBIDDEN_FLAG_NAMES.filter((name) => env[name] === 'true'));
       if (intakeBuildMarkerEnabled) invalid.push('INTAKE_BUILD_MARKER');
@@ -217,6 +238,15 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
       intake_consumer_protocol_enabled: intakeConsumerProtocolEnabled,
       intake_runtime_ready: intakeRuntimeReady,
       intake_ready: intakeReady,
+      activation_manifest_required: mode === 'sandbox' || mode === 'live',
+      activation_manifest_valid: activationManifest.valid,
+      activation_manifest_current: activationManifest.checks.current,
+      activation_manifest_deployment_bound: activationManifest.checks.deployment_bound,
+      activation_manifest_evidence_complete: activationManifest.checks.evidence_complete,
+      activation_manifest_stage_sufficient: activationManifest.checks.stage_sufficient,
+      activation_manifest_secret_distinct: activationManifestSecretDistinct,
+      activation_manifest_rotation_due: activationManifest.rotation_due,
+      activation_manifest_next_valid: activationManifest.next_manifest_valid === true,
       external_provider_state_checked: false,
       secret_values_output: false,
     },
@@ -224,6 +254,12 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
     off_flags: uniqueSorted(offFlags),
     missing: cleanMissing,
     invalid: cleanInvalid,
+    activation: {
+      stage: activationManifest.stage,
+      authority_mode: activationManifest.authority_mode,
+      expires_at: activationManifest.expires_at,
+      required_stage: requiredActivationStage,
+    },
   };
 }
 
