@@ -7,6 +7,7 @@ import {
   INTAKE_MULTI_FIELDS,
   INTAKE_SINGLE_FIELDS,
   INTAKE_SUBMISSION_SCHEMA,
+  OFFER_CONTRACT_ID,
   TERMS_CONFIRMATION,
   createInitialArc1DeliveryState,
   createInitialArc1DispatchState,
@@ -198,7 +199,8 @@ export function validateIntakeSubmissionForBridge(value) {
       if (!Array.isArray(data) || data.length > 16 || data.some((item) => typeof item !== 'string')) throw new TypeError('Invalid multi-value intake data.');
     } else if (typeof data !== 'string') throw new TypeError('Invalid scalar intake data.');
   }
-  if (value.data.intake_version !== 'arc-intake-v7' || value.data.budget_confirmed !== BUDGET_CONFIRMATION || value.data.terms_accepted !== TERMS_CONFIRMATION) {
+  if (value.data.intake_version !== 'arc-intake-v8' || value.data.offer_contract_id !== OFFER_CONTRACT_ID ||
+      value.data.budget_confirmed !== BUDGET_CONFIRMATION || value.data.terms_accepted !== TERMS_CONFIRMATION) {
     throw new TypeError('Intake consent binding is invalid.');
   }
   let previousRole = '';

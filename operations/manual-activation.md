@@ -50,7 +50,8 @@ head office is missing, no tax registration exists in Stripe, automatic tax is
 disabled on the observed live link, and no webhook endpoint is configured.
 
 The active website-build link is for the correct $5,000 USD one-time amount, but
-it has no successful payments, uses Stripe's hosted confirmation instead of the
+it represents the superseded offer and must not be repurposed for the fixed five-page service. It
+has no successful payments, uses Stripe's hosted confirmation instead of the
 verified ARC success handoff, does not require terms consent, and collects a
 phone number. A stale active $100 Price has one successful live payment that
 remains unrefunded. An active $500 monthly support offer has no subscriptions but
@@ -60,11 +61,17 @@ every mismatch, including the historical $100 payment.
 
 In the correct ARC account, the adult representative must complete verification,
 bank/payout ownership, business/public details, support contact, statement
-descriptor, terms/privacy/refund URLs, and Stripe Tax activation. Register with
-Washington before creating or activating a Washington Stripe Tax registration.
+descriptor, terms/privacy/refund URLs, and Stripe Tax activation. The adult
+representative must confirm registration and tax obligations with qualified
+advisers; any Stripe Tax registration must reflect a registration that is
+already active with the relevant authority.
 
-Create separate test and live one-time Prices and Payment Links for a **$5,000
-service subtotal plus applicable destination tax**. Require automatic tax,
+Create a fresh Product plus separate test and eventual live one-time Prices and
+Payment Links for the **ARC fixed five-page website — $5,000 service subtotal
+plus applicable destination tax**. Bind offer contract
+`arc-fixed-five-page-offer-v1`, terms version `2026-08-25`, and the exact approved
+five-page artifact manifest. Require automatic tax only after the applicable
+registration is active and verified, then require
 billing address, terms consent, the adult-authority acknowledgement, business
 name, and individual name. Keep promotion codes, optional items, adjustable
 quantity, manual payment-method lists, subscriptions, invoice creation, and

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
-const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, manualActivation, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status, intakeSubmissionCore, intakeSubmit] = await Promise.all([
+const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, refunds, scope, robots, sitemap, readinessText, offerContractText, manualActivation, retentionControl, customerEmailContract, netlifyConfig, packageText, imageSizePackageText, imageSizeDisabled, analyticsCore, analyticsEvent, analyticsDashboard, analyticsPrune, arc2Core, arc2Service, arc2Store, arc2Start, arc2Claim, arc2Webhook, arc2Invitation, arc2Status, intakeSubmissionCore, intakeSubmit] = await Promise.all([
   readFile(new URL('index.html', root), 'utf8'),
   readFile(new URL('thank-you/index.html', root), 'utf8'),
   readFile(new URL('payment-success/index.html', root), 'utf8'),
@@ -15,6 +15,7 @@ const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, r
   readFile(new URL('robots.txt', root), 'utf8'),
   readFile(new URL('sitemap.xml', root), 'utf8'),
   readFile(new URL('operations/readiness.json', root), 'utf8'),
+  readFile(new URL('operations/five-page-offer-contract.json', root), 'utf8'),
   readFile(new URL('operations/manual-activation.md', root), 'utf8'),
   readFile(new URL('operations/data-retention.md', root), 'utf8'),
   readFile(new URL('operations/customer-email-contract.md', root), 'utf8'),
@@ -38,6 +39,7 @@ const [home, thankYou, paymentSuccess, claimPage, claimScript, privacy, terms, r
   readFile(new URL('netlify/functions/intake-submit.mjs', root), 'utf8'),
 ]);
 const readiness = JSON.parse(readinessText);
+const offerContract = JSON.parse(offerContractText);
 const packageJson = JSON.parse(packageText);
 const imageSizePackage = JSON.parse(imageSizePackageText);
 const intakeBuildMarker = await readFile(new URL('netlify/lib/intake-build-marker.mjs', root), 'utf8');
@@ -89,7 +91,7 @@ assert.doesNotMatch(
   'Preview copy must describe links as unlisted, not private.',
 );
 assert.match(home, /<span>Unlisted preview<\/span>/);
-assert.match(thankYou, /unlisted preview link/i);
+assert.match(thankYou, /complete, unlisted five-page ARC preview/i);
 assert.match(scope, /unlisted preview controls/i);
 assert.match(home, /class="skip-link" href="#top">Skip to main content<\/a>/);
 assert.match(home, /<nav class="nav" aria-label="Primary navigation">/);
@@ -125,7 +127,8 @@ assert.match(home, /const uploadMaxFileBytes=1250000,uploadMaxTotalBytes=3000000
 assert.match(home, /Maximum 1\.25 MB per file and 3 MB total/);
 assert.match(home, /if\(!isAllowedRaster\(file\)\)/);
 
-assert.match(home, /const draftKey='arc-preview-draft-v7'/);
+assert.match(home, /const draftKey='arc-preview-draft-v8'/);
+assert.match(home, /legacyDraftKeys=\['arc-preview-draft-v7','arc-preview-draft-v4','arc-preview-draft-v3'\]/);
 assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="true"/);
 assert.match(home, /form\.dataset\.intakeBuildEnabled==='true'/);
@@ -159,6 +162,7 @@ assert.match(home, /JSON\.stringify\(\{savedAt,expiresAt:savedAt\+draftTtlMs,req
 assert.match(home, /submissionRequestIdPattern\.test\(saved\.requestId\|\|''\)/,
   'The idempotency nonce must survive a retained-form reload for an exact retry.');
 assert.match(home, /saved\.expiresAt<=now/);
+assert.match(thankYou, /removeItem\('arc-preview-draft-v8'\)/);
 assert.match(thankYou, /removeItem\('arc-preview-draft-v7'\)/);
 const acceptedResponseIndex = home.indexOf('const accepted=(response.status===200||response.status===201)');
 const acceptedDraftRemovalIndex = home.indexOf('localStorage.removeItem(draftKey)', acceptedResponseIndex);
@@ -174,11 +178,14 @@ assert.match(retentionControl, /cannot delete local browser storage\s+while the 
 for (const untrustedHiddenName of ['submission_timestamp', 'submission_id', 'lead_route', 'lead_route_status', 'lead_route_verification', 'checkout_consent_required', 'terms_version', 'terms_accepted_at']) {
   assert.doesNotMatch(home, new RegExp(`name="${untrustedHiddenName}"`));
 }
+assert.match(home, /name="intake_version" value="arc-intake-v8"/);
+assert.match(home, /name="offer_contract_id" value="arc-fixed-five-page-offer-v1"/);
+assert.match(intakeSubmissionCore, /OFFER_CONTRACT_ID = 'arc-fixed-five-page-offer-v1'/);
 assert.match(home, /This does not authorize a charge\./);
-assert.match(home, /adult purchaser must accept the then-current purchase terms and checkout total again at checkout/i);
+assert.match(home, /adult purchaser must accept the then-current purchase terms, approved five-page manifest, and checkout total again at checkout/i);
 assert.match(terms, /does not authorize a charge/i);
 assert.match(terms, /affirmatively accept the then-current purchase terms again at checkout/i);
-assert.match(terms, /Version 2026-08-12/);
+assert.match(terms, /Version 2026-08-25/);
 assert.match(terms, /bearer credential/i);
 assert.match(terms, /creator application can retain a limited ability to push deploys/i);
 assert.match(terms, /will not deploy afterward without new written authorization/i);
@@ -217,7 +224,8 @@ assert.match(privacy, /retention target for first-party analytics events is 90 d
 assert.match(privacy, /deletion control is currently disabled pending operator approval/i);
 
 assert.match(home, /<b>3–4 minutes<\/b>/);
-assert.match(home, /Pay the \$5,000 service subtotal plus applicable sales tax only when you approve it/i);
+assert.match(home, /build all five preview pages/i);
+assert.match(home, /Pay the \$5,000 service subtotal plus applicable sales tax only when you approve them/i);
 assert.match(home, /service subtotal is \$5,000 USD/i);
 assert.match(home, /Applicable sales tax is calculated from the purchaser’s destination address/i);
 assert.match(home, /subtotal, tax, and final total must be shown before payment/i);
@@ -227,7 +235,7 @@ assert.match(home, /id="stepCount">1 \/ 3</);
 assert.match(home, /aria-valuemax="4"/);
 assert.equal((home.match(/class="form-step(?: active)?"/g) || []).length, 4, 'Expected three intake steps plus review.');
 assert.match(home, /Add audience or offer details/);
-assert.match(home, /Confirm contact form and website structure/);
+assert.match(home, /Confirm contact form and five-page content/);
 assert.match(home, /Add brand direction or proof/);
 assert.match(home, /Add assets or launch details/);
 assert.doesNotMatch(home, /name="target_customer"[^>]*\brequired\b/);
@@ -261,12 +269,15 @@ assert.match(terms, /required tax registration and Stripe automatic-tax configur
 assert.match(scope, /required tax registration and automatic-tax configuration are verified/i);
 assert.match(scope, /reusable design system, templates, components, and automation/i);
 assert.match(terms, /not represented as an entirely from-scratch software build/i);
-assert.match(home, /One premium single-page site\./);
-assert.match(scope, /single-page marketing website/);
+assert.match(home, /One premium five-page site\./);
+assert.match(scope, /exactly five connected marketing pages/);
+assert.match(scope, /Home, Services, About, Process, and Contact/);
+assert.match(scope, /not two rounds per page/i);
+assert.match(scope, /exact five-page artifact manifest/i);
 assert.match(home, /Two preview revision rounds\./);
-assert.match(scope, /Two consolidated revision rounds before purchase/);
-assert.match(scope, /Payment confirms approval of the then-current preview/);
-assert.match(terms, /Completing payment confirms approval of the then-current preview/);
+assert.match(scope, /Two consolidated revision rounds across the complete five-page preview before purchase/);
+assert.match(scope, /Payment confirms approval of the exact five-page artifact manifest/);
+assert.match(terms, /Completing payment confirms approval of the exact then-current five-page artifact manifest/);
 assert.match(home, /seven business days/i);
 assert.match(scope, /within seven business days/i);
 assert.match(home, /30 calendar days of launch-related bug support/i);
@@ -284,6 +295,32 @@ assert.doesNotMatch(sitemap, /thank-you/);
 
 assert.equal(readiness.schema, 'arc-operations-readiness-v1');
 assert.equal(readiness.reviewed_at, '2026-08-25');
+assert.deepEqual(offerContract, {
+  schema: 'arc-fixed-five-page-offer-v1',
+  version: 1,
+  effective_date: '2026-08-25',
+  currency: 'USD',
+  subtotal_amount_minor_units: 500000,
+  tax: 'applicable-destination-based-sales-tax-added-at-checkout',
+  billing: 'one-time',
+  page_count: 5,
+  pages: [
+    { id: 'home', path: 'index.html', label: 'Home', role: 'positioning-service-summary-differentiation-primary-action' },
+    { id: 'services', path: 'services/index.html', label: 'Services', role: 'three-to-six-grouped-offerings-without-detail-subpages' },
+    { id: 'about', path: 'about/index.html', label: 'About', role: 'business-story-values-and-authorized-team-or-brand-details' },
+    { id: 'process', path: 'process/index.html', label: 'Process', role: 'process-decision-guidance-faq-and-authorized-proof-only' },
+    { id: 'contact', path: 'contact/index.html', label: 'Contact', role: 'verified-public-details-and-the-one-primary-conversion-path' },
+  ],
+  niche_labels_may_adapt: true,
+  routes_and_roles_are_fixed: true,
+  primary_conversion_paths_maximum: 1,
+  preview_revision_rounds: 2,
+  launch_bug_support_days: 30,
+  target_delivery_business_days: 7,
+  proof_requires_exact_authorized_client_sources: true,
+  additional_pages_or_role_substitutions_require_written_quote: true,
+  performance_outcomes_guaranteed: false,
+});
 assert.deepEqual(readiness.deployment_observation, {
   observed_at: '2026-08-25',
   repository_ref: 'main',
@@ -306,11 +343,13 @@ assert.deepEqual(readiness.deployment_observation, {
   production_activation_claim_allowed: false,
 });
 assert.deepEqual(readiness.offer, {
+  contract_id: 'arc-fixed-five-page-offer-v1',
   currency: 'USD',
   subtotal_amount: 5000,
   tax: 'applicable-destination-based-sales-tax-added-at-checkout',
   billing: 'one-time',
-  deliverable: 'one-premium-single-page-website',
+  deliverable: 'one-premium-fixed-five-page-website',
+  page_paths: ['index.html', 'services/index.html', 'about/index.html', 'process/index.html', 'contact/index.html'],
 });
 assert.equal(readiness.checkout.status, 'blocked');
 assert.equal(readiness.checkout.allowed_mode, 'test-only');
@@ -320,6 +359,7 @@ assert.equal(readiness.checkout.blockers.includes('arc-stripe-public-profile-is-
 for (const blocker of [
   'stripe-test-or-sandbox-context-unavailable',
   'live-website-build-link-has-no-verified-success-handoff',
+  'five-page-checkout-handoff-and-provider-e2e-unverified',
   'active-monthly-support-offer-conflicts-with-published-one-time-scope',
   'stale-live-100-dollar-price-and-unrefunded-payment-require-adult-review',
 ]) assert.ok(readiness.checkout.blockers.includes(blocker));
@@ -479,13 +519,13 @@ assert.match(customerEmailContract, /checkout verification in progress/i);
 assert.match(customerEmailContract, /not confirmation that payment succeeded/i);
 assert.match(customerEmailContract, /time-limited claim invitation/i);
 assert.match(customerEmailContract, /may be\s+retried until that window closes/i);
-assert.match(customerEmailContract, /exact synthetic\s+submission through its rendered Netlify form/i);
+assert.match(customerEmailContract, /exact\s+synthetic submission through its Contact-page Netlify form/i);
 assert.match(customerEmailContract, /verified receipt in the\s+authoritative lead inbox/i);
 assert.match(customerEmailContract, /Form and hook configuration alone never authorizes this email/i);
 assert.match(customerEmailContract, /Sending this\s+invitation does not prove ownership handoff/i);
 assert.match(customerEmailContract, /final email must not include a claim URL/i);
 assert.match(customerEmailContract, /or other bearer secret/i);
-assert.match(customerEmailContract, /destination-account control, the exact final deploy, and the durable\s+delivery outbox/i);
+assert.match(customerEmailContract, /destination-account control, the exact final five-page deploy, and the durable\s+delivery outbox/i);
 assert.match(customerEmailContract, /not a claim that the\s+site is fully launch-ready/i);
 assert.match(customerEmailContract, /durable\s+`READY` invitation outbox and bearer/i);
 assert.match(customerEmailContract, /must never be represented as sent/i);
@@ -582,8 +622,14 @@ assert.match(analyticsPrune, /isExpiredMetadata/);
 assert.match(arc2Core, /PAYMENT_FIELDS = Object\.freeze\(\[/);
 assert.match(arc2Core, /terms_of_service_consent/);
 assert.doesNotMatch(arc2Core, /ARC_EXPECTED_(?:PAYMENT_LINK_ID|PRICE_ID|PRODUCT_TAX_CODE)/,
-  'V3 fulfillment must use the immutable private policy instead of mutable checkout singletons.');
-assert.match(arc2Core, /arc-private-checkout-policy-v1/);
+  'V4 fulfillment must use the immutable private policy instead of mutable checkout singletons.');
+assert.match(arc2Core, /arc-private-checkout-policy-v2/);
+assert.match(arc2Core, /arc2-payment-evidence-v4/);
+assert.match(arc2Core, /arc-checkout-reference-\$\{protocol\}/,
+  'The signed checkout reference must select its versioned MAC context explicitly.');
+assert.match(arc2Core, /2026-07-29\.dahlia/);
+assert.match(arc2Core, /arc-private-checkout-policy-v1/,
+  'Frozen v3 policy parsing must remain visible only for exact durable replay.');
 assert.match(arc2Core, /ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256/);
 assert.match(arc2Core, /ARC_EXPECTED_NETLIFY_SITE_ID/);
 assert.match(arc2Core, /ARC_PRODUCTION_SITE_BINDING/);

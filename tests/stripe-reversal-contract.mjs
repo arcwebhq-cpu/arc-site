@@ -123,7 +123,14 @@ const normalizedFixture = {
   },
   artifact: {
     digest: '4'.repeat(64),
-    artifacts: [{ path: '_headers', sha256: '5'.repeat(64), size: 10 }, { path: 'index.html', sha256: '6'.repeat(64), size: 20 }],
+    artifacts: [
+      { path: '_headers', sha256: '5'.repeat(64), size: 10 },
+      { path: 'about/index.html', sha256: '6'.repeat(64), size: 20 },
+      { path: 'contact/index.html', sha256: '7'.repeat(64), size: 20 },
+      { path: 'process/index.html', sha256: '8'.repeat(64), size: 20 },
+      { path: 'services/index.html', sha256: '9'.repeat(64), size: 20 },
+      { path: 'index.html', sha256: 'a'.repeat(64), size: 20 },
+    ],
     value: {
       artifact_manifest_sha256: '7'.repeat(64),
       bundle_fingerprint: '3'.repeat(64),

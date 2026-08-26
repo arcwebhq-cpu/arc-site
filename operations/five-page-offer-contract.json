@@ -1,0 +1,51 @@
+{
+  "schema": "arc-fixed-five-page-offer-v1",
+  "version": 1,
+  "effective_date": "2026-08-25",
+  "currency": "USD",
+  "subtotal_amount_minor_units": 500000,
+  "tax": "applicable-destination-based-sales-tax-added-at-checkout",
+  "billing": "one-time",
+  "page_count": 5,
+  "pages": [
+    {
+      "id": "home",
+      "path": "index.html",
+      "label": "Home",
+      "role": "positioning-service-summary-differentiation-primary-action"
+    },
+    {
+      "id": "services",
+      "path": "services/index.html",
+      "label": "Services",
+      "role": "three-to-six-grouped-offerings-without-detail-subpages"
+    },
+    {
+      "id": "about",
+      "path": "about/index.html",
+      "label": "About",
+      "role": "business-story-values-and-authorized-team-or-brand-details"
+    },
+    {
+      "id": "process",
+      "path": "process/index.html",
+      "label": "Process",
+      "role": "process-decision-guidance-faq-and-authorized-proof-only"
+    },
+    {
+      "id": "contact",
+      "path": "contact/index.html",
+      "label": "Contact",
+      "role": "verified-public-details-and-the-one-primary-conversion-path"
+    }
+  ],
+  "niche_labels_may_adapt": true,
+  "routes_and_roles_are_fixed": true,
+  "primary_conversion_paths_maximum": 1,
+  "preview_revision_rounds": 2,
+  "launch_bug_support_days": 30,
+  "target_delivery_business_days": 7,
+  "proof_requires_exact_authorized_client_sources": true,
+  "additional_pages_or_role_substitutions_require_written_quote": true,
+  "performance_outcomes_guaranteed": false
+}

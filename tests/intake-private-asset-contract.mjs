@@ -71,7 +71,7 @@ await assert.rejects(validateDecodableImageAsset(webp(), 'image/webp'), /fully d
 
 const undecodableForm = new FormData();
 for (const [key, value] of Object.entries({
-  intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
+  intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
   lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',
@@ -100,7 +100,7 @@ class FakeStore {
 }
 const form = new FormData();
 for (const [key, value] of Object.entries({
-  intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
+  intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
   lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed',

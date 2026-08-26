@@ -1,7 +1,7 @@
 # ARC paid-pilot validation
 
 ARC has a polished offer and fictional concept previews, but no verified evidence
-that qualified businesses will buy the current one-page scope at a $5,000
+that qualified businesses will buy the current fixed five-page scope at a $5,000
 subtotal. Treat pricing and demand as hypotheses, not facts.
 
 ## Before outreach

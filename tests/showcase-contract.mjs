@@ -23,7 +23,12 @@ assert.deepEqual(manifest.map(({ profile }) => profile).sort(), Object.keys(expe
 for (const entry of manifest) {
   const expectedName = expected[entry.profile];
   assert.equal(entry.name, expectedName, `${entry.profile}: manifest name changed`);
-  assert.equal(entry.file, `showcases/${entry.profile}/index.html`, `${entry.profile}: unexpected public path`);
+  assert.equal(entry.contractVersion, 'arc-five-page-site-v1', `${entry.profile}: five-page contract changed`);
+  assert.equal(entry.templateVersion, '11.0', `${entry.profile}: template version changed`);
+  assert.equal(entry.page_count, 5, `${entry.profile}: page count changed`);
+  assert.deepEqual(entry.pages.map(page => page.path), [
+    'index.html', 'services/index.html', 'about/index.html', 'process/index.html', 'contact/index.html',
+  ], `${entry.profile}: route vector changed`);
   assert.equal(entry.heroAsset?.ownership, 'arc-generated-project-bound', `${entry.profile}: hero ownership provenance is missing`);
   assert.equal(entry.heroAsset?.provider, 'arc-generated', `${entry.profile}: hero media provider is inaccurate`);
   assert.equal(entry.heroAsset?.file, `showcases/assets/${entry.heroAsset?.sha256}.webp`, `${entry.profile}: hero asset is not content-addressed`);
@@ -33,12 +38,23 @@ for (const entry of manifest) {
   assert.match(home, new RegExp(`<h3>${expectedName}<\\/h3>`), `${entry.profile}: homepage display name does not match the live showcase`);
   assert.match(home, new RegExp(`alt="${expectedName} (?:website preview|showcase homepage)"`), `${entry.profile}: homepage alt text does not match the live showcase`);
 
-  const showcase = await readFile(path.join(previewsRoot, entry.file), 'utf8');
-  assert.match(showcase, new RegExp(`<title>${expectedName.replace(' Concept', ' Concept')} \\|`), `${entry.profile}: live showcase title does not match its manifest`);
-  assert.match(showcase, /<meta name="arc-template-version" content="10\.0">/, `${entry.profile}: showcase is not a validated v10 artifact`);
-  assert.match(showcase, new RegExp(`data-arc-showcase-photo="${entry.profile}"[^>]+data-arc-owned-asset="true"[^>]+data-arc-media-provider="arc-generated"`), `${entry.profile}: live showcase lacks its truthful ARC-generated profile photo classification`);
-  assert.match(showcase, /Original ARC-generated concept imagery/, `${entry.profile}: live showcase lacks accurate image provenance copy`);
-  assert.doesNotMatch(showcase, /licensed stock imagery/i, `${entry.profile}: stale stock-image claim remains`);
+  let totalBytes = 0;
+  for (const page of entry.pages) {
+    assert.equal(page.file, `showcases/${entry.profile}/${page.path}`, `${entry.profile}: unexpected five-page public path`);
+    const showcase = await readFile(path.join(previewsRoot, page.file), 'utf8');
+    const bytes = Buffer.byteLength(showcase);
+    totalBytes += bytes;
+    assert.equal(bytes, page.bytes, `${entry.profile}/${page.path}: byte count changed`);
+    assert.equal(createHash('sha256').update(showcase).digest('hex'), page.sha256, `${entry.profile}/${page.path}: digest changed`);
+    assert.match(showcase, /<meta name="arc-template-version" content="11\.0">/, `${entry.profile}/${page.path}: showcase is not a validated v11 artifact`);
+    assert.match(showcase, /<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">/, `${entry.profile}/${page.path}: showcase lost noindex`);
+    assert.doesNotMatch(showcase, /licensed stock imagery/i, `${entry.profile}/${page.path}: stale stock-image claim remains`);
+    if (page.path === 'index.html') {
+      assert.match(showcase, new RegExp(`<title>${expectedName.replace(' Concept', ' Concept')} \\|`), `${entry.profile}: live showcase title does not match its manifest`);
+      assert.match(showcase, new RegExp(`data-arc-showcase-photo="${entry.profile}"[^>]+data-arc-owned-asset="true"[^>]+data-arc-media-provider="arc-generated"`), `${entry.profile}: live showcase lacks its truthful ARC-generated profile photo classification`);
+    }
+  }
+  assert.equal(totalBytes, entry.total_bytes, `${entry.profile}: aggregate five-page byte count changed`);
   const thumbnail = await readFile(path.join(siteRoot, `assets/showcases/arc-${entry.profile}-showcase-1785497742846.jpg`));
   assert.equal(createHash('sha256').update(thumbnail).digest('hex'), thumbnailDigests[entry.profile], `${entry.profile}: approved overlapping homepage thumbnail changed`);
 }
