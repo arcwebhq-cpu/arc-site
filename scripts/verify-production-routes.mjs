@@ -57,9 +57,9 @@ assert.equal(deployment.context, 'production');
 assert.equal(deployment.branch, 'main');
 
 const customRoutes = [
-  ['/internal/intake/arc1/adapter/claim', 503, 'consumer_claim_disabled'],
-  ['/internal/intake/arc1/adapter/complete', 503, 'consumer_completion_disabled'],
-  ['/internal/intake/arc1/adapter/migrate-legacy', 401, 'unauthorized'],
+  ['/internal/intake/arc1/adapter/claim', 503, 'public_intake_authority_required'],
+  ['/internal/intake/arc1/adapter/complete', 503, 'public_intake_authority_required'],
+  ['/internal/intake/arc1/adapter/migrate-legacy', 503, 'public_intake_authority_required'],
 ];
 for (const [path, status, error] of customRoutes) {
   const response = await fetchExact(`${origin}${path}`, {

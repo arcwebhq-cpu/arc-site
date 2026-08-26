@@ -50,6 +50,7 @@ const intakeArc1BridgeCore = await readFile(new URL('netlify/lib/intake-arc1-bri
 const stripeCheckoutCore = await readFile(new URL('netlify/lib/stripe-checkout-core.mjs', root), 'utf8');
 const stripeAccountVerification = await readFile(new URL('netlify/lib/stripe-account-verification.mjs', root), 'utf8');
 const stripeWebhook = await readFile(new URL('netlify/functions/stripe-reversal-webhook.mjs', root), 'utf8');
+const productionRouteSmoke = await readFile(new URL('scripts/verify-production-routes.mjs', root), 'utf8');
 
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
@@ -629,6 +630,13 @@ assert.match(buildScript, /activationBuildIdentityModule\(process\.env\.COMMIT_R
   'The build must capture the build-scoped deployment identity into the Function bundle.');
 assert.match(activationManifestDoc, /does not turn on Stripe, Netlify, email, Zapier, Apollo/);
 assert.match(manualActivation, /current committed baseline is `OFF`/);
+for (const route of ['claim', 'complete', 'migrate-legacy']) {
+  assert.match(productionRouteSmoke,
+    new RegExp(`\\['/internal/intake/arc1/adapter/${route}', 503, 'public_intake_authority_required'\\]`),
+    `${route} production smoke must expect the earliest signed PUBLIC_INTAKE authority boundary.`);
+}
+assert.doesNotMatch(productionRouteSmoke, /consumer_(?:claim|completion)_disabled|migrate-legacy', 401/,
+  'Production smoke must not expect a downstream response while PUBLIC_INTAKE authority is closed.');
 assert.match(analyticsEvent, /windowLimit: 60/);
 assert.doesNotMatch(analyticsEvent, /user-agent|x-forwarded|client-ip/i);
 assert.match(analyticsDashboard, /ARC_ANALYTICS_DASHBOARD_USER/);
