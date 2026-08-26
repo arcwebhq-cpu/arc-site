@@ -107,7 +107,12 @@ const fixture = {
     checkout_session_id: 'cs_test_operationsAudit', claim_recipient_email_sha256: '2'.repeat(64), bundle_fingerprint: '3'.repeat(64),
   } },
   artifact: { digest: '4'.repeat(64), artifacts: [
-    { path: '_headers', sha256: '5'.repeat(64), size: 10 }, { path: 'index.html', sha256: '6'.repeat(64), size: 20 },
+    { path: '_headers', sha256: '5'.repeat(64), size: 10 },
+    { path: 'about/index.html', sha256: '6'.repeat(64), size: 20 },
+    { path: 'contact/index.html', sha256: '7'.repeat(64), size: 20 },
+    { path: 'process/index.html', sha256: '8'.repeat(64), size: 20 },
+    { path: 'services/index.html', sha256: '9'.repeat(64), size: 20 },
+    { path: 'index.html', sha256: 'a'.repeat(64), size: 20 },
   ], value: {
     artifact_manifest_sha256: '7'.repeat(64), bundle_fingerprint: '3'.repeat(64),
     lead_route_mode: 'netlify_form',
@@ -436,7 +441,7 @@ assert.equal(incrementalDuplicateAlerts.values.size, 1);
 
 const intakeForm = new FormData();
 for (const [field, value] of Object.entries({
-  intake_version: 'arc-intake-v7', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
+  intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Owner', email: 'private@example.test', business: 'Private Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roofing', main_call_to_action: 'Contact',
   lead_form_needed: 'Yes', lead_notification_email: 'private@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, 'bot-field': '',

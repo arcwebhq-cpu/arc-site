@@ -88,6 +88,33 @@ const viewports = [
 ].filter((viewport) => !requestedViewport || viewport.name === requestedViewport);
 assert.ok(viewports.length, `Unknown ARC_SITE_QA_VIEWPORT: ${requestedViewport}`);
 
+async function waitForScrollSettled(page) {
+  await page.evaluate(() => new Promise((resolve, reject) => {
+    const deadline = performance.now() + 5_000;
+    let lastX = scrollX;
+    let lastY = scrollY;
+    let stableFrames = 0;
+    const observe = () => {
+      const nextX = scrollX;
+      const nextY = scrollY;
+      stableFrames = Math.abs(nextX - lastX) < 0.5 && Math.abs(nextY - lastY) < 0.5 ? stableFrames + 1 : 0;
+      lastX = nextX;
+      lastY = nextY;
+      if (stableFrames >= 6) resolve();
+      else if (performance.now() >= deadline) reject(new Error('Smooth scrolling did not settle.'));
+      else requestAnimationFrame(observe);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(observe));
+  }));
+}
+
+async function clickWrappedCheckbox(page, selector) {
+  const input = page.locator(selector);
+  const label = input.locator('xpath=ancestor::label[1]');
+  await label.click({ position: { x: 18, y: 18 } });
+  await page.waitForFunction((target) => document.querySelector(target)?.checked === true, selector);
+}
+
 try {
   for (const viewport of viewports) {
     const page = await browser.newPage({
@@ -161,7 +188,8 @@ try {
     assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${viewport.name}: horizontal page overflow (${layout.scrollWidth}px > ${layout.clientWidth}px)`);
 
     await page.locator('a[href="#start"]').first().click();
-    await page.waitForTimeout(550);
+    await page.waitForFunction(() => location.hash === '#start');
+    await waitForScrollSettled(page);
     const overlap = await page.evaluate(() => {
       const nav = document.querySelector('.nav').getBoundingClientRect();
       const card = document.getElementById('formCard').getBoundingClientRect();
@@ -172,6 +200,7 @@ try {
     await page.locator('#next').click({ position: { x: 20, y: 20 } });
     assert.equal(await page.locator('#name').getAttribute('aria-invalid'), 'true', `${viewport.name}: invalid required field lacks aria-invalid`);
     assert.equal(await page.locator('#name').getAttribute('aria-describedby'), 'error', `${viewport.name}: invalid field is not associated with the error alert`);
+    await waitForScrollSettled(page);
 
     await page.locator('#name').fill('Jordan Lee');
     await page.locator('#email').fill('jordan@example.com');
@@ -179,22 +208,25 @@ try {
     await page.locator('#industry').fill('Home services');
     await page.locator('#city').fill('Everett, WA');
     await page.locator('#next').click({ position: { x: 20, y: 20 } });
+    await page.waitForFunction(() => document.getElementById('stepCount')?.textContent === '2 / 3');
     assert.equal(await page.locator('#stepCount').textContent(), '2 / 3', `${viewport.name}: could not advance to offer step`);
+    await waitForScrollSettled(page);
 
     await page.locator('#services').fill('Roof repair and replacement');
     await page.locator('input[name="goals"]').first().check();
     await page.locator('input[name="main_call_to_action"][value="Contact"]').check();
     await page.locator('#next').click({ position: { x: 20, y: 20 } });
+    await page.waitForFunction(() => document.getElementById('stepCount')?.textContent === '3 / 3');
     assert.equal(await page.locator('#stepCount').textContent(), '3 / 3', `${viewport.name}: could not advance to details step`);
     assert.equal(await page.locator('#structureDetails').getAttribute('open'), '', `${viewport.name}: required lead routing details are still collapsed`);
     assert.equal(await page.locator('#contactFormSection').isChecked(), true,
       `${viewport.name}: the Contact CTA did not keep the contact-form section and verified lead route aligned`);
-    await page.waitForTimeout(400);
+    await waitForScrollSettled(page);
 
-    await page.locator('#budget').check();
-    await page.locator('#termsAccepted').check();
+    await clickWrappedCheckbox(page, '#budget');
+    await clickWrappedCheckbox(page, '#termsAccepted');
     await page.waitForTimeout(500);
-    const savedDraft = JSON.parse(await page.evaluate(() => localStorage.getItem('arc-preview-draft-v7')));
+    const savedDraft = JSON.parse(await page.evaluate(() => localStorage.getItem('arc-preview-draft-v8')));
     assert.match(savedDraft.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       `${viewport.name}: retained answers lost their exact-retry nonce`);
     assert.equal('asset_permission' in savedDraft.data, false, `${viewport.name}: asset permission was persisted`);
@@ -253,14 +285,16 @@ try {
     await disabledThankYouPage.addInitScript(() => {
       sessionStorage.setItem('arc-analytics-session', 'stale-session');
       sessionStorage.setItem('arc-pending-preview-analytics', 'stale-pending-event');
+      localStorage.setItem('arc-preview-draft-v8', 'current-draft');
       localStorage.setItem('arc-preview-draft-v7', 'stale-draft');
     });
     await disabledThankYouPage.goto(`${baseUrl}/thank-you/`, { waitUntil: 'networkidle' });
     assert.deepEqual(await disabledThankYouPage.evaluate(() => ({
       session: sessionStorage.getItem('arc-analytics-session'),
       pending: sessionStorage.getItem('arc-pending-preview-analytics'),
-      draft: localStorage.getItem('arc-preview-draft-v7'),
-    })), { session: null, pending: null, draft: null },
+      draft: localStorage.getItem('arc-preview-draft-v8'),
+      legacyDraft: localStorage.getItem('arc-preview-draft-v7'),
+    })), { session: null, pending: null, draft: null, legacyDraft: null },
     'The analytics-disabled thank-you page must clear stale analytics state and the accepted draft.');
     await disabledThankYouPage.close();
 

@@ -9,12 +9,16 @@ import { imageTypeForPath, validateImageAsset } from './image-asset-validation.m
 export const HANDOFF_STORE = 'arc2-handoffs';
 export const LEGACY_HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
 export const HANDOFF_SCHEMA = 'arc2-netlify-handoff-v2';
-export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v3';
+export const ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v4';
 export const ARTIFACT_EVIDENCE_SCOPE = 'netlify-claimable-deploy-artifacts';
-export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v3\n';
-export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v3';
+export const ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v4\n';
+const LEGACY_ARTIFACT_EVIDENCE_VERSION = 'arc2-handoff-artifact-evidence-v3';
+const LEGACY_ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signature-v3\n';
+export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v4';
 export const PAYMENT_EVIDENCE_SCOPE = 'authoritative-stripe-checkout-session';
-export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v3\n';
+export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v4\n';
+const LEGACY_PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v3';
+const LEGACY_PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v3\n';
 export const LEAD_RECIPIENT_PREFIX = 'arc-lead-route-recipient-v1\n';
 export const CLAIM_STATE_EVIDENCE_VERSION = 'arc2-claim-state-evidence-v3';
 export const CLAIM_STATE_EVIDENCE_SCOPE = 'netlify-deploy-and-claim-final-deploy';
@@ -30,7 +34,7 @@ export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
 export const CLAIM_JWT_TTL_SECONDS = 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
 export const NETLIFY_REQUEST_TIMEOUT_MS = 10_000;
-export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = '2026-06-24.dahlia';
+export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = '2026-07-29.dahlia';
 
 export const HANDOFF_STATES = Object.freeze([
   'PAYMENT_VERIFIED',
@@ -71,11 +75,53 @@ const SAFE_SITE_NAME_PATTERN = /^arc-lead-route-[a-f0-9]{24}$/;
 const STORED_SITE_NAME_PATTERN = /^(?:arc-lead-route-|arc-)[a-f0-9]{24}$/;
 const SAFE_FORM_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const ASSET_PATH_PATTERN = /^assets\/([a-f0-9]{64})\.(png|jpg|webp)$/;
-const SAFE_PATH_PATTERN = /^(?:index\.html|_headers|assets\/[a-f0-9]{64}\.(?:png|jpg|webp))$/;
+const HTML_PATHS = Object.freeze([
+  'about/index.html',
+  'contact/index.html',
+  'process/index.html',
+  'services/index.html',
+  'index.html',
+]);
+const HTML_PATH_SET = new Set(HTML_PATHS);
+const SAFE_PATH_PATTERN = /^(?:index\.html|(?:about|contact|process|services)\/index\.html|_headers|assets\/[a-f0-9]{64}\.(?:png|jpg|webp))$/;
 const MAX_ASSET_COUNT = 3;
 const MAX_ASSET_BYTES = 3_000_000;
+const MAX_HTML_FILE_BYTES = 150_000;
+const MAX_HTML_BYTES = 500_000;
 const MAX_ARTIFACT_BYTES = 3_510_000;
 const MAX_DEPLOY_ARTIFACTS_JSON_BYTES = 4_700_000;
+
+function artifactPathVectorValid(paths) {
+  if (!Array.isArray(paths) || paths.length < 1 + HTML_PATHS.length || paths.length > 1 + MAX_ASSET_COUNT + HTML_PATHS.length ||
+      paths[0] !== '_headers' || new Set(paths).size !== paths.length) return false;
+  const htmlStart = paths.length - HTML_PATHS.length;
+  const assetPaths = paths.slice(1, htmlStart);
+  return JSON.stringify(paths.slice(htmlStart)) === JSON.stringify(HTML_PATHS) &&
+    assetPaths.every(path => ASSET_PATH_PATTERN.test(path)) &&
+    JSON.stringify(assetPaths) === JSON.stringify([...assetPaths].sort());
+}
+
+function legacyArtifactPathVectorValid(paths) {
+  if (!Array.isArray(paths) || paths.length < 2 || paths.length > 2 + MAX_ASSET_COUNT ||
+      paths[0] !== '_headers' || paths.at(-1) !== 'index.html' || new Set(paths).size !== paths.length) return false;
+  const assetPaths = paths.slice(1, -1);
+  return assetPaths.every(path => ASSET_PATH_PATTERN.test(path)) &&
+    JSON.stringify(assetPaths) === JSON.stringify([...assetPaths].sort());
+}
+
+function htmlArtifacts(artifacts) {
+  const pages = artifacts.filter(entry => HTML_PATH_SET.has(entry?.path));
+  if (JSON.stringify(pages.map(entry => entry.path)) !== JSON.stringify(HTML_PATHS)) {
+    throw new TypeError('Exactly five ordered website pages are required.');
+  }
+  return pages;
+}
+
+function productionContentSha256(artifacts) {
+  const digest = createHash('sha256');
+  for (const page of htmlArtifacts(artifacts)) digest.update(page.path).update('\0').update(page.bytes).update('\0');
+  return digest.digest('hex');
+}
 export const ARC2_CONTENT_SECURITY_POLICY = "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; connect-src 'none'; font-src 'self' data:; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 export const ARC2_PRODUCTION_HEADERS_FILE = `/*\n  Content-Security-Policy: ${ARC2_CONTENT_SECURITY_POLICY}\n  X-Content-Type-Options: nosniff\n  X-Frame-Options: DENY\n  Referrer-Policy: strict-origin-when-cross-origin\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n`;
 export const ARC2_PRECLAIM_HEADERS_FILE = `${ARC2_PRODUCTION_HEADERS_FILE}  X-Robots-Tag: noindex, nofollow, noarchive\n`;
@@ -419,7 +465,8 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date(), options
     'scope',
     'version',
   ], 'Artifact evidence');
-  if (value.version !== ARTIFACT_EVIDENCE_VERSION || value.scope !== ARTIFACT_EVIDENCE_SCOPE) {
+  const legacyV3 = value.version === LEGACY_ARTIFACT_EVIDENCE_VERSION && options.allowLegacyV3 === true;
+  if ((!legacyV3 && value.version !== ARTIFACT_EVIDENCE_VERSION) || value.scope !== ARTIFACT_EVIDENCE_SCOPE) {
     throw new TypeError('Artifact evidence version or scope is invalid.');
   }
   const leadRouteMode = stringValue(value.lead_route_mode, 'Artifact lead route mode', 8, 32);
@@ -449,31 +496,34 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date(), options
   if (!Number.isFinite(nowMs) || issuedMs > nowMs + 5 * 60_000) {
     throw new TypeError('Artifact evidence is stale or from the future.');
   }
-  if (!Array.isArray(value.artifacts) || value.artifacts.length < 2 || value.artifacts.length > 2 + MAX_ASSET_COUNT) {
+  if (!Array.isArray(value.artifacts) || (legacyV3
+    ? (value.artifacts.length < 2 || value.artifacts.length > 2 + MAX_ASSET_COUNT)
+    : (value.artifacts.length < 1 + HTML_PATHS.length || value.artifacts.length > 1 + MAX_ASSET_COUNT + HTML_PATHS.length))) {
     throw new TypeError('Deploy artifact count is invalid.');
   }
   let totalArtifactBytes = 0;
   let totalAssetBytes = 0;
+  let totalHtmlBytes = 0;
   const artifacts = value.artifacts.map((artifact) => {
     plainObject(artifact, 'Artifact');
     exactKeys(artifact, ['path', 'sha256', 'size'], 'Artifact');
     if (!SAFE_PATH_PATTERN.test(artifact.path)) throw new TypeError('Artifact path is not allowlisted.');
-    const maximum = artifact.path === '_headers' ? 10_000 : artifact.path === 'index.html' ? 500_000 : 1_250_000;
+    const maximum = artifact.path === '_headers' ? 10_000
+      : artifact.path === 'index.html' && legacyV3 ? 500_000
+        : HTML_PATH_SET.has(artifact.path) ? MAX_HTML_FILE_BYTES : 1_250_000;
     if (!Number.isSafeInteger(artifact.size) || artifact.size < 1 || artifact.size > maximum) throw new TypeError('Artifact size is invalid.');
     const assetMatch = artifact.path.match(ASSET_PATH_PATTERN);
     if (assetMatch && artifact.sha256 !== assetMatch[1]) throw new TypeError('Asset path is not content-addressed by its signed digest.');
     totalArtifactBytes += artifact.size;
     if (assetMatch) totalAssetBytes += artifact.size;
+    if (HTML_PATH_SET.has(artifact.path)) totalHtmlBytes += artifact.size;
     return { path: artifact.path, sha256: hex64(artifact.sha256, 'Artifact sha256'), size: artifact.size };
   });
-  if (totalArtifactBytes > MAX_ARTIFACT_BYTES || totalAssetBytes > MAX_ASSET_BYTES) {
+  if (totalArtifactBytes > MAX_ARTIFACT_BYTES || totalAssetBytes > MAX_ASSET_BYTES || (!legacyV3 && totalHtmlBytes > MAX_HTML_BYTES)) {
     throw new TypeError('Deploy artifact aggregate size is invalid.');
   }
   const paths = artifacts.map(artifact => artifact.path);
-  const assetPaths = paths.slice(1, -1);
-  if (paths[0] !== '_headers' || paths.at(-1) !== 'index.html' ||
-      assetPaths.some(path => !ASSET_PATH_PATTERN.test(path)) ||
-      JSON.stringify(assetPaths) !== JSON.stringify([...assetPaths].sort()) || new Set(paths).size !== paths.length) {
+  if (!(legacyV3 ? legacyArtifactPathVectorValid(paths) : artifactPathVectorValid(paths))) {
     throw new TypeError('Artifact paths must be sorted and exact.');
   }
   const manifest = canonicalJson(artifacts);
@@ -483,12 +533,14 @@ export function normalizeArtifactEvidence(raw, secret, now = new Date(), options
   hex64(value.production_content_sha256, 'Production content sha256');
   hex64(value.bundle_fingerprint, 'Bundle fingerprint');
   if (!secret || secret.length < 32) throw new TypeError('Artifact evidence secret is unavailable.');
-  return { canonical, value, digest: sha256Hex(canonical), artifacts };
+  return { canonical, value, digest: sha256Hex(canonical), artifacts, legacyV3 };
 }
 
-export function verifyArtifactSignature(evidence, signature, secret) {
+export function verifyArtifactSignature(evidence, signature, secret, version = ARTIFACT_EVIDENCE_VERSION) {
   const supplied = hex64(signature, 'Artifact evidence signature');
-  return safeEqual(supplied, hmacHex(secret, `${ARTIFACT_SIGNATURE_PREFIX}${evidence}`));
+  const prefix = version === ARTIFACT_EVIDENCE_VERSION ? ARTIFACT_SIGNATURE_PREFIX
+    : version === LEGACY_ARTIFACT_EVIDENCE_VERSION ? LEGACY_ARTIFACT_SIGNATURE_PREFIX : '';
+  return Boolean(prefix) && safeEqual(supplied, hmacHex(secret, `${prefix}${evidence}`));
 }
 
 export function normalizeDeployArtifacts(raw, expectedArtifacts) {
@@ -514,7 +566,38 @@ export function normalizeDeployArtifacts(raw, expectedArtifacts) {
   return artifacts;
 }
 
-function validateProductionAssetReferences(productionBytes, artifacts) {
+function validateProductionAssetReferences(pageArtifacts, artifacts) {
+  const decodedPages = htmlArtifacts(pageArtifacts).map((entry) => {
+    let html;
+    try { html = new TextDecoder('utf-8', { fatal: true }).decode(entry.bytes); } catch {
+      throw new TypeError('Production HTML must be valid UTF-8.');
+    }
+    if (/https:\/\/arcwebhq-cpu\.github\.io\/arc-previews(?:\/|["'?#]|$)/i.test(html)) {
+      throw new TypeError('Production HTML still references the ARC preview host.');
+    }
+    if (/<base\b/i.test(html)) throw new TypeError('Production HTML base elements are forbidden.');
+    return html;
+  });
+  const referenced = new Set();
+  for (const html of decodedPages) {
+    for (const match of html.matchAll(/assets\/[^"'()\s<>]*/gi)) {
+      const slashIndex = match.index - 1;
+      const preceding = slashIndex > 0 ? html[slashIndex - 1] : '';
+      const candidate = slashIndex >= 0 && html[slashIndex] === '/' ? `/${match[0]}` : match[0];
+      if (slashIndex < 0 || html[slashIndex] !== '/' || (slashIndex > 0 && !/["'(=,\s]/.test(preceding)) ||
+          !/^\/assets\/[a-f0-9]{64}\.(?:png|jpg|webp)$/.test(candidate)) {
+        throw new TypeError('Production HTML contains a non-root-relative or unbound local asset reference.');
+      }
+      referenced.add(candidate.slice(1));
+    }
+  }
+  const included = new Set(artifacts.filter(entry => ASSET_PATH_PATTERN.test(entry.path)).map(entry => entry.path));
+  if (referenced.size !== included.size || [...referenced].some(path => !included.has(path)) || [...included].some(path => !referenced.has(path))) {
+    throw new TypeError('Production HTML asset references do not match the exact signed bundle.');
+  }
+}
+
+function validateLegacyProductionAssetReferences(productionBytes, artifacts) {
   let html;
   try { html = new TextDecoder('utf-8', { fatal: true }).decode(productionBytes); } catch {
     throw new TypeError('Production HTML must be valid UTF-8.');
@@ -534,7 +617,23 @@ function validateProductionAssetReferences(productionBytes, artifacts) {
   }
 }
 
-export function expectedNetlifyLiveHtml(sourceBytes, leadRouteMode) {
+function expectedLegacyNetlifyLiveHtml(sourceBytes, leadRouteMode) {
+  let html;
+  try { html = new TextDecoder('utf-8', { fatal: true }).decode(sourceBytes); } catch {
+    throw new TypeError('Production HTML must be valid UTF-8.');
+  }
+  if (/https:\/\/arcwebhq-cpu\.github\.io\/arc-previews(?:\/|["'?#]|$)/i.test(html) || /<base\b/i.test(html)) {
+    throw new TypeError('Legacy production HTML is invalid.');
+  }
+  if (leadRouteMode === 'not_required') return Buffer.from(html, 'utf8');
+  if (leadRouteMode !== 'netlify_form') throw new TypeError('Production lead route mode is invalid.');
+  const dataNetlify = html.match(/\sdata-netlify="true"/gi) || [];
+  const honeypot = html.match(/\snetlify-honeypot="bot-field"/gi) || [];
+  if (dataNetlify.length !== 1 || honeypot.length !== 1) throw new TypeError('Production form postprocessing contract is invalid.');
+  return Buffer.from(html.replace(/\sdata-netlify="true"/i, '').replace(/\snetlify-honeypot="bot-field"/i, ''), 'utf8');
+}
+
+export function expectedNetlifyLiveHtml(sourceBytes, leadRouteMode, pagePath = 'index.html') {
   let html;
   try { html = new TextDecoder('utf-8', { fatal: true }).decode(sourceBytes); } catch {
     throw new TypeError('Production HTML must be valid UTF-8.');
@@ -542,14 +641,11 @@ export function expectedNetlifyLiveHtml(sourceBytes, leadRouteMode) {
   if (/<base\b/i.test(html)) throw new TypeError('Production HTML base elements are forbidden.');
   if (leadRouteMode === 'not_required') return Buffer.from(html, 'utf8');
   if (leadRouteMode !== 'netlify_form') throw new TypeError('Production lead route mode is invalid.');
-  const dataNetlify = html.match(/\sdata-netlify="true"/gi) || [];
-  const honeypot = html.match(/\snetlify-honeypot="bot-field"/gi) || [];
-  if (dataNetlify.length !== 1 || honeypot.length !== 1) {
-    throw new TypeError('Production form postprocessing contract is invalid.');
-  }
+  if (pagePath !== 'contact/index.html') return Buffer.from(html, 'utf8');
+  extractNetlifyFormName(sourceBytes);
   return Buffer.from(html
-    .replace(/\sdata-netlify="true"/i, '')
-    .replace(/\snetlify-honeypot="bot-field"/i, ''), 'utf8');
+    .replace(/\sdata-netlify=(?:"true"|'true')/i, '')
+    .replace(/\snetlify-honeypot=(?:"bot-field"|'bot-field')/i, ''), 'utf8');
 }
 
 function signedCspHeader(artifactBytes) {
@@ -580,19 +676,24 @@ export function deployArtifactsForPhase(artifacts, phase) {
   } : { path: item.path, bytes: Buffer.from(item.bytes) });
 }
 
-export function normalizePaymentEvidence(raw, signature, secret, artifactEvidence, env) {
+export function normalizePaymentEvidence(raw, signature, secret, artifactEvidence, env, options = {}) {
   env = requireResolvedHandoffEnvironment(env);
   const canonical = stringValue(raw, 'Payment evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Payment evidence');
   exactKeys(value, PAYMENT_FIELDS, 'Payment evidence');
-  if (canonicalJson(value) !== canonical || value.version !== PAYMENT_EVIDENCE_VERSION || value.scope !== PAYMENT_EVIDENCE_SCOPE) {
+  const legacyV3 = value.version === LEGACY_PAYMENT_EVIDENCE_VERSION && options.allowLegacyV3 === true;
+  if (canonicalJson(value) !== canonical || (!legacyV3 && value.version !== PAYMENT_EVIDENCE_VERSION) || value.scope !== PAYMENT_EVIDENCE_SCOPE ||
+      (legacyV3 ? artifactEvidence.version !== LEGACY_ARTIFACT_EVIDENCE_VERSION : artifactEvidence.version !== ARTIFACT_EVIDENCE_VERSION)) {
     throw new TypeError('Payment evidence is invalid or not canonical.');
   }
-  if (!/^v3_[A-Za-z0-9_-]{135}$/.test(value.client_reference_id)) throw new TypeError('Checkout reference v3 is invalid.');
+  const protocol = legacyV3 ? 'v3' : 'v4';
+  if (!new RegExp(`^${protocol}_[A-Za-z0-9_-]{135}$`).test(value.client_reference_id)) {
+    throw new TypeError(`Checkout reference ${protocol} is invalid.`);
+  }
   let referenceBytes;
   try { referenceBytes = Buffer.from(value.client_reference_id.slice(3), 'base64url'); } catch {}
   if (!referenceBytes || referenceBytes.length !== 101 || referenceBytes.toString('base64url') !== value.client_reference_id.slice(3)) {
-    throw new TypeError('Checkout reference v3 is not canonical.');
+    throw new TypeError(`Checkout reference ${protocol} is not canonical.`);
   }
   const referencePayload = referenceBytes.subarray(0, 69);
   const referenceKeyId = referencePayload.subarray(0, 1).toString('hex');
@@ -609,33 +710,48 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   }
   const selectedSecret = referenceKeyId === currentKeyId ? secret : retiredKeys[referenceKeyId];
   const expectedStripeMode = env.ARC_STRIPE_LIVE_MODE_ENABLED === 'true' ? 'live' : 'test';
-  if (!selectedSecret || !safeEqual(hex64(signature, 'Payment evidence signature'), hmacHex(selectedSecret, `${PAYMENT_SIGNATURE_PREFIX}${expectedStripeMode}\n${canonical}`))) {
+  const paymentSignaturePrefix = legacyV3 ? LEGACY_PAYMENT_SIGNATURE_PREFIX : PAYMENT_SIGNATURE_PREFIX;
+  if (!selectedSecret || !safeEqual(hex64(signature, 'Payment evidence signature'), hmacHex(selectedSecret, `${paymentSignaturePrefix}${expectedStripeMode}\n${canonical}`))) {
     throw new TypeError('Payment evidence signature mismatch or checkout key is not retained.');
   }
   const expectedMac = createHmac('sha256', selectedSecret)
-    .update(`arc-checkout-reference-v3\narcwebhq-cpu/arc-previews\narc-production\nstripe-${expectedStripeMode}\n`).update(referencePayload).digest();
-  if (!timingSafeEqual(referenceBytes.subarray(69), expectedMac)) throw new TypeError('Checkout reference v3 MAC mismatch.');
+    .update(`arc-checkout-reference-${protocol}\narcwebhq-cpu/arc-previews\narc-production\nstripe-${expectedStripeMode}\n`).update(referencePayload).digest();
+  if (!timingSafeEqual(referenceBytes.subarray(69), expectedMac)) throw new TypeError(`Checkout reference ${protocol} MAC mismatch.`);
   const referencePrefix = referencePayload.subarray(1, 5).toString('hex');
   const referenceApprovalSha256 = referencePayload.subarray(5, 37).toString('hex');
   const referenceConfigSha256 = referencePayload.subarray(37, 69).toString('hex');
   if (!value.preview_folder.endsWith(`-${referencePrefix}`) || value.approval_content_sha256 !== referenceApprovalSha256 ||
       value.checkout_config_snapshot_sha256 !== referenceConfigSha256 || value.client_reference_id_sha256 !== sha256Hex(value.client_reference_id)) {
-    throw new TypeError('Checkout reference v3 payload binding is invalid.');
+    throw new TypeError(`Checkout reference ${protocol} payload binding is invalid.`);
   }
   const snapshotCanonical = stringValue(value.checkout_config_snapshot, 'Private checkout policy', 200, 24_000);
   const snapshot = plainObject(JSON.parse(snapshotCanonical), 'Private checkout policy');
-  const snapshotFields = ['adult_acknowledgement_key','amount_subtotal_minor_units','approval_content_sha256','asset_publication_receipt_sha256','automatic_tax_enabled',
+  const legacySnapshotFields = ['adult_acknowledgement_key','amount_subtotal_minor_units','approval_content_sha256','asset_publication_receipt_sha256','automatic_tax_enabled',
     'checkout_binding_key_id','checkout_redirect_url','claim_recipient_email_sha256','completed_sessions_limit','content_sha256','currency','customer_address_source',
     'lead_route_recipient_hmac_sha256','name_collection_required','offer_snapshot_sha256','preview_folder','preview_path','preview_source_repository',
     'price_id','price_tax_behavior','product_id','product_tax_code','published_html_sha256','quantity','readiness_core_sha256','recipient_reservation_sha256','scope',
     'source_commit_sha','source_tree_sha','stripe_account_id_sha256','stripe_api_version','stripe_mode','tax_contract_version','tax_registrations',
     'tax_registrations_sha256','terms_document_sha256','terms_version','version'];
+  const v4SnapshotFields = ['adult_acknowledgement_key','amount_subtotal_minor_units','approval_content_sha256','asset_publication_receipt_sha256','automatic_tax_enabled',
+    'checkout_binding_key_id','checkout_redirect_url','claim_recipient_email_sha256','completed_sessions_limit','content_sha256','currency','customer_address_source',
+    'deliverable','lead_route_recipient_hmac_sha256','name_collection_required','offer_contract_id','offer_snapshot_sha256','page_count','preview_folder',
+    'preview_paths','preview_source_repository','price_id','price_tax_behavior','product_id','product_tax_code','published_site_sha256','quantity','readiness_core_sha256',
+    'recipient_reservation_sha256','scope','source_commit_sha','source_tree_sha','stripe_account_id_sha256','stripe_api_version','stripe_mode','tax_contract_version',
+    'tax_registrations','tax_registrations_sha256','terms_document_sha256','terms_version','version'];
+  const snapshotFields = legacyV3 ? legacySnapshotFields : v4SnapshotFields;
   exactKeys(snapshot, snapshotFields, 'Private checkout policy');
+  const expectedPreviewPaths = HTML_PATHS.map(path => `${value.preview_folder}/${path}`);
   if (canonicalJson(snapshot) !== snapshotCanonical || sha256Hex(snapshotCanonical) !== referenceConfigSha256 ||
-      snapshot.version !== 'arc-private-checkout-policy-v1' || snapshot.scope !== 'one-approved-preview-one-private-payment-link' ||
+      snapshot.version !== (legacyV3 ? 'arc-private-checkout-policy-v1' : 'arc-private-checkout-policy-v2') ||
+      snapshot.scope !== (legacyV3 ? 'one-approved-preview-one-private-payment-link' : 'one-approved-five-page-preview-one-private-payment-link') ||
       snapshot.checkout_binding_key_id !== referenceKeyId || snapshot.stripe_mode !== expectedStripeMode ||
       snapshot.preview_folder !== value.preview_folder || !snapshot.preview_folder.endsWith(`-${referencePrefix}`) ||
-      snapshot.preview_path !== `${value.preview_folder}/index.html` || snapshot.preview_source_repository !== 'arcwebhq-cpu/arc-previews' ||
+      (legacyV3 ? snapshot.preview_path !== `${value.preview_folder}/index.html`
+        : (snapshot.offer_contract_id !== 'arc-fixed-five-page-offer-v1' || snapshot.deliverable !== 'fixed-five-page-marketing-website-v1' ||
+          snapshot.page_count !== 5 || canonicalJson(snapshot.preview_paths) !== canonicalJson(expectedPreviewPaths) ||
+          snapshot.published_site_sha256 !== artifactEvidence.production_content_sha256)) ||
+      snapshot.preview_source_repository !== 'arcwebhq-cpu/arc-previews' ||
+      snapshot.source_commit_sha !== artifactEvidence.preview_source_commit_sha ||
       snapshot.approval_content_sha256 !== referenceApprovalSha256) throw new TypeError('Private checkout policy is invalid or unbound.');
   const taxFields = ['country', 'id', 'state', 'type'];
   if (!Array.isArray(snapshot.tax_registrations) ||
@@ -654,17 +770,19 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
     price_id: /^price_[A-Za-z0-9]+$/.test(snapshot.price_id), product_id: /^prod_[A-Za-z0-9]+$/.test(snapshot.product_id),
     product_tax_code: /^txcd_[0-9]{8}$/.test(snapshot.product_tax_code), account: HEX_64_PATTERN.test(snapshot.stripe_account_id_sha256),
     subtotal: snapshot.amount_subtotal_minor_units === 500000, currency: snapshot.currency === 'usd', quantity: snapshot.quantity === 1,
-    terms: /^20\d\d-\d\d-\d\d$/.test(snapshot.terms_version) && HEX_64_PATTERN.test(snapshot.terms_document_sha256),
+    terms: (legacyV3 ? /^20\d\d-\d\d-\d\d$/.test(snapshot.terms_version) : snapshot.terms_version === '2026-08-25') &&
+      HEX_64_PATTERN.test(snapshot.terms_document_sha256),
     automatic_tax: snapshot.automatic_tax_enabled === true, address_source: snapshot.customer_address_source === 'stripe_checkout_customer_details.address',
     tax_behavior: snapshot.price_tax_behavior === 'exclusive', tax_contract: snapshot.tax_contract_version === 'arc-tax-v1',
     adult: snapshot.adult_acknowledgement_key === 'adultpurchaserack',
     names: snapshot.name_collection_required === true, limit: snapshot.completed_sessions_limit === 1,
     redirect: snapshot.checkout_redirect_url === 'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
-    api: snapshot.stripe_api_version === '2026-06-24.dahlia',
+    api: snapshot.stripe_api_version === (legacyV3 ? '2026-06-24.dahlia' : '2026-07-29.dahlia'),
     receipt: HEX_64_PATTERN.test(snapshot.asset_publication_receipt_sha256),
     lead_recipient: /^(?:|[a-f0-9]{64})$/.test(snapshot.lead_route_recipient_hmac_sha256),
     claim_recipient: HEX_64_PATTERN.test(snapshot.claim_recipient_email_sha256),
-    immutable_digests: ['content_sha256','published_html_sha256','readiness_core_sha256','offer_snapshot_sha256','recipient_reservation_sha256']
+    immutable_digests: ['content_sha256', legacyV3 ? 'published_html_sha256' : 'published_site_sha256',
+      'readiness_core_sha256','offer_snapshot_sha256','recipient_reservation_sha256']
       .every((field) => HEX_64_PATTERN.test(snapshot[field])),
     immutable_commits: /^[a-f0-9]{40}$/.test(snapshot.source_commit_sha) && /^[a-f0-9]{40}$/.test(snapshot.source_tree_sha),
   };
@@ -712,6 +830,7 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
       value.asset_publication_receipt_sha256 !== artifactEvidence.asset_publication_receipt_sha256 ||
       value.checkout_config_snapshot_sha256 !== artifactEvidence.checkout_config_snapshot_sha256 ||
       value.client_reference_id_sha256 !== artifactEvidence.checkout_reference_sha256 ||
+      value.preview_source_tag_sha256 !== sha256Hex(`refs/tags/arc-checkout-ready-${protocol}/${value.client_reference_id_sha256}`) ||
       value.preview_source_commit_sha !== artifactEvidence.preview_source_commit_sha ||
       value.preview_source_repository !== artifactEvidence.preview_source_repository ||
       value.preview_source_tag_sha256 !== artifactEvidence.preview_source_tag_sha256 ||
@@ -745,22 +864,57 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
       throw new TypeError('Client-reference mismatch review binding is invalid.');
     }
   }
-  return { canonical, value, digest: sha256Hex(canonical), selectedCheckoutBindingSecret: selectedSecret, stripeMode: expectedStripeMode };
+  return { canonical, value, digest: sha256Hex(canonical), selectedCheckoutBindingSecret: selectedSecret, stripeMode: expectedStripeMode, legacyV3 };
 }
 
-export function extractNetlifyFormName(indexBytes) {
+function exactQuotedAttribute(attributes, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mentions = [...attributes.matchAll(new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|$)`, 'gi'))];
+  const assignments = [...attributes.matchAll(new RegExp(`(?:^|\\s)${escapedName}\\s*=\\s*(["'])([^"']*)\\1`, 'gi'))];
+  if (mentions.length !== 1 || assignments.length !== 1) throw new TypeError('Netlify lead form attributes are invalid.');
+  return assignments[0][2];
+}
+
+export function extractNetlifyFormName(contactBytes) {
   let html;
   try {
-    html = new TextDecoder('utf-8', { fatal: true }).decode(indexBytes);
+    html = new TextDecoder('utf-8', { fatal: true }).decode(contactBytes);
   } catch {
     throw new TypeError('Production HTML must be valid UTF-8.');
   }
-  const forms = [...html.matchAll(/<form\b([^>]*)>[\s\S]*?<\/form\s*>/gi)]
-    .filter((match) => /\bdata-netlify\s*=\s*(["'])true\1/i.test(match[1]));
+  const forms = [...html.matchAll(/<form\b([^>]*)>[\s\S]*?<\/form\s*>/gi)];
   if (forms.length !== 1) throw new TypeError('Exactly one Netlify-enabled lead form is required.');
+  if (/\bformaction\b/i.test(html)) throw new TypeError('Netlify lead form formaction overrides are forbidden.');
   const attributes = forms[0][1];
-  const nameMatch = attributes.match(/\bname\s*=\s*(["'])([^"']+)\1/i);
-  const methodMatch = attributes.match(/\bmethod\s*=\s*(["'])([^"']+)\1/i);
+  const formName = validateFormName(exactQuotedAttribute(attributes, 'name'));
+  if (exactQuotedAttribute(attributes, 'method').toUpperCase() !== 'POST' ||
+      exactQuotedAttribute(attributes, 'data-netlify').toLowerCase() !== 'true' ||
+      exactQuotedAttribute(attributes, 'netlify-honeypot') !== 'bot-field' ||
+      exactQuotedAttribute(attributes, 'action') !== '/contact/?submitted=1') {
+    throw new TypeError('Netlify lead form attributes are invalid.');
+  }
+  const formNameInputs = [...html.matchAll(/<input\b([^>]*)>/gi)]
+    .filter(match => /(?:^|\s)name\s*=\s*(?:"form-name"|'form-name'|form-name)(?=\s|\/|$)/i.test(match[1]));
+  if (formNameInputs.length !== 1) throw new TypeError('Exactly one hidden Netlify form-name binding is required.');
+  const hiddenAttributes = formNameInputs[0][1];
+  if (exactQuotedAttribute(hiddenAttributes, 'name') !== 'form-name' ||
+      exactQuotedAttribute(hiddenAttributes, 'type').toLowerCase() !== 'hidden' ||
+      exactQuotedAttribute(hiddenAttributes, 'value') !== formName) {
+    throw new TypeError('Netlify hidden form-name binding is invalid.');
+  }
+  return formName;
+}
+
+function extractLegacyNetlifyFormName(indexBytes) {
+  let html;
+  try { html = new TextDecoder('utf-8', { fatal: true }).decode(indexBytes); } catch {
+    throw new TypeError('Production HTML must be valid UTF-8.');
+  }
+  const forms = [...html.matchAll(/<form\b([^>]*)>[\s\S]*?<\/form\s*>/gi)]
+    .filter(match => /\bdata-netlify\s*=\s*(["'])true\1/i.test(match[1]));
+  if (forms.length !== 1) throw new TypeError('Exactly one Netlify-enabled lead form is required.');
+  const nameMatch = forms[0][1].match(/\bname\s*=\s*(["'])([^"']+)\1/i);
+  const methodMatch = forms[0][1].match(/\bmethod\s*=\s*(["'])([^"']+)\1/i);
   if (!nameMatch || !methodMatch || methodMatch[2].toUpperCase() !== 'POST') throw new TypeError('Netlify lead form attributes are invalid.');
   return validateFormName(nameMatch[2]);
 }
@@ -777,7 +931,8 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
     'payment_evidence_hmac_sha256',
   ], 'Start payload');
   const artifact = normalizeArtifactEvidence(input.artifact_evidence, env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET, now, options);
-  if (!verifyArtifactSignature(artifact.canonical, input.artifact_evidence_hmac_sha256, env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET)) {
+  if (!verifyArtifactSignature(artifact.canonical, input.artifact_evidence_hmac_sha256,
+    env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET, artifact.value.version)) {
     throw new TypeError('Artifact evidence signature mismatch.');
   }
   const payment = normalizePaymentEvidence(
@@ -786,20 +941,24 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
     env.ARC_CHECKOUT_BINDING_SECRET,
     artifact.value,
     env,
+    options,
   );
   const deployArtifacts = normalizeDeployArtifacts(input.deploy_artifacts, artifact.artifacts);
   const bundleHash = createHash('sha256');
   for (const artifactEntry of deployArtifacts) bundleHash.update(artifactEntry.path).update('\0').update(artifactEntry.bytes).update('\0');
   if (bundleHash.digest('hex') !== artifact.value.bundle_fingerprint) throw new TypeError('Deploy artifact bundle fingerprint mismatch.');
-  const production = deployArtifacts.find((entry) => entry.path === 'index.html');
+  const legacyV3 = artifact.legacyV3;
+  const pages = legacyV3 ? [deployArtifacts.find(entry => entry.path === 'index.html')] : htmlArtifacts(deployArtifacts);
+  const contact = legacyV3 ? null : pages.find((entry) => entry.path === 'contact/index.html');
   const headers = deployArtifacts.find((entry) => entry.path === '_headers');
   if (!headers || !headers.bytes.equals(Buffer.from(ARC2_PRODUCTION_HEADERS_FILE, 'utf8'))) {
     throw new TypeError('Signed production headers do not match the exact indexable security policy.');
   }
-  if (!production || sha256Hex(production.bytes) !== artifact.value.production_content_sha256) {
+  if ((legacyV3 ? sha256Hex(pages[0].bytes) : productionContentSha256(pages)) !== artifact.value.production_content_sha256) {
     throw new TypeError('Production content digest mismatch.');
   }
-  validateProductionAssetReferences(production.bytes, deployArtifacts);
+  if (legacyV3) validateLegacyProductionAssetReferences(pages[0].bytes, deployArtifacts);
+  else validateProductionAssetReferences(pages, deployArtifacts);
   const leadRouteMode = artifact.value.lead_route_mode;
   let leadEmail = '';
   let recipientHmac = '';
@@ -812,14 +971,19 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
         recipientHmac !== artifact.value.lead_route_recipient_hmac_sha256) {
       throw new TypeError('Lead notification email is invalid or unbound.');
     }
-    formName = extractNetlifyFormName(production.bytes);
+    if (!legacyV3 && pages.some(page => page.path !== 'contact/index.html' &&
+        /<form\b|\bformaction\b/i.test(page.bytes.toString('utf8')))) {
+      throw new TypeError('The Netlify lead form is permitted only on the Contact page.');
+    }
+    formName = legacyV3 ? extractLegacyNetlifyFormName(pages[0].bytes) : extractNetlifyFormName(contact.bytes);
     if (formName !== artifact.value.lead_route_form_name) throw new TypeError('Lead form is not bound to signed artifact evidence.');
   } else {
-    if (input.lead_notification_email !== '' || input.lead_route_recipient_hmac_sha256 !== '' || /<form\b/i.test(production.bytes.toString('utf8'))) {
+    if (input.lead_notification_email !== '' || input.lead_route_recipient_hmac_sha256 !== '' ||
+        pages.some(page => /<form\b/i.test(page.bytes.toString('utf8')))) {
       throw new TypeError('No-form handoff contains unexpected lead-route data.');
     }
   }
-  return { artifact, payment, deployArtifacts, leadEmail, leadRouteRecipientHmacSha256: recipientHmac, formName };
+  return { artifact, payment, deployArtifacts, leadEmail, leadRouteRecipientHmacSha256: recipientHmac, formName, legacyV3 };
 }
 
 export function handoffKey(paymentEvidence, stateSecret) {
@@ -1118,13 +1282,11 @@ export async function createClaimableSite(record, env, fetchImpl = fetch, timeou
 }
 
 export function createStoredZip(artifacts) {
-  if (!Array.isArray(artifacts) || artifacts.length < 2 || artifacts.length > 2 + MAX_ASSET_COUNT) {
+  if (!Array.isArray(artifacts) || artifacts.length < 2 || artifacts.length > 1 + MAX_ASSET_COUNT + HTML_PATHS.length) {
     throw new TypeError('ZIP artifact count is invalid.');
   }
   const paths = artifacts.map(artifact => artifact?.path);
-  if (paths[0] !== '_headers' || paths.at(-1) !== 'index.html' ||
-      paths.slice(1, -1).some(path => !ASSET_PATH_PATTERN.test(path)) ||
-      JSON.stringify(paths.slice(1, -1)) !== JSON.stringify(paths.slice(1, -1).sort()) || new Set(paths).size !== paths.length) {
+  if (!artifactPathVectorValid(paths) && !legacyArtifactPathVectorValid(paths)) {
     throw new TypeError('ZIP artifact paths are invalid.');
   }
   const local = [];
@@ -1357,10 +1519,16 @@ export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fe
     if (!file || Number(file.size) !== artifact.size) throw new Error('Netlify deploy file metadata mismatch.');
   }
   const artifactBytes = await downloadVerifiedArtifacts(record.netlify_site_id, expected.artifacts, env, fetchImpl, { deadlineMs });
-  const expectedLiveHtml = expectedNetlifyLiveHtml(
-    artifactBytes.find(item => item.path === 'index.html')?.bytes,
-    record.lead_route_mode,
-  );
+  const legacyV3 = legacyArtifactPathVectorValid(expected.artifacts.map(artifact => artifact?.path));
+  const sourcePages = legacyV3
+    ? [artifactBytes.find(item => item.path === 'index.html')]
+    : htmlArtifacts(artifactBytes);
+  const expectedLivePages = sourcePages.map(page => ({
+    path: page.path,
+    bytes: legacyV3
+      ? expectedLegacyNetlifyLiveHtml(page.bytes, record.lead_route_mode)
+      : expectedNetlifyLiveHtml(page.bytes, record.lead_route_mode, page.path),
+  }));
   const expectedCsp = signedCspHeader(artifactBytes);
   let matchingForm = null;
   let matchingHook = null;
@@ -1381,27 +1549,34 @@ export async function verifyNetlifyHandoff(record, expected, env, fetchImpl = fe
   const productionUrl = canonicalNetlifySiteUrl(record.netlify_site_name);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineTimeout(deadlineMs));
-  let publicResponse;
-  let publicHtml;
+  let publicPages;
   try {
-    publicResponse = await fetchImpl(productionUrl, { method: 'GET', redirect: 'error', signal: controller.signal });
-    const robots = (publicResponse.headers.get('x-robots-tag') || '').trim().toLowerCase();
-    const phase = expected.phase || 'preclaim';
-    if (!publicResponse.ok || (phase === 'preclaim'
-      ? robots !== 'noindex, nofollow, noarchive'
-      : robots !== '')) throw new Error('Published handoff indexing policy mismatch.');
-    if (publicResponse.url && publicResponse.url !== productionUrl) throw new Error('Published handoff redirected unexpectedly.');
-    if ((publicResponse.headers.get('content-security-policy') || '').trim() !== expectedCsp) {
-      throw new Error('Published handoff content security policy mismatch.');
-    }
-    publicHtml = await readResponseBytesBounded(publicResponse, expectedLiveHtml.length);
-    if (!publicHtml.equals(expectedLiveHtml)) {
-      throw new Error('Published production HTML bytes mismatch.');
-    }
+    publicPages = await Promise.all(expectedLivePages.map(async (page) => {
+      const route = page.path === 'index.html' ? '' : page.path.slice(0, -'index.html'.length);
+      const pageUrl = new URL(route, productionUrl).toString();
+      const response = await fetchImpl(pageUrl, { method: 'GET', redirect: 'error', signal: controller.signal });
+      const robots = (response.headers.get('x-robots-tag') || '').trim().toLowerCase();
+      const phase = expected.phase || 'preclaim';
+      if (!response.ok || (phase === 'preclaim'
+        ? robots !== 'noindex, nofollow, noarchive'
+        : robots !== '')) throw new Error('Published handoff indexing policy mismatch.');
+      if (response.url && response.url !== pageUrl) throw new Error('Published handoff redirected unexpectedly.');
+      if ((response.headers.get('content-security-policy') || '').trim() !== expectedCsp) {
+        throw new Error('Published handoff content security policy mismatch.');
+      }
+      if ((response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'text/html') {
+        throw new Error('Published production HTML content type mismatch.');
+      }
+      const bytes = await readResponseBytesBounded(response, page.bytes.length);
+      if (!bytes.equals(page.bytes)) throw new Error('Published production HTML bytes mismatch.');
+      return { path: page.path, bytes };
+    }));
   } finally {
+    controller.abort();
     clearTimeout(timer);
   }
-  validateProductionAssetReferences(publicHtml, expected.artifacts);
+  if (legacyV3) validateLegacyProductionAssetReferences(publicPages[0].bytes, expected.artifacts);
+  else validateProductionAssetReferences(publicPages, expected.artifacts);
   for (const artifact of expected.artifacts.filter(item => ASSET_PATH_PATTERN.test(item.path))) {
     const assetUrl = new URL(artifact.path, productionUrl).toString();
     const controller = new AbortController();
@@ -1644,7 +1819,8 @@ export function validateExpectedBindings(value) {
     }
   }
   if (!PREVIEW_FOLDER_PATTERN.test(record.preview_folder) || !Array.isArray(record.artifacts) ||
-      record.artifacts.length < 2 || record.artifacts.length > 2 + MAX_ASSET_COUNT ||
+      (!artifactPathVectorValid(record.artifacts.map(artifact => artifact?.path)) &&
+        !legacyArtifactPathVectorValid(record.artifacts.map(artifact => artifact?.path))) ||
       !['netlify_form', 'not_required'].includes(record.lead_route_mode) ||
       (record.lead_route_mode === 'netlify_form'
         ? (validateFormName(record.form_name) !== record.form_name ||

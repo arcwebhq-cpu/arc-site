@@ -66,7 +66,7 @@ class AmbiguousWriteStore extends FakeStore {
 const validForm = () => {
   const form = new FormData();
   for (const [field, value] of Object.entries({
-    intake_version: 'arc-intake-v7',
+    intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1',
     submission_request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     name: 'Test Owner',
     email: 'owner@example.test',
@@ -141,7 +141,7 @@ const allNamedControlForm = () => {
     email: 'owner@example.test',
     goals: 'More calls',
     industry: 'Roofing',
-    intake_version: 'arc-intake-v7',
+    intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1',
     main_call_to_action: 'Request Estimate',
     main_services: 'Roof replacement',
     name: 'Test Owner',

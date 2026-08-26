@@ -7,11 +7,12 @@ export const INTAKE_RESPONSE_SCHEMA = 'arc-intake-submission-accepted-v1';
 export const INTAKE_ARC1_DELIVERY_SCHEMA = 'arc-intake-arc1-delivery-state-v1';
 export const INTAKE_ARC1_DISPATCH_SCHEMA = 'arc-intake-arc1-dispatch-state-v1';
 export const INTAKE_ASSET_REFERENCE_SCHEMA = 'arc-intake-private-asset-reference-v1';
-export const INTAKE_VERSION = 'arc-intake-v7';
+export const INTAKE_VERSION = 'arc-intake-v8';
 export const INTAKE_IDEMPOTENCY_SECRET_ENV = 'ARC_INTAKE_IDEMPOTENCY_SECRET';
 export const INTAKE_REQUEST_ID_PREFIX = 'arc-intake-request-id-v1\n';
-export const BUDGET_CONFIRMATION = 'Yes, understands the finished ARC website subtotal is $5,000 plus applicable sales tax only after preview approval';
-export const TERMS_CONFIRMATION = 'Accepted ARC preview terms, privacy policy, refund policy, and service scope dated 2026-08-12; separate adult checkout acceptance required';
+export const BUDGET_CONFIRMATION = 'Yes, understands the finished ARC website is a fixed five-page website with a $5,000 subtotal plus applicable sales tax only after preview approval';
+export const TERMS_CONFIRMATION = 'Accepted ARC preview terms, privacy policy, refund policy, and fixed five-page service scope dated 2026-08-25; separate adult checkout acceptance required';
+export const OFFER_CONTRACT_ID = 'arc-fixed-five-page-offer-v1';
 export const INTAKE_MAX_REQUEST_BYTES = 4_000_000;
 export const INTAKE_MAX_FILE_BYTES = 1_250_000;
 export const INTAKE_MAX_TOTAL_FILE_BYTES = 3_000_000;
@@ -23,7 +24,7 @@ export const INTAKE_SINGLE_FIELDS = Object.freeze([
   'asset_permission', 'brand_tone', 'budget_confirmed', 'business', 'business_hours',
   'business_story', 'city', 'colors', 'competitor_sites', 'cta_destination', 'design_dislikes', 'domain_status',
   'email', 'faqs_and_objections', 'features', 'final_notes', 'first_cta', 'form_started_at', 'highest_profit_service',
-  'industry', 'intake_version', 'landing_path', 'last_step_reached', 'lead_form_needed', 'lead_notification_email',
+  'industry', 'intake_version', 'offer_contract_id', 'landing_path', 'last_step_reached', 'lead_form_needed', 'lead_notification_email',
   'main_call_to_action', 'main_offer', 'main_services', 'name', 'primary_style', 'public_address', 'public_email', 'public_phone',
   'reference_site_likes', 'referrer_host', 'social_links', 'target_customer', 'terms_accepted', 'utm_campaign',
   'utm_content', 'utm_medium', 'utm_source', 'utm_term', 'website', 'why_choose_you', 'proof_details', 'submission_request_id', 'bot-field',
@@ -179,8 +180,10 @@ function validatePublicBrief(values, files) {
   const cta = values.get('main_call_to_action');
   const leadChoice = values.get('lead_form_needed');
   const impliedLeadForm = cta === 'Request Estimate' || cta === 'Contact';
-  const includesLeadForm = impliedLeadForm || leadChoice === 'Yes';
-  if (!leadChoice || (impliedLeadForm && leadChoice !== 'Yes')) throw new TypeError('Lead-form choice is invalid.');
+  const includesLeadForm = impliedLeadForm;
+  if (!leadChoice || (impliedLeadForm ? leadChoice !== 'Yes' : leadChoice !== 'No')) {
+    throw new TypeError('The fixed five-page offer permits exactly one primary conversion path.');
+  }
   if (sections.includes('Contact or quote form') && !includesLeadForm) {
     throw new TypeError('A contact-form section requires lead routing.');
   }
@@ -257,7 +260,8 @@ export async function normalizeIntakeForm(formData, now = new Date(), uuid = ran
 
   if (values.get('bot-field')) throw new TypeError('Automated intake rejected.');
   values.delete('bot-field');
-  if (values.get('intake_version') !== INTAKE_VERSION || values.get('budget_confirmed') !== BUDGET_CONFIRMATION ||
+  if (values.get('intake_version') !== INTAKE_VERSION || values.get('offer_contract_id') !== OFFER_CONTRACT_ID ||
+      values.get('budget_confirmed') !== BUDGET_CONFIRMATION ||
       values.get('terms_accepted') !== TERMS_CONFIRMATION) throw new TypeError('Intake consent or version is invalid.');
   for (const field of REQUIRED_FIELDS) if (!values.get(field)) throw new TypeError(`Required intake field is missing: ${field}.`);
   const requestId = values.get('submission_request_id');

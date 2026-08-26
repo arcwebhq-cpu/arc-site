@@ -23,16 +23,24 @@
     "production_activation_claim_allowed": false
   },
   "offer": {
+    "contract_id": "arc-fixed-five-page-offer-v1",
     "currency": "USD",
     "subtotal_amount": 5000,
     "tax": "applicable-destination-based-sales-tax-added-at-checkout",
     "billing": "one-time",
-    "deliverable": "one-premium-single-page-website"
+    "deliverable": "one-premium-fixed-five-page-website",
+    "page_paths": [
+      "index.html",
+      "services/index.html",
+      "about/index.html",
+      "process/index.html",
+      "contact/index.html"
+    ]
   },
   "checkout": {
     "status": "blocked",
     "allowed_mode": "test-only",
-    "consent_version": "2026-08-12",
+    "consent_version": "2026-08-25",
     "required_evidence": [
       "adult-purchaser-affirmative-acceptance",
       "accepted-terms-version",
@@ -47,6 +55,7 @@
     "blockers": [
       "adult-contracting-authority-outside-stripe-unverified",
       "checkout-consent-not-wired-or-live-tested",
+      "five-page-checkout-handoff-and-provider-e2e-unverified",
       "stripe-test-or-sandbox-context-unavailable",
       "stripe-tax-status-pending-and-head-office-missing",
       "stripe-tax-registrations-zero",

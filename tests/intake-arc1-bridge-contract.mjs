@@ -36,7 +36,7 @@ class FakeStore {
 const hmac = (secret, value) => createHmac('sha256', secret).update(value).digest('hex');
 const form = new FormData();
 for (const [field, value] of Object.entries({
-  intake_version: 'arc-intake-v7', name: 'Private Test Owner', email: 'private-owner@example.test', business: 'Private Test Roofing',
+  intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Test Owner', email: 'private-owner@example.test', business: 'Private Test Roofing',
   industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement', main_call_to_action: 'Request Estimate',
   lead_form_needed: 'Yes', lead_notification_email: 'private-owner@example.test', primary_style: 'Modern',
   budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION, asset_permission: 'Confirmed', 'bot-field': '',

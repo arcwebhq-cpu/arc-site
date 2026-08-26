@@ -493,6 +493,7 @@ function deriveAdapterArtifacts(record, envelopeRaw, resolved, claimCreatedAt, n
     source_schema: evidence.source_schema, source_form_name: evidence.source_form_name,
     source_key_hmac_sha256: evidence.source_key_hmac_sha256, delivery_id: evidence.delivery_id,
     submission_id: evidence.submission_id, received_at: evidence.received_at, intake_version: evidence.data.intake_version,
+    offer_contract_id: evidence.data.offer_contract_id,
     budget_confirmed: evidence.data.budget_confirmed, terms_accepted: evidence.data.terms_accepted,
     asset_permission: grants.length > 0 ? evidence.data.asset_permission : '', public_folder_prefix: publicFolderPrefix,
     submission_data_sha256: evidence.submission_data_sha256, asset_manifest: assetManifest,

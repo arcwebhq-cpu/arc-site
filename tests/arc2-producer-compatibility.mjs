@@ -23,21 +23,22 @@ assert.match(producer, /version: "arc-lead-route-evidence-v1"/);
 assert.match(producer, /scope: "arc-controlled-netlify-staging"/);
 assert.match(producer, /staging_site_url: siteUrl\.toString\(\)/);
 assert.match(producer, /staging_deploy_url: immutableDeployUrl\.toString\(\)/);
-assert.match(producerTest, /const stagingName = "arc-lead-route-a1b2c3d4"/,
+assert.match(producerTest, /const siteName = "arc-lead-route-a1b2c3d4"/,
   'The committed executable producer contract must exercise the same namespace.');
-assert.match(producerTest, /const issued = await runVerifier/,
+assert.match(producerTest, /const output = await runVerifier/,
   'Cross-repository source-and-fixture guard must be backed by the producer executable contract.');
-assert.match(producerTest, /const assetIssued = await runVerifier/,
+assert.match(producerTest, /await runVerifier\(withAsset\.input/,
   'The executable producer contract must verify self-contained asset readback.');
 assert.match(producer, /deploy_artifacts_private/);
 assert.match(producer, /live asset bytes changed/);
 assert.match(resolver, /preview_source_commit_sha: sourceCommitSha/);
-assert.match(resolver, /arc-checkout-ready-v3/,
+assert.match(resolver, /arc-checkout-ready-v4/,
   'The consumer must resolve only the private checkout READY authority.');
 assert.match(resolver, /private_link_reverse_state/,
   'The authenticated Payment Link reverse reservation must be the paid identity authority.');
-assert.match(resolver, /paid production cannot depend on ARC preview hosting/);
-assert.match(resolver, /const localPath = repositoryPath\.slice\(`\$\{previewFolder\}\/`\.length\)/,
+assert.match(resolver, /exact immutable v4 checkout source tag/,
+  'Paid production must resolve from the signed immutable checkout source tag.');
+assert.match(resolver, /path: repositoryPath\.slice\(`\$\{previewFolder\}\/`\.length\)/,
   'ARC2 resolver must rewrite receipt-bound preview assets to deterministic local paths.');
 
 const payment = { checkout_session_id: 'cs_test_arc2_compatibility', bundle_fingerprint: 'a'.repeat(64) };

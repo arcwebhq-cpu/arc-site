@@ -510,25 +510,13 @@ async function ensureLeadHook(entry, key, leadEmail, env, adapters) {
 export async function startHandoff(input, env, adapters = {}) {
   const clock = adapters.clock || (() => new Date());
   const fetchImpl = adapters.fetch || fetch;
-  let normalized = normalizeStartPayload(input, env, clock(), { enforceFreshness: false });
+  let normalized = normalizeStartPayload(input, env, clock(), { enforceFreshness: false, allowLegacyV3: true });
   normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
   if (normalized.payment.value.client_reference_mismatch_review_required) {
     throw new Error('ARC2_CHECKOUT_REFERENCE_REVIEW_REQUIRED');
   }
   const key = handoffKey(normalized.payment.value, env.ARC_HANDOFF_STATE_SECRET);
   const handoffId = handoffIdFromKey(key);
-  // Live fulfillment requires a separately authenticated, durable Checkout
-  // webhook receipt plus an immutable handoff binding. This runs before any
-  // handoff reservation, state mutation, or provider request and is a no-op
-  // only in an explicitly configured sandbox exercise.
-  await bindStripeCheckoutToHandoff(
-    adapters.store,
-    handoffId,
-    normalized.payment.value,
-    normalized.payment.digest,
-    env,
-    { accountFetch: adapters.stripeAccountFetch },
-  );
   let entry = await readEntry(adapters.store, key);
   const checkoutIndexKey = checkoutSessionIndexKey(normalized.payment.value, env);
   const checkoutIndexValue = checkoutSessionIndexValue(handoffId, normalized);
@@ -538,6 +526,12 @@ export async function startHandoff(input, env, adapters = {}) {
   const referenceReservation = await readIndex(adapters.store, referenceIndexKey);
   const existedAtStart = Boolean(entry);
   if (entry) rejectQuarantinedLegacyNamespace(entry.record);
+  const exactEntry = Boolean(entry && exactReplay(entry.record, normalized));
+  const exactCheckoutReservation = Boolean(checkoutReservation && canonicalJson(checkoutReservation) === canonicalJson(checkoutIndexValue));
+  const exactReferenceReservation = Boolean(referenceReservation && canonicalJson(referenceReservation) === canonicalJson(referenceIndexValue));
+  if (normalized.legacyV3 && !exactEntry && !exactCheckoutReservation && !exactReferenceReservation) {
+    throw new Error('ARC2_LEGACY_V3_NEW_START_REJECTED');
+  }
   if (entry && !exactReplay(entry.record, normalized)) throw new Error('ARC2_IDEMPOTENCY_CONFLICT');
   if (checkoutReservation && canonicalJson(checkoutReservation) !== canonicalJson(checkoutIndexValue)) {
     throw new Error('ARC2_INDEX_CONFLICT');
@@ -547,10 +541,24 @@ export async function startHandoff(input, env, adapters = {}) {
       duplicatePaymentReviewValue(referenceReservation, normalized, env));
     throw new Error('ARC2_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED');
   }
-  // Old signed evidence may resume an exact handoff row or an exact immutable
-  // checkout reservation left by a crash between index reservation and row
-  // creation. A truly brand-new handoff still requires fresh evidence.
-  if (!entry && !checkoutReservation && !referenceReservation) normalized = normalizeStartPayload(input, env, clock());
+  // Only v4 may create a new handoff. Frozen v3 parsing above exists solely to
+  // identify an exact durable row/reservation before any Checkout-ledger or
+  // provider mutation. A truly brand-new v4 handoff still requires fresh evidence.
+  if (!entry && !checkoutReservation && !referenceReservation) {
+    normalized = normalizeStartPayload(input, env, clock());
+    normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
+  }
+  // Live fulfillment requires a separately authenticated, durable Checkout
+  // webhook receipt plus an immutable handoff binding. This remains before
+  // any handoff reservation, state mutation, or provider request.
+  await bindStripeCheckoutToHandoff(
+    adapters.store,
+    handoffId,
+    normalized.payment.value,
+    normalized.payment.digest,
+    env,
+    { accountFetch: adapters.stripeAccountFetch },
+  );
   // Reserve one immutable handoff per authenticated Checkout Session before
   // any Netlify write. The key is an HMAC, and the value stores only digests.
   try {

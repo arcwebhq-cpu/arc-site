@@ -64,7 +64,7 @@ const now = new Date(Date.now() - 2_000);
 const submissionId = '11111111-1111-4111-8111-111111111111';
 const form = new FormData();
 for (const [field, value] of Object.entries({
-  intake_version: 'arc-intake-v7', name: 'Private Adapter Owner', email: 'adapter-owner@example.test',
+  intake_version: 'arc-intake-v8', offer_contract_id: 'arc-fixed-five-page-offer-v1', name: 'Private Adapter Owner', email: 'adapter-owner@example.test',
   business: 'Private Adapter Roofing', industry: 'Roofing', city: 'Everett, WA', main_services: 'Roof replacement',
   main_call_to_action: 'Request Estimate', budget_confirmed: BUDGET_CONFIRMATION, terms_accepted: TERMS_CONFIRMATION,
   lead_form_needed: 'Yes', lead_notification_email: 'adapter-owner@example.test', primary_style: 'Modern',

@@ -24,16 +24,21 @@ event is not delivery. The acknowledgement endpoint never sends an email.
 
 Hi {{customer_name}},
 
-Your unlisted ARC preview for {{business_name}} passed our website checks:
+Your complete five-page unlisted ARC preview for {{business_name}} passed our
+website checks:
 
 {{preview_url}}
 
-Two consolidated preview revision rounds are included before purchase. Reply to
-this email with one complete revision list per round. If you approve the current
-preview as-is, use the Stripe checkout inside the preview. The service subtotal is
-$5,000 USD and applicable destination-based sales tax is added before payment.
-The checkout must show subtotal, tax, and total. Payment confirms
-approval of the then-current preview for production handoff.
+Two consolidated preview revision rounds are included across all five pages
+before purchase. Reply to this email with one complete revision list per round.
+If you approve every page as-is, use the confidential Stripe checkout link below:
+
+{{private_checkout_url}}
+
+Do not forward that link. The service subtotal is $5,000 USD and applicable
+destination-based sales tax is added before payment. The checkout must show
+subtotal, tax, and total. Payment confirms approval of the exact five-page
+artifact manifest identified by the private checkout for production handoff.
 
 ARC never needs your full card number by email.
 
@@ -57,8 +62,8 @@ Status: {{payment_success_url}}
 
 Hi {{customer_name}},
 
-ARC prepared an unlisted, noindex handoff deploy, sent an exact synthetic
-submission through its rendered Netlify form, and verified receipt in the
+ARC prepared an unlisted, noindex five-page handoff deploy, sent an exact
+synthetic submission through its Contact-page Netlify form, and verified receipt in the
 authoritative lead inbox. Use the time-limited claim invitation below within the
 stated window. Form and hook configuration alone never authorizes this email.
 If the first redirect is interrupted, the same confidential invitation may be
@@ -82,7 +87,7 @@ invitation does not prove ownership handoff or mean the site is launch-ready.
 
 Hi {{customer_name}},
 
-Netlify destination-account control, the exact final deploy, and the durable
+Netlify destination-account control, the exact final five-page deploy, and the durable
 delivery outbox were independently verified:
 
 {{production_url}}
