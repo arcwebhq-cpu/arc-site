@@ -13,7 +13,7 @@ const reviewed = new Map([
 const uses = [...workflow.matchAll(/^[ \t]*-?[ \t]*uses:[ \t]+([^ \t#]+)(?:[ \t]+#[ \t]*(\S+))?[ \t]*$/gm)]
   .map(match => ({ action: match[1].split("@")[0], ref: match[1].split("@")[1], version: match[2] }));
 
-assert.match(workflow, /repository:\s*arcwebhq-cpu\/arc-previews\s*\n\s*ref:\s*c11b28c2c126b20222c3c2d7dd1497bed79c7f95\s*\n\s*path:\s*\.arc-previews-contract/,
+assert.match(workflow, /repository:\s*arcwebhq-cpu\/arc-previews\s*\n\s*ref:\s*302953585d6635745479625b611de64bd56cd0c0\s*\n\s*path:\s*\.arc-previews-contract/,
   "ARC site CI must pin the reviewed five-page preview contract commit");
 
 assert.equal(uses.length, 5);
