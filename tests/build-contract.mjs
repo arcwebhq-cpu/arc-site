@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
-const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'terms', 'thank-you'];
+const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'support', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
 const files = [];
@@ -24,23 +24,45 @@ for (const forbidden of ['operations/', 'tests/', 'netlify/', 'vendor/', '.githu
 }
 assert.ok(files.includes('index.html'));
 assert.ok(files.includes('privacy/index.html'));
+assert.ok(files.includes('support/index.html'));
 assert.ok(files.includes('assets/legal.css'));
 assert.ok(files.includes('claim/index.html'));
 assert.ok(files.includes('claim/claim.js'));
 assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');
+const support = await readFile(path.join(dist, 'support/index.html'), 'utf8');
 const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
 const activationBuildIdentity = await readFile(path.join(root, 'netlify/lib/activation-build-identity.mjs'), 'utf8');
 assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/, 'Disabled production build must not register or expose a directly postable Netlify form.');
 assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
 assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
-assert.equal((home.match(/<a\b[^>]*\bdata-intake-cta\b[^>]*>/g) || []).length, 2, 'Default build must expose two honest intake fallback actions.');
-assert.doesNotMatch(home, /data-intake-cta[^>]*href="#start"/,
-  'Compiled-closed intake actions must not advertise an unavailable online form.');
-assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request"[^>]*>Email ARC About a Preview<\/a>/);
-assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
+const intakeCtas = [...home.matchAll(/<a\b[^>]*\bdata-intake-cta\b[^>]*>[\s\S]*?<\/a>/g)].map((match) => match[0]);
+assert.equal(intakeCtas.length, 2, 'The homepage must expose exactly two intake actions.');
+for (const cta of intakeCtas) {
+  assert.match(cta, /\bhref="#start"/, 'Every intake action must reveal the truthful intake state.');
+  assert.match(cta, />\s*Free Preview\s*<\/a>$/, 'Every intake action must use the exact visible label “Free Preview”.');
+}
+assert.doesNotMatch(home, /mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request/i,
+  'The homepage must not fall back to an unverified preview email path.');
+assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise an email fallback.');
+const intakeStatus = home.match(/<div\b[^>]*\bid="intakeStatus"[^>]*>[\s\S]*?<\/div>/)?.[0] || '';
+assert.match(intakeStatus, /\brole="status"/);
+assert.match(intakeStatus, /\baria-live="polite"/);
+assert.match(intakeStatus, /Free preview requests are (?:currently|temporarily) paused\./i,
+  'The compiled-closed page must plainly disclose that preview requests are paused.');
+assert.match(home, /<form\b[^>]*\baria-disabled="true"[^>]*\bdata-intake-enabled="false"[^>]*\binert\b/i,
+  'The compiled-closed form must remain inert and semantically disabled.');
+assert.match(home, /We(?:’|&#8217;|&rsquo;|')ll build it and email it to you\./i,
+  'The homepage must explain that ARC builds and emails the free preview.');
+assert.match(home, /Pay \$5,000 USD \+ applicable sales tax only if you approve\./i,
+  'The homepage must state that payment follows approval and includes applicable tax.');
+for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta', 'privacy-note', 'process-note', 'review-confirm']) {
+  assert.doesNotMatch(home, new RegExp(`class="[^"]*\\b${removedClass}\\b`), `${removedClass} clutter must not render on the homepage.`);
+}
+assert.doesNotMatch(home, /Secure Stripe checkout after preview approval\./,
+  'The footer must not repeat sales-flow fine print.');
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
 assert.match(activationBuildIdentity, /"deployment_sha": null/,
@@ -49,6 +71,13 @@ assert.match(home, /data-analytics-build-enabled="false"/,
   'Default production build must not invoke automatic analytics collection.');
 assert.match(await readFile(path.join(dist, 'thank-you/index.html'), 'utf8'), /data-analytics-build-enabled="false"/,
   'The default thank-you build must not flush automatic analytics collection.');
+assert.match(support, /href="mailto:arcwebhq@gmail\.com\?subject=ARC%20support%20request"/);
+assert.match(support, /by email only/i);
+assert.match(support, /does not offer 24\/7 monitoring/i);
+assert.match(support, /does not provide live chat, an online intake form, or emergency support/i);
+assert.match(support, /30 calendar days of support for reproducible launch-related bugs/i);
+assert.match(support, /Do not email passwords, payment-card details, checkout credentials/i);
+assert.doesNotMatch(support, /<form\b|data-netlify|name="form-name"|method="POST"/i);
 
 for (const file of files.filter((name) => name.endsWith('.html'))) {
   const html = await readFile(path.join(dist, file), 'utf8');

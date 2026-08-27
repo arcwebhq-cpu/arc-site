@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fetchAndVerifyWithRetries } from './lib/verify-production-route-retry.mjs';
 
 const expectedDeploySha = (process.env.ARC_EXPECTED_DEPLOY_SHA || '').trim();
 assert.match(expectedDeploySha, /^[a-f0-9]{40}$/, 'ARC_EXPECTED_DEPLOY_SHA must be the exact main commit SHA.');
@@ -61,42 +62,59 @@ const customRoutes = [
   ['/internal/intake/arc1/adapter/complete', 503, 'public_intake_authority_required'],
   ['/internal/intake/arc1/adapter/migrate-legacy', 503, 'public_intake_authority_required'],
 ];
-for (const [path, status, error] of customRoutes) {
-  const response = await fetchExact(`${origin}${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-  });
-  assert.equal(response.status, status, `${path} must reach its fail-closed Function handler.`);
-  assert.match(response.headers.get('content-type') || '', /^application\/json\b/);
-  assert.match(response.headers.get('cache-control') || '', /\bno-store\b/);
-  assert.deepEqual(await response.json(), { error });
-}
-
-for (const functionName of [
+const functionNames = [
   'intake-arc1-adapter-claim',
   'intake-arc1-adapter-complete',
   'intake-arc1-adapter-legacy-migration',
-]) {
-  const response = await fetchExact(`${origin}/.netlify/functions/${functionName}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-  });
-  assert.equal(response.status, 404,
-    `${functionName} must not remain exposed at Netlify's default Function path.`);
-}
-
-const readinessResponse = await fetchExact(`${origin}/api/intake/readiness`);
-assert.equal(readinessResponse.status, 200);
-assert.deepEqual(await readinessResponse.json(), { schema: 'arc-intake-readiness-v1', intake_enabled: false });
-
-for (const [path, localPath] of [
+];
+const staticRoutes = [
   ['/', '../dist/index.html'],
   ['/assets/arc-social-card.png', '../dist/assets/arc-social-card.png'],
-]) {
-  const [remoteResponse, localBytes] = await Promise.all([
-    fetchExact(`${origin}${path}`), readFile(new URL(localPath, import.meta.url)),
-  ]);
-  assert.equal(remoteResponse.status, 200);
-  const remoteBytes = Buffer.from(await remoteResponse.arrayBuffer());
-  assert.equal(sha256(remoteBytes), sha256(localBytes), `${path} must match the tested build byte-for-byte.`);
-}
+];
+
+await Promise.all([
+  ...customRoutes.map(([path, status, error]) => fetchAndVerifyWithRetries({
+    label: path,
+    fetchResponse: timeoutMs => fetchExact(`${origin}${path}`, {
+      timeoutMs, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }),
+    verifyResponse: async response => {
+      assert.equal(response.status, status, `${path} must reach its fail-closed Function handler.`);
+      assert.match(response.headers.get('content-type') || '', /^application\/json\b/);
+      assert.match(response.headers.get('cache-control') || '', /\bno-store\b/);
+      assert.deepEqual(await response.json(), { error });
+    },
+  })),
+  ...functionNames.map(functionName => fetchAndVerifyWithRetries({
+    label: `/.netlify/functions/${functionName}`,
+    fetchResponse: timeoutMs => fetchExact(`${origin}/.netlify/functions/${functionName}`, {
+      timeoutMs, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }),
+    verifyResponse: async response => {
+      assert.equal(response.status, 404,
+        `${functionName} must not remain exposed at Netlify's default Function path.`);
+    },
+  })),
+  fetchAndVerifyWithRetries({
+    label: '/api/intake/readiness',
+    fetchResponse: timeoutMs => fetchExact(`${origin}/api/intake/readiness`, { timeoutMs }),
+    verifyResponse: async response => {
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { schema: 'arc-intake-readiness-v1', intake_enabled: false });
+    },
+  }),
+  ...staticRoutes.map(async ([path, localPath]) => {
+    const localBytes = await readFile(new URL(localPath, import.meta.url));
+    return fetchAndVerifyWithRetries({
+      label: path,
+      fetchResponse: timeoutMs => fetchExact(`${origin}${path}`, { timeoutMs }),
+      verifyResponse: async remoteResponse => {
+        assert.equal(remoteResponse.status, 200);
+        const remoteBytes = Buffer.from(await remoteResponse.arrayBuffer());
+        assert.equal(sha256(remoteBytes), sha256(localBytes), `${path} must match the tested build byte-for-byte.`);
+      },
+    });
+  }),
+]);
 
 console.log(`ARC production route smoke passed for Netlify deploy ${deployment.id} at ${expectedDeploySha}.`);
