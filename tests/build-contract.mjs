@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
-const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'support', 'terms', 'thank-you'];
+const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'review', 'robots.txt', 'service-scope', 'sitemap.xml', 'support', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
 const files = [];
@@ -28,6 +28,8 @@ assert.ok(files.includes('support/index.html'));
 assert.ok(files.includes('assets/legal.css'));
 assert.ok(files.includes('claim/index.html'));
 assert.ok(files.includes('claim/claim.js'));
+assert.ok(files.includes('review/index.html'));
+assert.ok(files.includes('review/review.js'));
 assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');

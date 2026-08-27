@@ -25,20 +25,19 @@ event is not delivery. The acknowledgement endpoint never sends an email.
 Hi {{customer_name}},
 
 Your complete five-page unlisted ARC preview for {{business_name}} passed our
-website checks:
+website checks. Open your private review link to view the preview, approve and
+pay, or request changes. No reply needed.
 
-{{preview_url}}
+{{review_url}}
 
 Two consolidated preview revision rounds are included across all five pages
-before purchase. Reply to this email with one complete revision list per round.
-If you approve every page as-is, use the confidential Stripe checkout link below:
+before purchase. Do not forward the private review link. It binds your decision
+to the exact preview and creates secure checkout only after approval.
 
-{{private_checkout_url}}
-
-Do not forward that link. The service subtotal is $5,000 USD and applicable
-destination-based sales tax is added before payment. The checkout must show
-subtotal, tax, and total. Payment confirms approval of the exact five-page
-artifact manifest identified by the private checkout for production handoff.
+The service subtotal is $5,000 USD and applicable destination-based sales tax
+is added before payment. Checkout must show subtotal, tax, and total. Payment
+confirms approval of the exact five-page artifact manifest identified by the
+private review record for production handoff.
 
 ARC never needs your full card number by email.
 
