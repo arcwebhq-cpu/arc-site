@@ -134,5 +134,5 @@ for (const file of (await readdir(functionDirectory)).filter(name => name.endsWi
   }
 }
 
-assert.equal(routedFunctions, 25, 'The reviewed ARC custom-route count changed; inspect every added or removed Function.');
+assert.equal(routedFunctions, 29, 'The reviewed ARC custom-route count changed; inspect every added or removed Function.');
 console.log(`ARC Netlify Function config contract passed for ${routedFunctions} custom-routed functions.`);

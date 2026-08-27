@@ -4,5 +4,6 @@ Disallow: /api/
 Disallow: /internal/
 Disallow: /thank-you/
 Disallow: /payment-success/
+Disallow: /review/
 
 Sitemap: https://arcweb.onl/sitemap.xml

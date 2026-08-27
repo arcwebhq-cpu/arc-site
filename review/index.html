@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'none'; script-src 'self'; style-src 'self'">
+  <title>Review your ARC preview</title>
+  <link rel="stylesheet" href="/review/review.css">
+  <script src="/review/review.js" defer></script>
+</head>
+<body>
+  <main aria-labelledby="review-title">
+    <p class="eyebrow">Private ARC review</p>
+    <h1 id="review-title">Review your free preview.</h1>
+    <p class="status" id="review-status" role="status" aria-live="polite">Opening your private review.</p>
+
+    <section id="review-workspace" hidden>
+      <a class="preview-link" id="preview-link" target="_blank" rel="noopener noreferrer">Open five-page preview <span aria-hidden="true">↗</span></a>
+      <p class="rounds" id="revision-rounds"></p>
+      <div class="actions" id="review-actions">
+        <button class="primary" id="approve-button" type="button">Approve &amp; Pay</button>
+        <button class="secondary" id="changes-button" type="button">Request Changes</button>
+      </div>
+      <form id="changes-form" hidden>
+        <label for="revision-notes">Your complete change list</label>
+        <textarea id="revision-notes" name="revision_notes" minlength="10" maxlength="4000" required></textarea>
+        <div class="form-actions">
+          <button class="primary" type="submit">Send Changes</button>
+          <button class="text-button" id="cancel-changes" type="button">Cancel</button>
+        </div>
+      </form>
+    </section>
+
+    <noscript>This private review requires JavaScript. Open the link in a browser with JavaScript enabled.</noscript>
+  </main>
+</body>
+</html>
