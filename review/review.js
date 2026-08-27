@@ -107,8 +107,12 @@
       body: '{}',
     });
     const target = new URL(value.checkout_url);
+    const checkoutPath = /^\/c\/pay\/cs_(?:test|live)_[A-Za-z0-9_]{8,512}$/;
+    const safeFragment = target.hash === '' ||
+      (target.hash.length >= 17 && target.hash.length <= 4096 && !/[\\\u0000-\u001f\u007f]/.test(target.hash));
     if (target.protocol !== 'https:' || target.origin !== 'https://checkout.stripe.com' ||
-        target.username || target.password || target.hash) throw new Error('invalid_checkout');
+        target.username || target.password || target.search || !checkoutPath.test(target.pathname) ||
+        !safeFragment) throw new Error('invalid_checkout');
     location.assign(target.href);
   };
 

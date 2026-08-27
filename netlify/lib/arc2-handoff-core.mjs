@@ -22,6 +22,9 @@ const LEGACY_ARTIFACT_SIGNATURE_PREFIX = 'arc2-handoff-artifact-evidence-signatu
 export const PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v4';
 export const PAYMENT_EVIDENCE_SCOPE = 'authoritative-stripe-checkout-session';
 export const PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v4\n';
+export const REVIEW_PAYMENT_EVIDENCE_VERSION = 'arc2-review-session-payment-evidence-v1';
+export const REVIEW_PAYMENT_EVIDENCE_SCOPE = 'authoritative-approved-review-paid-checkout-session';
+export const REVIEW_PAYMENT_SIGNATURE_PREFIX = 'arc2-review-session-payment-evidence-signature-v1\n';
 const LEGACY_PAYMENT_EVIDENCE_VERSION = 'arc2-payment-evidence-v3';
 const LEGACY_PAYMENT_SIGNATURE_PREFIX = 'arc2-payment-evidence-signature-v3\n';
 export const LEAD_RECIPIENT_PREFIX = 'arc-lead-route-recipient-v1\n';
@@ -190,6 +193,21 @@ const PAYMENT_FIELDS = Object.freeze([
   ...LEGACY_PAYMENT_FIELDS,
   'taxability_reasons',
   'line_item_taxes_sha256',
+]);
+const REVIEW_PAYMENT_FIELDS = Object.freeze([
+  'adult_purchaser_acknowledgement', 'amount_total_minor_units', 'approval_receipt_hmac_sha256',
+  'approval_receipt_sha256', 'artifact_manifest_sha256', 'automatic_tax_enabled',
+  'automatic_tax_status', 'bridge_immutable_binding_sha256', 'bridge_outbox_key_sha256',
+  'brief_sha256', 'bundle_fingerprint', 'checkout_session_id',
+  'checkout_session_id_hmac_sha256', 'claim_recipient_email_sha256',
+  'client_reference_id_sha256', 'currency', 'customer_address_country',
+  'customer_address_state', 'handoff_artifact_evidence_sha256', 'invite_hmac_sha256',
+  'livemode', 'mode', 'payer_email_sha256', 'payment_intent_id',
+  'payment_intent_id_hmac_sha256', 'payment_link_id', 'payment_status',
+  'preview_content_sha256', 'preview_folder', 'preview_manifest_sha256',
+  'preview_source_commit_sha', 'preview_source_repository', 'production_content_sha256',
+  'review_session_binding_sha256', 'scope', 'status', 'stripe_account_id_sha256',
+  'subtotal_amount_minor_units', 'tax_amount_minor_units', 'terms_of_service_consent', 'version',
 ]);
 
 function plainObject(value, label) {
@@ -902,6 +920,69 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
   return { canonical, value, digest: sha256Hex(canonical), selectedCheckoutBindingSecret: selectedSecret, stripeMode: expectedStripeMode, legacyV3 };
 }
 
+export function normalizeReviewPaymentEvidence(raw, signature, secret, artifactEvidence, env) {
+  env = requireResolvedHandoffEnvironment(env);
+  const canonical = stringValue(raw, 'Review payment evidence', 2, 100_000);
+  const value = plainObject(JSON.parse(canonical), 'Review payment evidence');
+  exactKeys(value, REVIEW_PAYMENT_FIELDS, 'Review payment evidence');
+  const stripeMode = env.ARC_STRIPE_LIVE_MODE_ENABLED === 'true' ? 'live' : 'test';
+  if (canonicalJson(value) !== canonical || value.version !== REVIEW_PAYMENT_EVIDENCE_VERSION ||
+      value.scope !== REVIEW_PAYMENT_EVIDENCE_SCOPE || artifactEvidence.version !== ARTIFACT_EVIDENCE_VERSION ||
+      typeof secret !== 'string' || secret.length < 32 || secret.length > 512 ||
+      !safeEqual(hex64(signature, 'Review payment evidence signature'), hmacHex(secret,
+        `${REVIEW_PAYMENT_SIGNATURE_PREFIX}${stripeMode}\n${canonical}`))) {
+    throw new TypeError('Review payment evidence is invalid, unsigned, or not canonical.');
+  }
+  for (const field of REVIEW_PAYMENT_FIELDS.filter(name => name.endsWith('_sha256'))) {
+    hex64(value[field], `Review payment ${field}`);
+  }
+  const checkoutPattern = stripeMode === 'live' ? /^cs_live_[A-Za-z0-9_]+$/ : /^cs_test_[A-Za-z0-9_]+$/;
+  const amountValid = Number.isSafeInteger(value.subtotal_amount_minor_units) &&
+    value.subtotal_amount_minor_units === 500_000 &&
+    Number.isSafeInteger(value.tax_amount_minor_units) && value.tax_amount_minor_units >= 0 &&
+    value.tax_amount_minor_units <= 500_000 && Number.isSafeInteger(value.amount_total_minor_units) &&
+    value.amount_total_minor_units === value.subtotal_amount_minor_units + value.tax_amount_minor_units;
+  if (!checkoutPattern.test(value.checkout_session_id) || !/^pi_[A-Za-z0-9_]{6,128}$/.test(value.payment_intent_id) ||
+      value.payment_link_id !== null || value.livemode !== (stripeMode === 'live') || value.mode !== 'payment' ||
+      value.status !== 'complete' || value.payment_status !== 'paid' || value.currency !== 'usd' || !amountValid ||
+      value.automatic_tax_enabled !== true || value.automatic_tax_status !== 'complete' ||
+      value.terms_of_service_consent !== 'accepted' || value.adult_purchaser_acknowledgement !== 'accepted' ||
+      !/^[A-Z]{2}$/.test(value.customer_address_country) ||
+      (value.customer_address_country === 'US' && !/^[A-Z]{2}$/.test(value.customer_address_state)) ||
+      !/^[A-Z0-9-]{0,10}$/.test(value.customer_address_state) ||
+      !/^[a-z0-9][a-z0-9-]*-[a-f0-9]{8}$/.test(value.preview_folder) ||
+      value.preview_source_repository !== 'arcwebhq-cpu/arc-previews' ||
+      !/^[a-f0-9]{40}$/.test(value.preview_source_commit_sha)) {
+    throw new TypeError('Review payment provider semantics are invalid.');
+  }
+  if (!safeEqual(value.checkout_session_id_hmac_sha256, hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `stripe-checkout-session-id-v1\n${value.checkout_session_id}`)) ||
+      !safeEqual(value.payment_intent_id_hmac_sha256, hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+        `stripe-checkout-payment-intent-id-v1\n${value.payment_intent_id}`)) ||
+      !safeEqual(value.client_reference_id_sha256, sha256Hex(value.approval_receipt_sha256)) ||
+      !safeEqual(value.artifact_manifest_sha256, artifactEvidence.artifact_manifest_sha256) ||
+      !safeEqual(value.preview_manifest_sha256, artifactEvidence.artifact_manifest_sha256) ||
+      !safeEqual(value.production_content_sha256, artifactEvidence.production_content_sha256) ||
+      !safeEqual(value.preview_content_sha256, artifactEvidence.production_content_sha256) ||
+      !safeEqual(value.handoff_artifact_evidence_sha256, sha256Hex(canonicalJson(artifactEvidence))) ||
+      !safeEqual(value.bundle_fingerprint, artifactEvidence.bundle_fingerprint) ||
+      value.preview_folder !== artifactEvidence.preview_folder ||
+      value.preview_source_repository !== artifactEvidence.preview_source_repository ||
+      value.preview_source_commit_sha !== artifactEvidence.preview_source_commit_sha ||
+      !safeEqual(artifactEvidence.checkout_reference_sha256, sha256Hex(value.approval_receipt_sha256))) {
+    throw new TypeError('Review payment immutable artifact or identity binding is invalid.');
+  }
+  return {
+    canonical,
+    value,
+    digest: sha256Hex(canonical),
+    selectedCheckoutBindingSecret: env.ARC_CHECKOUT_BINDING_SECRET,
+    stripeMode,
+    legacyV3: false,
+    reviewSession: true,
+  };
+}
+
 function exactQuotedAttribute(attributes, name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const mentions = [...attributes.matchAll(new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|$)`, 'gi'))];
@@ -954,7 +1035,7 @@ function extractLegacyNetlifyFormName(indexBytes) {
   return validateFormName(nameMatch[2]);
 }
 
-export function normalizeStartPayload(input, env, now = new Date(), options = {}) {
+function normalizeStartPayloadWithKind(input, env, now = new Date(), options = {}, kind = 'payment-link') {
   plainObject(input, 'Start payload');
   exactKeys(input, [
     'artifact_evidence',
@@ -970,14 +1051,22 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
     env.ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET, artifact.value.version)) {
     throw new TypeError('Artifact evidence signature mismatch.');
   }
-  const payment = normalizePaymentEvidence(
-    input.payment_evidence,
-    input.payment_evidence_hmac_sha256,
-    env.ARC_CHECKOUT_BINDING_SECRET,
-    artifact.value,
-    env,
-    options,
-  );
+  const payment = kind === 'review-session'
+    ? normalizeReviewPaymentEvidence(
+      input.payment_evidence,
+      input.payment_evidence_hmac_sha256,
+      env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
+      artifact.value,
+      env,
+    )
+    : normalizePaymentEvidence(
+      input.payment_evidence,
+      input.payment_evidence_hmac_sha256,
+      env.ARC_CHECKOUT_BINDING_SECRET,
+      artifact.value,
+      env,
+      options,
+    );
   const deployArtifacts = normalizeDeployArtifacts(input.deploy_artifacts, artifact.artifacts);
   const bundleHash = createHash('sha256');
   for (const artifactEntry of deployArtifacts) bundleHash.update(artifactEntry.path).update('\0').update(artifactEntry.bytes).update('\0');
@@ -1019,6 +1108,14 @@ export function normalizeStartPayload(input, env, now = new Date(), options = {}
     }
   }
   return { artifact, payment, deployArtifacts, leadEmail, leadRouteRecipientHmacSha256: recipientHmac, formName, legacyV3 };
+}
+
+export function normalizeStartPayload(input, env, now = new Date(), options = {}) {
+  return normalizeStartPayloadWithKind(input, env, now, options, 'payment-link');
+}
+
+export function normalizeReviewStartPayload(input, env, now = new Date(), options = {}) {
+  return normalizeStartPayloadWithKind(input, env, now, options, 'review-session');
 }
 
 export function handoffKey(paymentEvidence, stateSecret) {

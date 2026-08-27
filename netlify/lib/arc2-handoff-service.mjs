@@ -26,6 +26,7 @@ import {
   netlifyClaimUrl,
   normalizeClaimWebhook,
   normalizeProductionUrl,
+  normalizeReviewStartPayload,
   normalizeStartPayload,
   netlifyRequest,
   pollDeployReady,
@@ -53,9 +54,13 @@ import {
   assertHandoffFulfillmentAllowed,
 } from './stripe-reversal-core.mjs';
 import {
+  STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA,
   assertHandoffStripeCheckoutPaid,
+  bindStripeReviewCheckoutToHandoff,
   bindStripeCheckoutToHandoff,
 } from './stripe-checkout-core.mjs';
+import { readReviewEmailRecipientControl } from './review-email-recipient-control-core.mjs';
+import { assertReviewCheckoutFulfillmentAllowed } from './review-checkout-revocation-core.mjs';
 
 const LEAD_ROUTE_RECEIPT_VERSION = 'arc2-lead-route-inbox-receipt-v1';
 const LEAD_ROUTE_RECEIPT_SCOPE = 'authoritative-lead-route-inbox-receipt';
@@ -109,6 +114,8 @@ const PRE_INVITATION_STATES = new Set([
 ]);
 
 const PROVIDER_STAGE_BUDGET_MS = 8_000;
+export const REVIEW_HANDOFF_START_RECEIPT_SCHEMA = 'arc2-review-handoff-start-receipt-v2';
+export const REVIEW_HANDOFF_START_RECEIPT_PREFIX = 'arc2-review-handoff-start-receipt-signature-v2\n';
 
 function providerStageDeadline(adapters) {
   if (Number.isFinite(adapters.providerStageDeadlineMs)) return adapters.providerStageDeadlineMs;
@@ -174,6 +181,44 @@ function checkoutReferenceIndexValue(handoffId, normalized) {
     preview_source_commit_sha: normalized.payment.value.preview_source_commit_sha,
     payment_evidence_sha256: normalized.payment.digest,
     artifact_evidence_sha256: normalized.artifact.digest,
+  };
+}
+
+function reviewCheckoutReferenceIndexValue(handoffId, normalized) {
+  return {
+    schema: 'arc2-review-checkout-reference-index-v1',
+    client_reference_id_sha256: normalized.payment.value.client_reference_id_sha256,
+    checkout_session_id_hmac_sha256: normalized.payment.value.checkout_session_id_hmac_sha256,
+    payment_intent_id_hmac_sha256: normalized.payment.value.payment_intent_id_hmac_sha256,
+    payment_link_id_hmac_sha256: null,
+    bridge_immutable_binding_sha256: normalized.payment.value.bridge_immutable_binding_sha256,
+    review_session_binding_sha256: normalized.payment.value.review_session_binding_sha256,
+    handoff_id: handoffId,
+    preview_source_commit_sha: normalized.payment.value.preview_source_commit_sha,
+    payment_evidence_sha256: normalized.payment.digest,
+    artifact_evidence_sha256: normalized.artifact.digest,
+  };
+}
+
+function reviewDuplicatePaymentValue(winner, normalized, env) {
+  const unsigned = {
+    schema: 'arc2-review-duplicate-payment-review-v1',
+    status: 'CRITICAL_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED',
+    automatic_refund_requested: false,
+    checkout_reference_sha256: normalized.payment.value.client_reference_id_sha256,
+    winning_checkout_session_id_hmac_sha256: winner.checkout_session_id_hmac_sha256,
+    duplicate_checkout_session_id_hmac_sha256: normalized.payment.value.checkout_session_id_hmac_sha256,
+    winning_payment_link_id_hmac_sha256: null,
+    duplicate_payment_link_id_hmac_sha256: null,
+    winning_handoff_id: winner.handoff_id,
+    winning_payment_evidence_sha256: winner.payment_evidence_sha256,
+    winning_artifact_evidence_sha256: winner.artifact_evidence_sha256,
+    duplicate_payment_evidence_sha256: normalized.payment.digest,
+  };
+  return {
+    ...unsigned,
+    review_hmac_sha256: hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+      `arc2-review-duplicate-payment-review-signature-v1\n${canonicalJson(unsigned)}`),
   };
 }
 
@@ -273,14 +318,56 @@ async function assertProviderMutationAllowed(record, env, adapters, operation) {
 }
 
 async function assertCheckoutAndReversalAllowed(record, env, adapters, reversalOptions = {}) {
-  await assertHandoffStripeCheckoutPaid(
+  const checkout = await assertHandoffStripeCheckoutPaid(
     adapters.store,
     record.handoff_id,
     record.payment_evidence_sha256,
     env,
     { accountFetch: adapters.stripeAccountFetch },
   );
+  const reviewBinding = checkout.binding?.schema === STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA;
+  const assertReviewAuthority = async () => {
+    if (!reviewBinding) return;
+    if (!adapters.reviewStore?.getWithMetadata) {
+      throw new Error('ARC_PAYMENT_ARC2_REVIEW_AUTHORITY_REQUIRED');
+    }
+    const binding = checkout.binding;
+    const recipientControl = await readReviewEmailRecipientControl(
+      adapters.reviewStore,
+      binding.recipient_email_sha256,
+      env,
+    );
+    if (!recipientControl || recipientControl.record.state !== 'ACTIVE' ||
+        recipientControl.record.recipient_email_sha256 !== binding.recipient_email_sha256) {
+      throw new Error('ARC_PAYMENT_ARC2_REVIEW_REQUIRED');
+    }
+    const authority = await assertReviewCheckoutFulfillmentAllowed(
+      adapters.reviewStore,
+      binding.approval_receipt_sha256,
+      env,
+    );
+    const metadata = checkout.summary?.review_checkout_binding;
+    const sessionIdHmac = hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-session-id-v1\n${authority.session_id}`,
+    );
+    if (!metadata || authority.approval_receipt_sha256 !== binding.approval_receipt_sha256 ||
+        authority.recipient_email_sha256 !== binding.recipient_email_sha256 ||
+        authority.invite_hmac_sha256 !== metadata.invite_hmac_sha256 ||
+        authority.preview_manifest_sha256 !== metadata.preview_manifest_sha256 ||
+        authority.scope_version !== metadata.scope_version ||
+        authority.session_livemode !== binding.livemode ||
+        authority.integration_identifier !== env.ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER ||
+        !safeEqual(sessionIdHmac, binding.checkout_session_id_hmac_sha256)) {
+      throw new Error('ARC_PAYMENT_ARC2_REVIEW_REQUIRED');
+    }
+  };
+  await assertReviewAuthority();
   await assertHandoffFulfillmentAllowed(adapters.store, record.handoff_id, env, reversalOptions);
+  // These authorities live in separate durable stores. Re-read the review
+  // control after the Stripe reversal guard so a complaint/revocation racing
+  // the payment check cannot authorize the following provider mutation.
+  await assertReviewAuthority();
 }
 
 async function clearRetryableProviderIntent(adapters, key, entry, attemptedField, attemptedValue, completedField, clock) {
@@ -507,10 +594,13 @@ async function ensureLeadHook(entry, key, leadEmail, env, adapters) {
   return entry;
 }
 
-export async function startHandoff(input, env, adapters = {}) {
+async function startHandoffByKind(input, env, adapters = {}, paymentKind = 'payment-link') {
   const clock = adapters.clock || (() => new Date());
   const fetchImpl = adapters.fetch || fetch;
-  let normalized = normalizeStartPayload(input, env, clock(), { enforceFreshness: false, allowLegacyV3: true });
+  const reviewSession = paymentKind === 'review-session';
+  let normalized = reviewSession
+    ? normalizeReviewStartPayload(input, env, clock(), { enforceFreshness: false })
+    : normalizeStartPayload(input, env, clock(), { enforceFreshness: false, allowLegacyV3: true });
   normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
   if (normalized.payment.value.client_reference_mismatch_review_required) {
     throw new Error('ARC2_CHECKOUT_REFERENCE_REVIEW_REQUIRED');
@@ -521,7 +611,9 @@ export async function startHandoff(input, env, adapters = {}) {
   const checkoutIndexKey = checkoutSessionIndexKey(normalized.payment.value, env);
   const checkoutIndexValue = checkoutSessionIndexValue(handoffId, normalized);
   const referenceIndexKey = checkoutReferenceIndexKey(normalized.payment.value, env);
-  const referenceIndexValue = checkoutReferenceIndexValue(handoffId, normalized);
+  const referenceIndexValue = reviewSession
+    ? reviewCheckoutReferenceIndexValue(handoffId, normalized)
+    : checkoutReferenceIndexValue(handoffId, normalized);
   const checkoutReservation = await readIndex(adapters.store, checkoutIndexKey);
   const referenceReservation = await readIndex(adapters.store, referenceIndexKey);
   const existedAtStart = Boolean(entry);
@@ -529,7 +621,7 @@ export async function startHandoff(input, env, adapters = {}) {
   const exactEntry = Boolean(entry && exactReplay(entry.record, normalized));
   const exactCheckoutReservation = Boolean(checkoutReservation && canonicalJson(checkoutReservation) === canonicalJson(checkoutIndexValue));
   const exactReferenceReservation = Boolean(referenceReservation && canonicalJson(referenceReservation) === canonicalJson(referenceIndexValue));
-  if (normalized.legacyV3 && !exactEntry && !exactCheckoutReservation && !exactReferenceReservation) {
+  if (!reviewSession && normalized.legacyV3 && !exactEntry && !exactCheckoutReservation && !exactReferenceReservation) {
     throw new Error('ARC2_LEGACY_V3_NEW_START_REJECTED');
   }
   if (entry && !exactReplay(entry.record, normalized)) throw new Error('ARC2_IDEMPOTENCY_CONFLICT');
@@ -538,20 +630,24 @@ export async function startHandoff(input, env, adapters = {}) {
   }
   if (referenceReservation && canonicalJson(referenceReservation) !== canonicalJson(referenceIndexValue)) {
     await ensureImmutableIndex(adapters.store, duplicatePaymentReviewKey(normalized, env),
-      duplicatePaymentReviewValue(referenceReservation, normalized, env));
+      reviewSession
+        ? reviewDuplicatePaymentValue(referenceReservation, normalized, env)
+        : duplicatePaymentReviewValue(referenceReservation, normalized, env));
     throw new Error('ARC2_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED');
   }
   // Only v4 may create a new handoff. Frozen v3 parsing above exists solely to
   // identify an exact durable row/reservation before any Checkout-ledger or
   // provider mutation. A truly brand-new v4 handoff still requires fresh evidence.
   if (!entry && !checkoutReservation && !referenceReservation) {
-    normalized = normalizeStartPayload(input, env, clock());
+    normalized = reviewSession
+      ? normalizeReviewStartPayload(input, env, clock())
+      : normalizeStartPayload(input, env, clock());
     normalized.leadEmailHash = sha256Hex(normalized.leadEmail);
   }
   // Live fulfillment requires a separately authenticated, durable Checkout
   // webhook receipt plus an immutable handoff binding. This remains before
   // any handoff reservation, state mutation, or provider request.
-  await bindStripeCheckoutToHandoff(
+  await (reviewSession ? bindStripeReviewCheckoutToHandoff : bindStripeCheckoutToHandoff)(
     adapters.store,
     handoffId,
     normalized.payment.value,
@@ -568,7 +664,9 @@ export async function startHandoff(input, env, adapters = {}) {
     const winner = await readIndex(adapters.store, referenceIndexKey);
     if (!winner || canonicalJson(winner) === canonicalJson(referenceIndexValue)) throw error;
     await ensureImmutableIndex(adapters.store, duplicatePaymentReviewKey(normalized, env),
-      duplicatePaymentReviewValue(winner, normalized, env));
+      reviewSession
+        ? reviewDuplicatePaymentValue(winner, normalized, env)
+        : duplicatePaymentReviewValue(winner, normalized, env));
     throw new Error('ARC2_DUPLICATE_PAID_SESSION_REVIEW_REQUIRED');
   }
   await ensureImmutableIndex(adapters.store, checkoutIndexKey, checkoutIndexValue);
@@ -671,6 +769,52 @@ export async function startHandoff(input, env, adapters = {}) {
     }
   }
   return { handoffId, record: entry.record, idempotentReplay: existedAtStart, reversalControlReady, claimBearer };
+}
+
+export async function startHandoff(input, env, adapters = {}) {
+  return startHandoffByKind(input, env, adapters, 'payment-link');
+}
+
+function signedReviewStartReceipt(result, payment, env) {
+  const continuationReady = result.reversalControlReady === true &&
+    !PRE_INVITATION_STATES.has(result.record.state);
+  const receipt = {
+    schema: REVIEW_HANDOFF_START_RECEIPT_SCHEMA,
+    accepted: true,
+    handoff_id: result.handoffId,
+    started_at: result.record.created_at,
+    payment_evidence_sha256: result.record.payment_evidence_sha256,
+    artifact_evidence_sha256: result.record.artifact_evidence_sha256,
+    bridge_immutable_binding_sha256: payment.bridge_immutable_binding_sha256,
+    review_session_binding_sha256: payment.review_session_binding_sha256,
+    checkout_session_id_hmac_sha256: payment.checkout_session_id_hmac_sha256,
+    payment_intent_id_hmac_sha256: payment.payment_intent_id_hmac_sha256,
+    recipient_email_sha256: payment.claim_recipient_email_sha256,
+    payer_email_sha256: payment.payer_email_sha256,
+    handoff_state: result.record.state,
+    reversal_control_ready: result.reversalControlReady === true,
+    continuation_ready: continuationReady,
+  };
+  const canonical = canonicalJson(receipt);
+  return Object.freeze({
+    canonical,
+    digest: sha256Hex(canonical),
+    signature: hmacHex(env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
+      `${REVIEW_HANDOFF_START_RECEIPT_PREFIX}${canonical}`),
+    value: Object.freeze(receipt),
+  });
+}
+
+export async function startReviewHandoff(input, env, adapters = {}) {
+  // Capture the already-validated payment before any awaited provider/store
+  // adapter can mutate the caller-owned raw input.
+  const clock = adapters.clock || (() => new Date());
+  const normalized = normalizeReviewStartPayload(input, env, clock(), { enforceFreshness: false });
+  const result = await startHandoffByKind(input, env, adapters, 'review-session');
+  if (!safeEqual(result.record.payment_evidence_sha256, normalized.payment.digest)) {
+    throw new Error('ARC2_REVIEW_PAYMENT_EVIDENCE_CHANGED');
+  }
+  return { ...result, startReceipt: signedReviewStartReceipt(result, normalized.payment.value, env) };
 }
 
 function verifyLeadRouteSignature(signature, raw, prefix, env) {
@@ -1405,20 +1549,35 @@ export async function acknowledgeFinalDelivery(handoffId, evidence, signature, e
   const durablyBound = outboxBefore.status !== 'CLAIMED' || entry.record.state === 'DELIVERED';
   if (!durablyBound) {
     normalizeFinalDeliveryReceipt(evidence, signature, entry.record, env, clock(), { enforceFreshness: true });
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
   }
 
   // First bind this handoff/outbox to one exact signed receipt. Competing
   // receipts cannot reserve provider identities for the same handoff.
+  if (!durablyBound) {
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
+  }
   await makeFinalDeliveryOutboxPending(adapters.store, outboxValues);
-  for (const reservation of reservations) await ensureImmutableIndex(adapters.store, reservation.key, reservation.value);
+  for (const reservation of reservations) {
+    if (!durablyBound) {
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
+    }
+    await ensureImmutableIndex(adapters.store, reservation.key, reservation.value);
+  }
 
   // Blob keys cannot be committed atomically. DELIVERY_ACK_PENDING is the
   // receipt lock/no-resend latch; DELIVERED is terminal. A retry converges the
   // provider reservations, terminal outbox, and handoff before success.
+  if (!durablyBound) {
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
+  }
   await makeFinalDeliveryOutboxTerminal(adapters.store, outboxValues);
   if (entry.record.state === 'DELIVERED') return { handoffId, record: entry.record, idempotentReplay: true };
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!durablyBound) {
+      await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
+    }
     const delivered = transitionRecord(entry.record, 'DELIVERED', {
       delivered_at: receipt.value.delivered_at,
       final_delivery_receipt_sha256: receipt.digest,

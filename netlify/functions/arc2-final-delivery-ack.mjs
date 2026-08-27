@@ -7,6 +7,7 @@ import {
   parseJsonBodyText,
 } from '../lib/arc2-handoff-core.mjs';
 import { acknowledgeFinalDelivery } from '../lib/arc2-handoff-service.mjs';
+import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 
 export default async (request, context = {}) => {
@@ -23,12 +24,13 @@ export default async (request, context = {}) => {
       return jsonResponse(400, { error: 'invalid_delivery_receipt' });
     }
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
+    const reviewStore = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     const result = await acknowledgeFinalDelivery(
       body.handoff_id,
       body.delivery_receipt_evidence,
       body.delivery_receipt_evidence_hmac_sha256,
       process.env,
-      { store },
+      { store, reviewStore, clock: context.clock, stripeAccountFetch: context.stripeAccountFetch },
     );
     if (!result) return jsonResponse(404, { error: 'handoff_not_found' });
     return jsonResponse(200, {

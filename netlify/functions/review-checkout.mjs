@@ -1,5 +1,6 @@
 import { getStore } from '@netlify/blobs';
 import { REVIEW_STORE, createApprovedCheckout, reviewPortalConfiguration } from '../lib/review-flow-core.mjs';
+import { createStripeReviewCheckoutAdapter } from '../lib/stripe-review-checkout-adapter.mjs';
 import {
   readReviewJson,
   requestOriginAllowed,
@@ -19,11 +20,15 @@ export default async (request, context = {}) => {
     const value = await readReviewJson(request, 16);
     if (Object.keys(value).length !== 0) throw new TypeError('Checkout request fields are invalid.');
     const store = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
+    const createCheckout = context.createCheckout || createStripeReviewCheckoutAdapter(process.env, {
+      clock: context.clock,
+      store,
+      stripeClient: context.stripeClient,
+      stripeFactory: context.stripeFactory,
+    });
     const result = await createApprovedCheckout(store, session, process.env, {
       clock: context.clock,
-      // Deliberately absent in the default runtime. A reviewed, idempotent
-      // Stripe Checkout producer must be injected before this endpoint opens.
-      createCheckout: context.createCheckout,
+      createCheckout,
     });
     return reviewJsonResponse(200, { checkout_url: result.checkout_url });
   } catch (error) {

@@ -204,12 +204,15 @@ assert.match(scope, /within seven business days/i);
 assert.match(scope, /30 calendar days of support/i);
 assert.match(scope, /does not include new pages or sections, new integrations, ongoing content changes/i);
 
-// Support remains separate from the sales CTA and must not create another form.
+// Support remains separate from the sales CTA and uses one automated request form.
 assert.match(support, /<link rel="canonical" href="https:\/\/arcweb\.onl\/support\/">/);
-assert.match(support, /by email only/i);
-assert.match(support, /does not provide live chat, an online intake form, or emergency support/i);
+assert.match(support, /<form id="support-form" novalidate>/i);
+assert.match(support, /Send Support Request/);
+assert.match(support, /One simple form/);
 assert.match(support, /30 calendar days of support for reproducible launch-related bugs/i);
-assert.doesNotMatch(support, /<form\b|method="POST"/i);
+assert.doesNotMatch(support, /data-netlify|name="form-name"|method="POST"|mailto:/i);
+assert.doesNotMatch([home, paymentSuccess, privacy, terms, refunds, scope, support].join('\n'),
+  /mailto:|arcwebhq@gmail\.com/i, 'No customer-facing page may require a manual email to ARC.');
 
 // Search indexing includes public policy/support pages and excludes state pages.
 assert.match(robots, /Disallow: \/thank-you\//);
@@ -226,6 +229,8 @@ assert.equal(packageJson.scripts.build, 'node scripts/build-site.mjs');
 const testChain = packageJson.scripts.test.split(' && ');
 for (const required of [
   'node tests/source-contract.mjs',
+  'node tests/support-route-contract.mjs',
+  'node tests/production-route-retry-contract.mjs',
   'npm run build',
   'node tests/build-contract.mjs',
   'node tests/browser-contract.mjs',

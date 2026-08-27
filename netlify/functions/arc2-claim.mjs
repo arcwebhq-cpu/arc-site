@@ -1,6 +1,7 @@
 import { getStore } from '@netlify/blobs';
 import { HANDOFF_STORE, configuredEnvironment, jsonResponse } from '../lib/arc2-handoff-core.mjs';
 import { exchangeClaimBearer } from '../lib/arc2-handoff-service.mjs';
+import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 
 export default async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
@@ -10,8 +11,9 @@ export default async (request, context = {}) => {
   if (!authorization.startsWith('Bearer ') || authorization.length > 256) return jsonResponse(401, { error: 'unauthorized' });
   try {
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
+    const reviewStore = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     const result = await exchangeClaimBearer(handoffId, authorization.slice(7), process.env, {
-      store, stripeAccountFetch: context.stripeAccountFetch,
+      store, reviewStore, stripeAccountFetch: context.stripeAccountFetch,
     });
     return result ? jsonResponse(200, { claim_url: result.claimUrl }) : jsonResponse(404, { error: 'handoff_not_found' });
   } catch (error) {
