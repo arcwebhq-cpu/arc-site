@@ -101,9 +101,9 @@ const projectFormMarkup = home.match(/<form\b[^>]*\bid="projectForm"[^>]*>[\s\S]
 assert.ok(projectFormMarkup, 'The public project form must remain discoverable to its server-contract test.');
 const actualNamedControlFields = [...new Set(
   [...projectFormMarkup.matchAll(/<(?:input|select|textarea)\b[^>]*\bname="([^"]+)"/g)].map((match) => match[1]),
-)].sort();
+)].filter((field) => field !== 'form-name').sort();
 assert.deepEqual(actualNamedControlFields, [...INTAKE_ALLOWED_FIELDS].sort(),
-  'Every distinct named public form control must have an exact server allowlist entry, with no server-only drift.');
+  'Every non-provider public form control must have an exact server allowlist entry, with no server-only drift.');
 
 const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 const pngCrcTable = Array.from({ length: 256 }, (_, value) => {

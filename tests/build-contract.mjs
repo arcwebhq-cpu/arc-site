@@ -36,10 +36,12 @@ const home = await readFile(path.join(dist, 'index.html'), 'utf8');
 const support = await readFile(path.join(dist, 'support/index.html'), 'utf8');
 const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
 const activationBuildIdentity = await readFile(path.join(root, 'netlify/lib/activation-build-identity.mjs'), 'utf8');
-assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/, 'Disabled production build must not register or expose a directly postable Netlify form.');
-assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
-assert.match(home, /data-intake-enabled="false"/);
-assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
+assert.match(home, /<form\b[^>]*action="\/thank-you\/"[^>]*data-intake-enabled="true"[^>]*data-netlify="true"[^>]*method="POST"[^>]*name="arc-preview"[^>]*netlify-honeypot="bot-field"/i,
+  'Production must register the active native ARC preview form.');
+assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/,
+  'The native form must post the exact name consumed by ARC1.');
+assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
+  'Production intake must not depend on the unused first-party readiness path.');
 const intakeCtas = [...home.matchAll(/<a\b[^>]*\bdata-intake-cta\b[^>]*>[\s\S]*?<\/a>/g)].map((match) => match[0]);
 assert.equal(intakeCtas.length, 2, 'The homepage must expose exactly two intake actions.');
 for (const cta of intakeCtas) {
@@ -52,10 +54,10 @@ assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise an emai
 const intakeStatus = home.match(/<div\b[^>]*\bid="intakeStatus"[^>]*>[\s\S]*?<\/div>/)?.[0] || '';
 assert.match(intakeStatus, /\brole="status"/);
 assert.match(intakeStatus, /\baria-live="polite"/);
-assert.match(intakeStatus, /Free preview requests are (?:currently|temporarily) paused\./i,
-  'The compiled-closed page must plainly disclose that preview requests are paused.');
-assert.match(home, /<form\b[^>]*\baria-disabled="true"[^>]*\bdata-intake-enabled="false"[^>]*\binert\b/i,
-  'The compiled-closed form must remain inert and semantically disabled.');
+assert.match(intakeStatus, /Free preview requests are open\./i,
+  'The production page must plainly disclose that preview requests are open.');
+assert.match(home, /<form\b[^>]*\baria-disabled="false"[^>]*\bdata-intake-enabled="true"/i,
+  'The production form must remain active and semantically enabled.');
 assert.match(home, /See Your New Website Before You Pay\./i,
   'The homepage must lead with the preview-before-payment promise.');
 assert.match(home, /Get a custom five-page preview free\. Approve it, then pay\./i,
@@ -66,7 +68,8 @@ for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta
 assert.doesNotMatch(home, /Secure Stripe checkout after preview approval\./,
   'The footer must not repeat sales-flow fine print.');
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
-assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
+assert.match(intakeBuildMarker, /intake_enabled: false/,
+  'The unused advanced Function bundle must remain fail-closed by default.');
 assert.match(activationBuildIdentity, /"deployment_sha": null/,
   'A local/default build without COMMIT_REF must leave activation authority fail-closed.');
 assert.match(home, /data-analytics-build-enabled="false"/,

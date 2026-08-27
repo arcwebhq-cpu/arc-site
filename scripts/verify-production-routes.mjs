@@ -95,14 +95,6 @@ await Promise.all([
         `${functionName} must not remain exposed at Netlify's default Function path.`);
     },
   })),
-  fetchAndVerifyWithRetries({
-    label: '/api/intake/readiness',
-    fetchResponse: timeoutMs => fetchExact(`${origin}/api/intake/readiness`, { timeoutMs }),
-    verifyResponse: async response => {
-      assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { schema: 'arc-intake-readiness-v1', intake_enabled: false });
-    },
-  }),
   ...staticRoutes.map(async ([path, localPath]) => {
     const localBytes = await readFile(new URL(localPath, import.meta.url));
     return fetchAndVerifyWithRetries({
@@ -112,6 +104,15 @@ await Promise.all([
         assert.equal(remoteResponse.status, 200);
         const remoteBytes = Buffer.from(await remoteResponse.arrayBuffer());
         assert.equal(sha256(remoteBytes), sha256(localBytes), `${path} must match the tested build byte-for-byte.`);
+        if (path === '/') {
+          const home = remoteBytes.toString('utf8');
+          assert.match(home, /<form\b[^>]*action="\/thank-you\/"[^>]*data-intake-enabled="true"[^>]*data-netlify="true"[^>]*method="POST"[^>]*name="arc-preview"[^>]*netlify-honeypot="bot-field"/i,
+            'Production must expose the active native ARC preview form.');
+          assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/,
+            'Production must publish the exact form name consumed by ARC1.');
+          assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
+            'Production intake must not depend on the unused first-party readiness path.');
+        }
       },
     });
   }),

@@ -209,16 +209,16 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
 
   <section class="section" id="scope">
     <div class="wrap">
-      <h2 class="section-title small reveal">$5,000 + tax. Five pages.</h2>
+      <h2 class="section-title small reveal">$5,000 once. Five pages.</h2>
       <div class="offer-grid">
         <div class="offer-row reveal"><h3>Five-page website.</h3><div class="scope-copy"><p>Home, Services, About, Process, and Contact.</p></div></div>
         <div class="offer-row reveal"><h3>One clear lead path.</h3><div class="scope-copy"><p>A form, booking link, order link, or phone number.</p></div></div>
         <div class="offer-row reveal"><h3>Ready to launch.</h3><div class="scope-copy"><p>Responsive build, basic accessibility, metadata, and launch setup.</p></div></div>
-        <div class="offer-row reveal"><h3>Two revision rounds.</h3><div class="scope-copy"><p>Two rounds before you decide to buy.</p></div></div>
+        <div class="offer-row reveal"><h3>See it first.</h3><div class="scope-copy"><p>Review all five preview pages before deciding to buy.</p></div></div>
         <div class="offer-row reveal"><h3>You own it.</h3><div class="scope-copy"><p>Ownership after payment, plus 30 days of launch bug support.</p></div></div>
       </div>
       <div class="scope-summary reveal">
-        <div class="scope-note"><strong>Price and timing</strong><p>$5,000 USD + tax. Pay only if you approve. Launch within seven business days after payment, content, and access.</p></div>
+        <div class="scope-note"><strong>Price and timing</strong><p>$5,000 USD once. Pay only if you approve. Your ownership handoff starts automatically after payment.</p></div>
         <div class="scope-note"><strong>Not included</strong><p>Extra pages, domain, hosting, paid tools, ecommerce, and ongoing service cost extra.</p></div>
       </div>
       <a class="scope-link reveal" href="/service-scope/">Full scope →</a>
@@ -243,8 +243,9 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
         <p>We’ll email your five-page preview. Pay only if you approve.</p>
       </div>
       <div class="form-card reveal" id="formCard">
-        <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 3</span></div><div class="bar" id="formProgress" role="progressbar" aria-label="Preview request progress" aria-valuemin="1" aria-valuemax="4" aria-valuenow="1"><span id="barFill"></span></div><div class="form-save" id="saveStatus" role="status" aria-live="polite"></div><div class="intake-status" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are temporarily paused.</div></div>
-        <form action="/api/intake/submit" aria-disabled="true" data-intake-build-enabled="true" data-intake-enabled="false" enctype="multipart/form-data" id="projectForm" inert method="POST" name="arc-preview" novalidate>
+        <div class="form-top"><div class="form-count"><span id="stepName">Business</span><span id="stepCount">1 / 3</span></div><div class="bar" id="formProgress" role="progressbar" aria-label="Preview request progress" aria-valuemin="1" aria-valuemax="4" aria-valuenow="1"><span id="barFill"></span></div><div class="form-save" id="saveStatus" role="status" aria-live="polite"></div><div class="intake-status open" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are open.</div></div>
+        <form action="/thank-you/" aria-disabled="false" data-intake-enabled="true" data-netlify="true" enctype="multipart/form-data" id="projectForm" method="POST" name="arc-preview" netlify-honeypot="bot-field" novalidate>
+          <input type="hidden" name="form-name" value="arc-preview">
           <input type="hidden" name="intake_version" value="arc-intake-v8">
           <input type="hidden" name="offer_contract_id" value="arc-fixed-five-page-offer-v1">
           <input type="hidden" name="submission_request_id" id="submissionRequestId" value="">
@@ -397,7 +398,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
             </details>
               </div>
             </details>
-            <label class="budget"><input id="budget" name="budget_confirmed" value="Yes, understands the finished ARC website is a fixed five-page website with a $5,000 subtotal plus applicable sales tax only after preview approval" type="checkbox" required> The preview is free. If I approve, the website is $5,000 USD + tax.</label>
+            <label class="budget"><input id="budget" name="budget_confirmed" value="Yes, understands the finished ARC website is a fixed five-page website for a one-time $5,000 only after preview approval" type="checkbox" required> I understand the finished five-page website costs $5,000 once, payable only if I approve the preview.</label>
             <label class="budget legal-consent"><input id="termsAccepted" name="terms_accepted" value="Accepted ARC preview terms, privacy policy, refund policy, and fixed five-page service scope dated 2026-08-25; separate adult checkout acceptance required" type="checkbox" required> <span>I’m authorized and accept the <a href="/terms/" target="_blank" rel="noopener">Terms</a>, <a href="/privacy/" target="_blank" rel="noopener">Privacy</a>, <a href="/refunds/" target="_blank" rel="noopener">Refunds</a>, and <a href="/service-scope/" target="_blank" rel="noopener">Scope</a>. I’m not charged today.</span></label>
           </fieldset>
 
@@ -408,7 +409,7 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
           </fieldset>
 
           <div class="error" id="error" role="alert" aria-live="polite"></div>
-          <div class="form-nav"><button class="btn ghost" type="button" id="prev" disabled>Back</button><button class="btn black" type="button" id="next" disabled>Next</button><button class="btn black" type="submit" id="submit" disabled>Request Free Preview</button></div>
+          <div class="form-nav"><button class="btn ghost" type="button" id="prev">Back</button><button class="btn black" type="button" id="next">Next</button><button class="btn black" type="submit" id="submit">Request Free Preview</button></div>
         </form>
       </div>
     </div>
@@ -446,11 +447,6 @@ if(analyticsBuildEnabled){
   try{sessionStorage.removeItem(analyticsSessionKey);sessionStorage.removeItem(pendingAnalyticsKey)}catch(error){}
 }
 const sendAnalytics=payload=>fetch(analyticsEndpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),credentials:'omit',keepalive:true}).catch(()=>{});
-function fetchWithTimeout(resource,options,timeoutMs){
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),timeoutMs);
-  return fetch(resource,{...options,signal:controller.signal}).finally(()=>clearTimeout(timer));
-}
 const track=(event,details={})=>{
   if(!analyticsBuildEnabled)return;
   const payload={event,event_id:randomId(),session_id:analyticsFields.analyticsSessionId.value,path:location.pathname,...details};
@@ -864,56 +860,30 @@ function validateUploads(){
   }
   return true;
 }
-form.addEventListener('submit',async event=>{
-  event.preventDefault();
-  if(form.dataset.intakeEnabled!=='true'){err.textContent='Free preview requests are temporarily paused.';return}
-  if(submitting)return;
+form.addEventListener('submit',event=>{
+  if(submitting){event.preventDefault();return}
 
   const incomplete=firstIncompleteStep();
   if(incomplete!==-1){
+    event.preventDefault();
     showStep(incomplete);
     validStep();
     return;
   }
-  if(!validateUploads())return;
+  if(!validateUploads()){event.preventDefault();return}
 
+  ensureSubmissionRequestId();
   submitting=true;
   submit.disabled=true;
   submit.textContent='Sending...';
   form.setAttribute('aria-busy','true');
-  try{
-    ensureSubmissionRequestId();
-    const response=await fetchWithTimeout('/api/intake/submit',{method:'POST',body:new FormData(form),credentials:'omit',redirect:'error',referrerPolicy:'same-origin'},60000);
-    const value=await response.json();
-    const accepted=(response.status===200||response.status===201)&&value&&Object.keys(value).sort().join(',')==='accepted,schema,submission_id'&&value.schema==='arc-intake-submission-accepted-v1'&&value.accepted===true&&/^[0-9a-f-]{36}$/i.test(value.submission_id);
-    if(!accepted)throw new Error(response.status===503?'INTAKE_DISABLED':response.status===409?'INTAKE_CONFLICT':'INTAKE_REJECTED');
-    try{localStorage.removeItem(draftKey)}catch(error){}
-    if(analyticsBuildEnabled)try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
-      event:'arc_preview_request',event_id:randomId(),
-      session_id:analyticsFields.analyticsSessionId.value,path:'/thank-you/',expires_at:Date.now()+30*60*1000
-    }))}catch(error){}
-    location.assign('/thank-you/');
-  }catch(error){
-    submitting=false;form.removeAttribute('aria-busy');submit.textContent='Request Free Preview';
-    const paused=error.message==='INTAKE_DISABLED';
-    const conflict=error.message==='INTAKE_CONFLICT';
-    const timedOut=error?.name==='AbortError';
-    err.textContent=paused?'Free preview requests are temporarily paused.':conflict?'This request was already received. Your answers are still saved here.':timedOut?'We could not confirm delivery. Your answers are still here; try again.':'Your request was not saved. Your answers are still here; try again.';
-    if(paused)setIntakeAvailability(false);else submit.disabled=conflict;
-  }
+  if(analyticsBuildEnabled)try{sessionStorage.setItem(pendingAnalyticsKey,JSON.stringify({
+    event:'arc_preview_request',event_id:randomId(),
+    session_id:analyticsFields.analyticsSessionId.value,path:'/thank-you/',expires_at:Date.now()+30*60*1000
+  }))}catch(error){}
 });
-function setIntakeAvailability(enabled){
-  form.dataset.intakeEnabled=enabled?'true':'false';form.setAttribute('aria-disabled',String(!enabled));form.toggleAttribute('inert',!enabled);
-  [prev,next,submit].forEach(button=>button.disabled=!enabled);intakeStatus.classList.toggle('open',enabled);
-  intakeCtas.forEach(link=>{link.href='#start';link.textContent='Get Free Preview'});
-  intakeStatus.textContent=enabled?'Free preview requests are open.':'Free preview requests are temporarily paused.';
-}
-async function configureIntake(){
-  setIntakeAvailability(false);
-  try{const response=await fetchWithTimeout('/api/intake/readiness',{headers:{accept:'application/json'},credentials:'omit',cache:'no-store'},8000);const value=await response.json();const exact=value&&Object.keys(value).sort().join(',')==='intake_enabled,schema'&&value.schema==='arc-intake-readiness-v1'&&value.intake_enabled===true;setIntakeAvailability(form.dataset.intakeBuildEnabled==='true'&&response.ok&&exact)}catch(error){setIntakeAvailability(false)}
-}
-window.addEventListener('pageshow',event=>{resetSubmitButton();if(event.persisted)configureIntake()});
-restoreDraft();ensureSubmissionRequestId();updateCTA();updateAssetPanels();updateProofPanel();showStep(0,false,false);configureIntake();
+window.addEventListener('pageshow',resetSubmitButton);
+restoreDraft();ensureSubmissionRequestId();updateCTA();updateAssetPanels();updateProofPanel();showStep(0,false,false);resetSubmitButton();
 </script>
 </body>
 </html>

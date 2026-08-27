@@ -59,26 +59,6 @@ if (!analyticsBuildEnabled) {
   }
 }
 
-if (!intakeBuildEnabled) {
-  // Production intake is deliberately compiled closed. Keeping the form fields
-  // in source supports local QA, but the default deploy must not expose a POST.
-  // Even an explicitly enabled build submits only through the runtime-gated
-  // Function; native Netlify Forms registration is never deployed.
-  const builtHomePath = path.join(output, 'index.html');
-  const builtHome = await readFile(builtHomePath, 'utf8');
-  const closedHome = builtHome
-    .replace(' data-intake-build-enabled="true"', ' data-intake-build-enabled="false"')
-    .replace(' action="/api/intake/submit"', ' action="/"')
-    .replace(' enctype="multipart/form-data"', '')
-    .replace(' method="POST" name="arc-preview"', ' name="arc-preview"');
-  if (closedHome === builtHome || !/data-intake-build-enabled="false"/.test(closedHome) ||
-      /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/.test(closedHome) ||
-      /<form\b[^>]*action="\/api\/intake\/submit"/.test(closedHome)) {
-    throw new Error('Production intake could not be compiled fail-closed.');
-  }
-  await writeFile(builtHomePath, closedHome);
-}
-
 const built = (await readdir(output)).sort();
 if (JSON.stringify(built) !== JSON.stringify([...publicEntries].sort())) {
   throw new Error(`Unexpected deploy output: ${built.join(', ')}`);
