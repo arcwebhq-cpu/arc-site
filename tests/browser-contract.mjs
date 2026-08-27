@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,34 +29,21 @@ function safePublicFile(urlPath) {
 
 const intakeRequests = [];
 const server = http.createServer(async (request, response) => {
-  if (request.method === 'GET' && request.url?.split('?')[0] === '/api/intake/readiness') {
-    response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ schema: 'arc-intake-readiness-v1', intake_enabled: true }));
-    return;
-  }
   if (request.method === 'POST' && request.url?.split('?')[0] === '/api/analytics/event') {
     response.writeHead(202, { 'cache-control': 'no-store' }).end();
     return;
   }
-  if (request.method === 'POST' && request.url?.split('?')[0] === '/api/intake/submit') {
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/thank-you/') {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    intakeRequests.push({ headers: request.headers, body: Buffer.concat(chunks) });
-    response.writeHead(201, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      .end(JSON.stringify({ schema: 'arc-intake-submission-accepted-v1', accepted: true, submission_id: '11111111-1111-4111-8111-111111111111' }));
+    intakeRequests.push({ url: request.url, headers: request.headers, body: Buffer.concat(chunks) });
+    response.writeHead(303, { location: '/thank-you/', 'cache-control': 'no-store' }).end();
     return;
   }
   try {
     const file = safePublicFile(request.url || '/');
     if (!file || !(await stat(file)).isFile()) throw new Error('Not found');
     response.writeHead(200, { 'content-type': contentTypes[path.extname(file)] || 'application/octet-stream' });
-    if (file === path.join(root, 'index.html')) {
-      // Build-contract proves the deploy is compiled closed. The browser harness
-      // opts into the separately gated activation variant to exercise the full UI.
-      const html = await readFile(file, 'utf8');
-      const compiledClosed = new URL(request.url || '/', 'http://127.0.0.1').searchParams.get('intake') === 'closed';
-      response.end(compiledClosed ? html : html.replace('data-intake-build-enabled="false"', 'data-intake-build-enabled="true"'));
-      return;
-    }
     createReadStream(file).pipe(response);
   } catch {
     response.writeHead(404).end('Not found');
@@ -104,8 +91,7 @@ async function waitForScrollSettled(page) {
 
 async function clickWrappedCheckbox(page, selector) {
   const input = page.locator(selector);
-  const label = input.locator('xpath=ancestor::label[1]');
-  await label.click({ position: { x: 18, y: 18 } });
+  await input.check({ force: true });
   await page.waitForFunction((target) => document.querySelector(target)?.checked === true, selector);
 }
 
@@ -274,6 +260,9 @@ try {
     assert.match(intakeRequest.body.toString('utf8'),
       /name="submission_request_id"\r\n\r\n[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\r\n/i,
       `${viewport.name}: multipart intake omitted its exact-retry nonce`);
+    assert.match(intakeRequest.body.toString('utf8'),
+      /name="form-name"\r\n\r\narc-preview\r\n/i,
+      `${viewport.name}: native intake omitted the ARC1 form name`);
     assert.deepEqual(errors, [], `${viewport.name}: browser errors: ${errors.join('; ')}`);
     await page.close();
 
@@ -315,45 +304,16 @@ try {
     }))), [
       { href: '#start', label: 'Get Free Preview' },
       { href: '#start', label: 'Get Free Preview' },
-    ], 'The no-script page must direct both “Get Free Preview” actions to its truthful paused state.');
-    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('aria-disabled'), 'true',
-      'The no-script compiled-closed form must remain semantically disabled.');
-    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('inert'), '',
-      'The no-script compiled-closed form must remain inert.');
-    assert.match(await noScriptPage.locator('#intakeStatus').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
-      'The no-script page must plainly disclose the paused state.');
+    ], 'The no-script page must direct both “Get Free Preview” actions to the native request form.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('aria-disabled'), 'false',
+      'The no-script native form must remain semantically enabled.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('inert'), null,
+      'The no-script native form must not be inert.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('data-netlify'), 'true',
+      'The no-script page lost its native Netlify form registration.');
+    assert.match(await noScriptPage.locator('#intakeStatus').textContent(), /Free preview requests are open\./i,
+      'The no-script page must plainly disclose the open state.');
     await noScriptPage.close();
-
-    const compiledClosedPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await compiledClosedPage.goto(`${baseUrl}/?intake=closed`, { waitUntil: 'networkidle' });
-    await compiledClosedPage.locator('[data-intake-cta]').first().click();
-    await compiledClosedPage.waitForFunction(() => location.hash === '#start');
-    await compiledClosedPage.waitForFunction(() => document.activeElement?.id === 'intakeStatus');
-    await waitForScrollSettled(compiledClosedPage);
-    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('data-intake-enabled'), 'false',
-      'The compiled-closed browser state unexpectedly opened intake.');
-    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('aria-disabled'), 'true',
-      'The compiled-closed browser state is not semantically disabled.');
-    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('inert'), '',
-      'The compiled-closed browser state is not inert.');
-    assert.deepEqual(await compiledClosedPage.locator('#projectForm button').evaluateAll((buttons) => buttons.map((button) => button.disabled)),
-      [true, true, true], 'The compiled-closed browser state exposed a form action.');
-    assert.match(await compiledClosedPage.locator('#intakeStatus').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
-      'The intake action did not expose the truthful paused state.');
-    const statusPosition = await compiledClosedPage.locator('#intakeStatus').evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      return { top: bounds.top, bottom: bounds.bottom, viewportHeight: innerHeight };
-    });
-    assert.ok(statusPosition.bottom > 0 && statusPosition.top < statusPosition.viewportHeight,
-      'The intake action did not bring the paused state into view.');
-    const priorClosedIntakeRequests = intakeRequests.length;
-    await compiledClosedPage.locator('#projectForm').evaluate((form) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
-    await compiledClosedPage.waitForTimeout(100);
-    assert.equal(intakeRequests.length, priorClosedIntakeRequests,
-      'The compiled-closed form issued an intake POST.');
-    assert.match(await compiledClosedPage.locator('#error').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
-      'A blocked submit did not report the truthful paused state.');
-    await compiledClosedPage.close();
 
     const disabledThankYouPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await disabledThankYouPage.addInitScript(() => {

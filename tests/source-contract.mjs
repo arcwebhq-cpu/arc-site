@@ -79,13 +79,13 @@ assert.match(home, /Concept previews — not client work\./);
 assert.match(home, /<h2 class="section-title reveal">ARC website concepts\.<\/h2>/);
 assert.doesNotMatch(home, /showcase-label|work-kicker|View preview/i,
   'The homepage must not repeat tiny showcase badges or card helper labels.');
-assert.match(home, /<h2 class="section-title small reveal">\$5,000 \+ tax\. Five pages\.<\/h2>/);
+assert.match(home, /<h2 class="section-title small reveal">\$5,000 once\. Five pages\.<\/h2>/);
 assert.match(home, /Five-page website\.[\s\S]*?Home, Services, About, Process, and Contact\./);
 assert.match(home, /One clear lead path\.[\s\S]*?A form, booking link, order link, or phone number\./);
 assert.match(home, /Ready to launch\.[\s\S]*?Responsive build, basic accessibility, metadata, and launch setup\./);
-assert.match(home, /Two revision rounds\.[\s\S]*?Two rounds before you decide to buy\./);
+assert.match(home, /See it first\.[\s\S]*?Review all five preview pages before deciding to buy\./);
 assert.match(home, /You own it\.[\s\S]*?Ownership after payment, plus 30 days of launch bug support\./);
-assert.match(home, /\$5,000 USD \+ tax\. Pay only if you approve\. Launch within seven business days after payment, content, and access\./);
+assert.match(home, /\$5,000 USD once\. Pay only if you approve\. Your ownership handoff starts automatically after payment\./);
 assert.match(home, /Extra pages, domain, hosting, paid tools, ecommerce, and ongoing service cost extra\./);
 assert.doesNotMatch(home, /bank or card issuer|currency conversion|destination address/i,
   'Detailed purchase caveats belong on policy pages, not the sales homepage.');
@@ -96,39 +96,24 @@ for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta
     `Homepage clutter class ${removedClass} must stay removed.`);
 }
 
-// Source intake is visibly and semantically closed until a positive readiness
-// result is proven. The separate build contract checks the compiled output.
-assert.match(home, /<div class="intake-status" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are temporarily paused\.<\/div>/);
-assert.match(home, /<form\b[^>]*\baria-disabled="true"[^>]*\bdata-intake-enabled="false"[^>]*\binert\b[^>]*>/i);
-assert.match(home, /<button class="btn ghost" type="button" id="prev" disabled>/);
-assert.match(home, /<button class="btn black" type="button" id="next" disabled>/);
-assert.match(home, /<button class="btn black" type="submit" id="submit" disabled>Request Free Preview<\/button>/);
-assert.match(home, /function setIntakeAvailability\(enabled\)/);
-assert.match(home, /form\.dataset\.intakeEnabled=enabled\?'true':'false'/);
-assert.match(home, /form\.setAttribute\('aria-disabled',String\(!enabled\)\)/);
-assert.match(home, /form\.toggleAttribute\('inert',!enabled\)/);
-assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href='#start';link\.textContent='Get Free Preview'\}\)/);
-assert.match(home, /intakeStatus\.textContent=enabled\?'Free preview requests are open\.':'Free preview requests are temporarily paused\.'/);
-assert.match(home, /async function configureIntake\(\)\{\s*setIntakeAvailability\(false\)/,
-  'Readiness must begin closed.');
-assert.match(home, /const exact=value&&Object\.keys\(value\)\.sort\(\)\.join\(','\)==='intake_enabled,schema'[\s\S]*?value\.intake_enabled===true/,
-  'Only the exact positive readiness response may open intake.');
-assert.match(home, /setIntakeAvailability\(form\.dataset\.intakeBuildEnabled==='true'&&response\.ok&&exact\)/);
-assert.match(home, /catch\(error\)\{setIntakeAvailability\(false\)\}/,
-  'Readiness errors must fail closed.');
-assert.match(home, /form\.addEventListener\('submit',async event=>\{\s*event\.preventDefault\(\);\s*if\(form\.dataset\.intakeEnabled!=='true'\)/,
-  'A paused form must be intercepted before submission.');
-assert.match(home, /Free preview requests are temporarily paused\./);
-assert.match(home, /Your answers are still here; try again\./);
+// The production form is a native Netlify form so the existing ARC1 provider
+// trigger receives form-name=arc-preview without a separate readiness gate.
+assert.match(home, /<div class="intake-status open" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are open\.<\/div>/);
+assert.match(home, /<form\b[^>]*\baction="\/thank-you\/"[^>]*\baria-disabled="false"[^>]*\bdata-intake-enabled="true"[^>]*\bdata-netlify="true"[^>]*\bmethod="POST"[^>]*\bname="arc-preview"[^>]*\bnetlify-honeypot="bot-field"[^>]*>/i);
+assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/);
+assert.match(home, /<button class="btn ghost" type="button" id="prev">/);
+assert.match(home, /<button class="btn black" type="button" id="next">/);
+assert.match(home, /<button class="btn black" type="submit" id="submit">Request Free Preview<\/button>/);
+assert.match(home, /form\.addEventListener\('submit',event=>\{/);
+assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
+  'Native intake must not depend on the unused first-party readiness path.');
 assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
 
-// The default build removes the request destination and POST method as a second
-// independent fail-closed layer.
-assert.match(buildScript, /if \(!intakeBuildEnabled\)/);
-assert.match(buildScript, /\.replace\(' data-intake-build-enabled="true"', ' data-intake-build-enabled="false"'\)/);
-assert.match(buildScript, /\.replace\(' action="\/api\/intake\/submit"', ' action="\/"'\)/);
-assert.match(buildScript, /\.replace\(' method="POST" name="arc-preview"', ' name="arc-preview"'\)/);
-assert.match(buildScript, /throw new Error\('Production intake could not be compiled fail-closed\.'\)/);
+// The build preserves the native form while the unused advanced Function bundle
+// retains its separate build marker and fail-closed controls.
+assert.doesNotMatch(buildScript, /Production intake could not be compiled fail-closed/);
+assert.doesNotMatch(buildScript, /action="\/api\/intake\/submit"/);
+assert.match(buildScript, /intake_enabled: \$\{intakeBuildEnabled\}/);
 assert.match(buildScript, /'support'/, 'The support route must be included in the public build allowlist.');
 
 // Form accessibility, data minimization, and local-draft behavior.
@@ -141,7 +126,7 @@ assert.match(home, /field\.setAttribute\('aria-invalid','true'\)/);
 assert.match(home, /if\(first\)\{openAncestorDetails\(first\);first\.scrollIntoView/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /I can legally use these files, and they have no watermarks\./);
-assert.match(home, /The preview is free\. If I approve, the website is \$5,000 USD \+ tax\./);
+assert.match(home, /finished five-page website costs \$5,000 once, payable only if I approve the preview\./);
 assert.match(home, /I(?:’|')m authorized and accept[\s\S]{0,280}I(?:’|')m not charged today\./);
 for (const policyPath of ['/terms/', '/privacy/', '/refunds/', '/service-scope/']) {
   assert.match(home, new RegExp(`href="${policyPath.replaceAll('/', '\\/')}"`));
@@ -186,21 +171,23 @@ assert.doesNotMatch(paymentSuccess, /Payment received|Payment confirmed|moving t
 assert.match(paymentSuccess, /noindex,nofollow,noarchive/i);
 assert.match(paymentSuccess, /<meta name="referrer" content="no-referrer">/);
 
-for (const document of [home, terms, refunds, scope]) {
-  assert.match(document, /\$5,000/);
-  assert.match(document, /applicable sales tax/i);
-}
+for (const document of [home, terms, refunds, scope, paymentSuccess]) assert.match(document, /\$5,000/);
+assert.doesNotMatch([home, terms, refunds, scope, paymentSuccess].join('\n'),
+  /applicable sales tax|destination-based sales tax|\+ tax/i,
+  'Customer-facing pages must present the flat $5,000 price used by live checkout.');
 assert.match(terms, /free preview request applies only to that request and does not authorize a charge/i);
 assert.match(terms, /A preview request is free and does not require a purchase/i);
-assert.match(terms, /paid once after approval of the complete five-page preview/i);
-assert.match(terms, /There is no automatic renewal/i);
+assert.match(terms, /costs \$5,000 USD, paid once after approval of the complete preview/i);
+assert.match(terms, /There is no subscription or automatic renewal/i);
 assert.match(terms, /does not guarantee traffic, search ranking, leads, revenue/i);
 assert.match(refunds, /If you do not approve it, do not purchase it/i);
 assert.match(refunds, /No refund request is needed because no payment was made/i);
 assert.match(scope, /exactly five connected marketing pages/i);
 assert.match(scope, /Home, Services, About, Process, and Contact/);
-assert.match(scope, /Two consolidated revision rounds across the complete five-page preview before purchase/i);
-assert.match(scope, /within seven business days/i);
+assert.match(scope, /Review all five pages before deciding whether to purchase/i);
+assert.match(scope, /ownership handoff starts automatically after successful payment verification/i);
+assert.doesNotMatch([home, terms, scope].join('\n'), /preview revision rounds?|Two revision rounds/i,
+  'The automated offer must not promise a manual pre-purchase revision loop.');
 assert.match(scope, /30 calendar days of support/i);
 assert.match(scope, /does not include new pages or sections, new integrations, ongoing content changes/i);
 
