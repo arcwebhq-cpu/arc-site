@@ -146,8 +146,8 @@ try {
       href: element.getAttribute('href'),
       label: element.textContent.trim(),
     }))), [
-      { href: '#start', label: 'Free Preview' },
-      { href: '#start', label: 'Free Preview' },
+      { href: '#start', label: 'Get Free Preview' },
+      { href: '#start', label: 'Get Free Preview' },
     ], `${viewport.name}: intake actions do not use one clear label and destination`);
     assert.deepEqual(await page.locator('.work-item').evaluateAll((elements) => elements.map((element) => {
       const destination = new URL(element.href);
@@ -313,9 +313,9 @@ try {
       href: element.getAttribute('href'),
       label: element.textContent.trim(),
     }))), [
-      { href: '#start', label: 'Free Preview' },
-      { href: '#start', label: 'Free Preview' },
-    ], 'The no-script page must direct both “Free Preview” actions to its truthful paused state.');
+      { href: '#start', label: 'Get Free Preview' },
+      { href: '#start', label: 'Get Free Preview' },
+    ], 'The no-script page must direct both “Get Free Preview” actions to its truthful paused state.');
     assert.equal(await noScriptPage.locator('#projectForm').getAttribute('aria-disabled'), 'true',
       'The no-script compiled-closed form must remain semantically disabled.');
     assert.equal(await noScriptPage.locator('#projectForm').getAttribute('inert'), '',

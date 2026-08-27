@@ -56,8 +56,8 @@ for (const path of ['/support/', '/service-scope/', '/terms/', '/privacy/', '/re
 
 // The homepage has one plain customer journey: free preview, email delivery,
 // approval, payment, launch, and ownership.
-assert.match(home, /<h1>Get a free five-page website preview\.<\/h1>/);
-assert.match(home, /We(?:’|')ll build it and email it to you\. Pay \$5,000 USD \+ applicable sales tax only if you approve\./);
+assert.match(home, /<h1>See Your New Website Before You Pay\.<\/h1>/);
+assert.match(home, /Get a custom five-page preview free\. Approve it, then pay\./);
 assert.match(home, /<h2>Get your free preview\.<\/h2>/);
 assert.match(home, /We(?:’|')ll email your five-page preview\. Pay only if you approve\./);
 assert.match(home, /<div class="step"><b>1<\/b><h3>Free Preview<\/h3><\/div>/);
@@ -69,7 +69,7 @@ assert.equal(intakeCtas.length, 2, 'Expected exactly the navigation and hero pre
 for (const [, beforeAttribute, afterAttribute, label] of intakeCtas) {
   assert.match(`${beforeAttribute}${afterAttribute}`, /\bhref="#start"/,
     'Every preview action must lead to the on-page request state.');
-  assert.equal(label.trim(), 'Free Preview', 'Every preview action must use the same short label.');
+  assert.equal(label.trim(), 'Get Free Preview', 'Every preview action must use the same short label.');
 }
 assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise a manual email fallback.');
 assert.doesNotMatch(home, /mailto:/i, 'The homepage must not contain a mail link.');
@@ -107,7 +107,7 @@ assert.match(home, /function setIntakeAvailability\(enabled\)/);
 assert.match(home, /form\.dataset\.intakeEnabled=enabled\?'true':'false'/);
 assert.match(home, /form\.setAttribute\('aria-disabled',String\(!enabled\)\)/);
 assert.match(home, /form\.toggleAttribute\('inert',!enabled\)/);
-assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href='#start';link\.textContent='Free Preview'\}\)/);
+assert.match(home, /intakeCtas\.forEach\(link=>\{link\.href='#start';link\.textContent='Get Free Preview'\}\)/);
 assert.match(home, /intakeStatus\.textContent=enabled\?'Free preview requests are open\.':'Free preview requests are temporarily paused\.'/);
 assert.match(home, /async function configureIntake\(\)\{\s*setIntakeAvailability\(false\)/,
   'Readiness must begin closed.');
