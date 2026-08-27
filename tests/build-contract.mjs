@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
-const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'terms', 'thank-you'];
+const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'robots.txt', 'service-scope', 'sitemap.xml', 'support', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
 const files = [];
@@ -24,12 +24,14 @@ for (const forbidden of ['operations/', 'tests/', 'netlify/', 'vendor/', '.githu
 }
 assert.ok(files.includes('index.html'));
 assert.ok(files.includes('privacy/index.html'));
+assert.ok(files.includes('support/index.html'));
 assert.ok(files.includes('assets/legal.css'));
 assert.ok(files.includes('claim/index.html'));
 assert.ok(files.includes('claim/claim.js'));
 assert.ok(files.includes('robots.txt'));
 assert.ok(files.includes('sitemap.xml'));
 const home = await readFile(path.join(dist, 'index.html'), 'utf8');
+const support = await readFile(path.join(dist, 'support/index.html'), 'utf8');
 const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
 const activationBuildIdentity = await readFile(path.join(root, 'netlify/lib/activation-build-identity.mjs'), 'utf8');
 assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|method="POST"/, 'Disabled production build must not register or expose a directly postable Netlify form.');
@@ -49,6 +51,13 @@ assert.match(home, /data-analytics-build-enabled="false"/,
   'Default production build must not invoke automatic analytics collection.');
 assert.match(await readFile(path.join(dist, 'thank-you/index.html'), 'utf8'), /data-analytics-build-enabled="false"/,
   'The default thank-you build must not flush automatic analytics collection.');
+assert.match(support, /href="mailto:arcwebhq@gmail\.com\?subject=ARC%20support%20request"/);
+assert.match(support, /by email only/i);
+assert.match(support, /does not offer 24\/7 monitoring/i);
+assert.match(support, /does not provide live chat, an online intake form, or emergency support/i);
+assert.match(support, /30 calendar days of support for reproducible launch-related bugs/i);
+assert.match(support, /Do not email passwords, payment-card details, checkout credentials/i);
+assert.doesNotMatch(support, /<form\b|data-netlify|name="form-name"|method="POST"/i);
 
 for (const file of files.filter((name) => name.endsWith('.html'))) {
   const html = await readFile(path.join(dist, file), 'utf8');
