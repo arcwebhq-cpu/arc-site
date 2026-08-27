@@ -38,11 +38,31 @@ assert.doesNotMatch(home, /data-netlify=|name="form-name"|netlify-honeypot=|meth
 assert.doesNotMatch(home, /<form\b[^>]*action="\/api\/intake\/submit"/, 'Disabled production build must not expose a postable intake action.');
 assert.match(home, /data-intake-enabled="false"/);
 assert.match(home, /data-intake-build-enabled="false"/, 'Default production build must keep the intake UI compiled closed.');
-assert.equal((home.match(/<a\b[^>]*\bdata-intake-cta\b[^>]*>/g) || []).length, 2, 'Default build must expose two honest intake fallback actions.');
-assert.doesNotMatch(home, /data-intake-cta[^>]*href="#start"/,
-  'Compiled-closed intake actions must not advertise an unavailable online form.');
-assert.match(home, /data-intake-cta[^>]*href="mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request"[^>]*>Email ARC About a Preview<\/a>/);
-assert.match(home, /Online preview requests are paused\.[\s\S]*?Email ARC about a manual preview/);
+const intakeCtas = [...home.matchAll(/<a\b[^>]*\bdata-intake-cta\b[^>]*>[\s\S]*?<\/a>/g)].map((match) => match[0]);
+assert.equal(intakeCtas.length, 2, 'The homepage must expose exactly two intake actions.');
+for (const cta of intakeCtas) {
+  assert.match(cta, /\bhref="#start"/, 'Every intake action must reveal the truthful intake state.');
+  assert.match(cta, />\s*Free Preview\s*<\/a>$/, 'Every intake action must use the exact visible label “Free Preview”.');
+}
+assert.doesNotMatch(home, /mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request/i,
+  'The homepage must not fall back to an unverified preview email path.');
+assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise an email fallback.');
+const intakeStatus = home.match(/<div\b[^>]*\bid="intakeStatus"[^>]*>[\s\S]*?<\/div>/)?.[0] || '';
+assert.match(intakeStatus, /\brole="status"/);
+assert.match(intakeStatus, /\baria-live="polite"/);
+assert.match(intakeStatus, /Free preview requests are (?:currently|temporarily) paused\./i,
+  'The compiled-closed page must plainly disclose that preview requests are paused.');
+assert.match(home, /<form\b[^>]*\baria-disabled="true"[^>]*\bdata-intake-enabled="false"[^>]*\binert\b/i,
+  'The compiled-closed form must remain inert and semantically disabled.');
+assert.match(home, /We(?:’|&#8217;|&rsquo;|')ll build it and email it to you\./i,
+  'The homepage must explain that ARC builds and emails the free preview.');
+assert.match(home, /Pay \$5,000 USD \+ applicable sales tax only if you approve\./i,
+  'The homepage must state that payment follows approval and includes applicable tax.');
+for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta', 'privacy-note', 'process-note', 'review-confirm']) {
+  assert.doesNotMatch(home, new RegExp(`class="[^"]*\\b${removedClass}\\b`), `${removedClass} clutter must not render on the homepage.`);
+}
+assert.doesNotMatch(home, /Secure Stripe checkout after preview approval\./,
+  'The footer must not repeat sales-flow fine print.');
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
 assert.match(intakeBuildMarker, /intake_enabled: false/, 'Default Function bundle marker must match the compiled-closed HTML.');
 assert.match(activationBuildIdentity, /"deployment_sha": null/,

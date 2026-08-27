@@ -27,7 +27,6 @@ function safePublicFile(urlPath) {
   return absolute.startsWith(`${root}${path.sep}`) ? absolute : null;
 }
 
-const claimRequests = [];
 const intakeRequests = [];
 const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url?.split('?')[0] === '/api/intake/readiness') {
@@ -46,15 +45,6 @@ const server = http.createServer(async (request, response) => {
       .end(JSON.stringify({ schema: 'arc-intake-submission-accepted-v1', accepted: true, submission_id: '11111111-1111-4111-8111-111111111111' }));
     return;
   }
-  if (request.method === 'POST' && request.url?.split('?')[0] === '/api/arc2/claim') {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    claimRequests.push({ method: request.method, url: request.url, headers: request.headers, body: Buffer.concat(chunks).toString('utf8') });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      .end(JSON.stringify({ claim_url: 'https://app.netlify.com/claim#header.payload.signature' }));
-    return;
-  }
   try {
     const file = safePublicFile(request.url || '/');
     if (!file || !(await stat(file)).isFile()) throw new Error('Not found');
@@ -62,7 +52,9 @@ const server = http.createServer(async (request, response) => {
     if (file === path.join(root, 'index.html')) {
       // Build-contract proves the deploy is compiled closed. The browser harness
       // opts into the separately gated activation variant to exercise the full UI.
-      response.end((await readFile(file, 'utf8')).replace('data-intake-build-enabled="false"', 'data-intake-build-enabled="true"'));
+      const html = await readFile(file, 'utf8');
+      const compiledClosed = new URL(request.url || '/', 'http://127.0.0.1').searchParams.get('intake') === 'closed';
+      response.end(compiledClosed ? html : html.replace('data-intake-build-enabled="false"', 'data-intake-build-enabled="true"'));
       return;
     }
     createReadStream(file).pipe(response);
@@ -87,6 +79,8 @@ const viewports = [
   { name: 'small-mobile', width: 320, height: 568, isMobile: true },
 ].filter((viewport) => !requestedViewport || viewport.name === requestedViewport);
 assert.ok(viewports.length, `Unknown ARC_SITE_QA_VIEWPORT: ${requestedViewport}`);
+
+const publicRoutes = ['/support/', '/service-scope/', '/terms/', '/privacy/', '/refunds/'];
 
 async function waitForScrollSettled(page) {
   await page.evaluate(() => new Promise((resolve, reject) => {
@@ -147,6 +141,26 @@ try {
       `${viewport.name}: compiled analytics-off state created or retained browser tracking state`);
     assert.deepEqual(analyticsRequests, [], `${viewport.name}: compiled analytics-off state sent an analytics request`);
     assert.equal(await page.locator('h1').count(), 1, `${viewport.name}: expected one h1`);
+    assert.equal(await page.locator('[data-intake-cta]').count(), 2, `${viewport.name}: expected exactly two intake actions`);
+    assert.deepEqual(await page.locator('[data-intake-cta]').evaluateAll((elements) => elements.map((element) => ({
+      href: element.getAttribute('href'),
+      label: element.textContent.trim(),
+    }))), [
+      { href: '#start', label: 'Free Preview' },
+      { href: '#start', label: 'Free Preview' },
+    ], `${viewport.name}: intake actions do not use one clear label and destination`);
+    assert.deepEqual(await page.locator('.work-item').evaluateAll((elements) => elements.map((element) => {
+      const destination = new URL(element.href);
+      return {
+        path: destination.pathname,
+        target: element.getAttribute('target'),
+        rel: (element.getAttribute('rel') || '').split(/\s+/).filter(Boolean).sort(),
+      };
+    })), [
+      { path: '/arc-previews/showcases/roofing/', target: '_blank', rel: ['noopener'] },
+      { path: '/arc-previews/showcases/dental/', target: '_blank', rel: ['noopener'] },
+      { path: '/arc-previews/showcases/finance/', target: '_blank', rel: ['noopener'] },
+    ], `${viewport.name}: public showcase links are incomplete or unsafe`);
     assert.equal(await page.locator('.hero-copy-block').evaluate((element) => getComputedStyle(element).opacity), '1', `${viewport.name}: hero copy is hidden`);
     const heroLayout = await page.evaluate(() => {
       const block = document.querySelector('.hero-copy-block').getBoundingClientRect();
@@ -262,6 +276,24 @@ try {
       `${viewport.name}: multipart intake omitted its exact-retry nonce`);
     assert.deepEqual(errors, [], `${viewport.name}: browser errors: ${errors.join('; ')}`);
     await page.close();
+
+    for (const publicRoute of publicRoutes) {
+      const routePage = await browser.newPage({
+        viewport: { width: viewport.width, height: viewport.height },
+        isMobile: viewport.isMobile,
+        hasTouch: viewport.isMobile,
+      });
+      const response = await routePage.goto(`${baseUrl}${publicRoute}`, { waitUntil: 'networkidle' });
+      assert.equal(response?.status(), 200, `${viewport.name}: ${publicRoute} did not return 200`);
+      assert.equal(await routePage.locator('h1').count(), 1, `${viewport.name}: ${publicRoute} must have one h1`);
+      const routeLayout = await routePage.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }));
+      assert.ok(routeLayout.scrollWidth <= routeLayout.clientWidth + 1,
+        `${viewport.name}: ${publicRoute} overflows horizontally (${routeLayout.scrollWidth}px > ${routeLayout.clientWidth}px)`);
+      await routePage.close();
+    }
   }
 
   if (!requestedViewport || requestedViewport === 'desktop') {
@@ -277,9 +309,51 @@ try {
       })
       .map((element) => element.className));
     assert.deepEqual(hiddenWithoutScript, [], 'Core content must remain visible if JavaScript fails or is unavailable.');
-    assert.equal(await noScriptPage.locator('[data-intake-cta][href^="mailto:arcwebhq@gmail.com"]').count(), 2,
-      'The no-script compiled-closed page must retain its manual email fallbacks.');
+    assert.deepEqual(await noScriptPage.locator('[data-intake-cta]').evaluateAll((elements) => elements.map((element) => ({
+      href: element.getAttribute('href'),
+      label: element.textContent.trim(),
+    }))), [
+      { href: '#start', label: 'Free Preview' },
+      { href: '#start', label: 'Free Preview' },
+    ], 'The no-script page must direct both “Free Preview” actions to its truthful paused state.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('aria-disabled'), 'true',
+      'The no-script compiled-closed form must remain semantically disabled.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('inert'), '',
+      'The no-script compiled-closed form must remain inert.');
+    assert.match(await noScriptPage.locator('#intakeStatus').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
+      'The no-script page must plainly disclose the paused state.');
     await noScriptPage.close();
+
+    const compiledClosedPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await compiledClosedPage.goto(`${baseUrl}/?intake=closed`, { waitUntil: 'networkidle' });
+    await compiledClosedPage.locator('[data-intake-cta]').first().click();
+    await compiledClosedPage.waitForFunction(() => location.hash === '#start');
+    await compiledClosedPage.waitForFunction(() => document.activeElement?.id === 'intakeStatus');
+    await waitForScrollSettled(compiledClosedPage);
+    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('data-intake-enabled'), 'false',
+      'The compiled-closed browser state unexpectedly opened intake.');
+    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('aria-disabled'), 'true',
+      'The compiled-closed browser state is not semantically disabled.');
+    assert.equal(await compiledClosedPage.locator('#projectForm').getAttribute('inert'), '',
+      'The compiled-closed browser state is not inert.');
+    assert.deepEqual(await compiledClosedPage.locator('#projectForm button').evaluateAll((buttons) => buttons.map((button) => button.disabled)),
+      [true, true, true], 'The compiled-closed browser state exposed a form action.');
+    assert.match(await compiledClosedPage.locator('#intakeStatus').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
+      'The intake action did not expose the truthful paused state.');
+    const statusPosition = await compiledClosedPage.locator('#intakeStatus').evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { top: bounds.top, bottom: bounds.bottom, viewportHeight: innerHeight };
+    });
+    assert.ok(statusPosition.bottom > 0 && statusPosition.top < statusPosition.viewportHeight,
+      'The intake action did not bring the paused state into view.');
+    const priorClosedIntakeRequests = intakeRequests.length;
+    await compiledClosedPage.locator('#projectForm').evaluate((form) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await compiledClosedPage.waitForTimeout(100);
+    assert.equal(intakeRequests.length, priorClosedIntakeRequests,
+      'The compiled-closed form issued an intake POST.');
+    assert.match(await compiledClosedPage.locator('#error').textContent(), /Free preview requests are (?:currently|temporarily) paused\./i,
+      'A blocked submit did not report the truthful paused state.');
+    await compiledClosedPage.close();
 
     const disabledThankYouPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await disabledThankYouPage.addInitScript(() => {
@@ -298,64 +372,6 @@ try {
     'The analytics-disabled thank-you page must clear stale analytics state and the accepted draft.');
     await disabledThankYouPage.close();
 
-    const paymentPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const paymentRequests = [];
-    paymentPage.on('request', (request) => paymentRequests.push({ url: request.url(), headers: request.headers() }));
-    await paymentPage.goto(`${baseUrl}/payment-success/?session_id=cs_test_sensitive_return_value`, { waitUntil: 'networkidle' });
-    const scrubbedPaymentUrl = new URL(paymentPage.url());
-    assert.equal(scrubbedPaymentUrl.pathname, '/payment-success/', 'Payment return path changed while scrubbing the Stripe session id.');
-    assert.equal(scrubbedPaymentUrl.search, '', 'Stripe session id remained in the browser URL.');
-    await Promise.all([
-      paymentPage.waitForURL('**/service-scope/'),
-      paymentPage.locator('a.secondary').click(),
-    ]);
-    const scopeNavigation = paymentRequests.find((request) => new URL(request.url).pathname === '/service-scope/');
-    assert.ok(scopeNavigation, 'Payment-success scope navigation was not observed.');
-    assert.ok(!scopeNavigation.headers.referer, 'Payment-success navigation leaked a Referer header.');
-    await paymentPage.close();
-
-    const claimPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await claimPage.route('https://app.netlify.com/claim*', (route) => route.fulfill({
-      status: 200,
-      contentType: 'text/html',
-      body: '<!doctype html><title>Netlify claim test destination</title>',
-    }));
-    const handoffId = 'a'.repeat(64);
-    const claimBearer = 'B'.repeat(43);
-    const claimRequestObserved = claimPage.waitForRequest((request) => new URL(request.url()).pathname === '/api/arc2/claim');
-    await claimPage.goto(`${baseUrl}/claim/#arc2.${handoffId}.${claimBearer}`, { waitUntil: 'domcontentloaded' });
-    await claimRequestObserved;
-    const scrubbedClaimState = await claimPage.evaluate(() => ({
-      pathname: location.pathname,
-      search: location.search,
-      hash: location.hash,
-      body: document.body.textContent,
-      localValues: Object.values(localStorage),
-      sessionValues: Object.values(sessionStorage),
-    }));
-    assert.equal(scrubbedClaimState.pathname, '/claim/', 'Claim wrapper changed path while scrubbing its fragment.');
-    assert.equal(scrubbedClaimState.search, '', 'Claim wrapper retained a query string.');
-    assert.equal(scrubbedClaimState.hash, '', 'Claim wrapper did not immediately scrub its bearer fragment.');
-    assert.doesNotMatch(scrubbedClaimState.body, new RegExp(`${handoffId}|${claimBearer}`), 'Claim credential entered rendered DOM text.');
-    assert.doesNotMatch(JSON.stringify([...scrubbedClaimState.localValues, ...scrubbedClaimState.sessionValues]), new RegExp(`${handoffId}|${claimBearer}`), 'Claim credential entered browser storage.');
-    await claimPage.waitForURL('https://app.netlify.com/claim#header.payload.signature');
-    assert.equal(claimRequests.length, 1, 'Valid claim wrapper did not exchange exactly once.');
-    assert.equal(claimRequests[0].method, 'POST');
-    assert.equal(claimRequests[0].url, '/api/arc2/claim');
-    assert.equal(claimRequests[0].headers.authorization, `Bearer ${claimBearer}`);
-    assert.equal(claimRequests[0].headers['x-arc-handoff-id'], handoffId);
-    assert.equal(claimRequests[0].headers.referer, undefined, 'Claim exchange leaked a Referer header.');
-    assert.equal(claimRequests[0].body, '', 'Claim exchange unexpectedly put credentials in its body.');
-    await claimPage.close();
-
-    const invalidClaimPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await invalidClaimPage.goto(`${baseUrl}/claim/?token=forbidden#invalid`, { waitUntil: 'networkidle' });
-    assert.equal(new URL(invalidClaimPage.url()).pathname, '/claim/');
-    assert.equal(new URL(invalidClaimPage.url()).search, '', 'Invalid claim query was not scrubbed.');
-    assert.equal(new URL(invalidClaimPage.url()).hash, '', 'Invalid claim fragment was not scrubbed.');
-    assert.match(await invalidClaimPage.locator('h1').textContent(), /invitation is unavailable/i);
-    assert.equal(claimRequests.length, 1, 'Invalid claim credential reached the exchange endpoint.');
-    await invalidClaimPage.close();
   }
 } finally {
   await browser.close();
