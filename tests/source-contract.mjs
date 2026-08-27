@@ -75,15 +75,18 @@ assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise a manua
 assert.doesNotMatch(home, /mailto:/i, 'The homepage must not contain a mail link.');
 
 // Keep the offer concise and consistent.
-assert.match(home, /Concepts only — not client work\./);
+assert.match(home, /Concept previews — not client work\./);
+assert.match(home, /<h2 class="section-title reveal">ARC website concepts\.<\/h2>/);
+assert.doesNotMatch(home, /showcase-label|work-kicker|View preview/i,
+  'The homepage must not repeat tiny showcase badges or card helper labels.');
 assert.match(home, /<h2 class="section-title small reveal">\$5,000 \+ tax\. Five pages\.<\/h2>/);
 assert.match(home, /Five-page website\.[\s\S]*?Home, Services, About, Process, and Contact\./);
 assert.match(home, /One clear lead path\.[\s\S]*?A form, booking link, order link, or phone number\./);
 assert.match(home, /Ready to launch\.[\s\S]*?Responsive build, basic accessibility, metadata, and launch setup\./);
 assert.match(home, /Two revision rounds\.[\s\S]*?Two rounds before you decide to buy\./);
 assert.match(home, /You own it\.[\s\S]*?Ownership after payment, plus 30 days of launch bug support\./);
-assert.match(home, /\$5,000 USD \+ applicable sales tax\. Pay only after approval\. Launch target: seven business days after payment, content, and access are ready\./);
-assert.match(home, /Extra pages, domains, hosting, paid tools, ecommerce, and ongoing services\./);
+assert.match(home, /\$5,000 USD \+ tax\. Pay only if you approve\. Launch within seven business days after payment, content, and access\./);
+assert.match(home, /Extra pages, domain, hosting, paid tools, ecommerce, and ongoing service cost extra\./);
 assert.doesNotMatch(home, /bank or card issuer|currency conversion|destination address/i,
   'Detailed purchase caveats belong on policy pages, not the sales homepage.');
 assert.doesNotMatch(home, /\$500\s*\/\s*(?:mo|month)|monthly maintenance/i);
@@ -138,8 +141,8 @@ assert.match(home, /field\.setAttribute\('aria-invalid','true'\)/);
 assert.match(home, /if\(first\)\{openAncestorDetails\(first\);first\.scrollIntoView/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /I can legally use these files, and they have no watermarks\./);
-assert.match(home, /I understand: the preview is free; the finished five-page website is \$5,000 USD \+ applicable sales tax if I approve\./);
-assert.match(home, /I(?:’|')m 18\+ or authorized,[\s\S]{0,280}This request does not charge me\./);
+assert.match(home, /The preview is free\. If I approve, the website is \$5,000 USD \+ tax\./);
+assert.match(home, /I(?:’|')m authorized and accept[\s\S]{0,280}I(?:’|')m not charged today\./);
 for (const policyPath of ['/terms/', '/privacy/', '/refunds/', '/service-scope/']) {
   assert.match(home, new RegExp(`href="${policyPath.replaceAll('/', '\\/')}"`));
 }
@@ -152,7 +155,7 @@ for (const input of fileInputs) {
   assert.doesNotMatch(input, /svg/i);
 }
 assert.match(home, /const uploadMaxFileBytes=1250000,uploadMaxTotalBytes=3000000/);
-assert.match(home, /PNG, JPG, or WebP\. 1\.25 MB each; 3 MB total\./);
+assert.match(home, /PNG\/JPG\/WebP · 1\.25 MB each · 3 MB total/);
 assert.match(home, /const draftTtlMs=7\*24\*60\*60\*1000/);
 assert.match(home, /saved\.expiresAt<=now/);
 assert.match(thankYou, /removeItem\('arc-preview-draft-v8'\)/);
