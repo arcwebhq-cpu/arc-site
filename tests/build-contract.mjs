@@ -44,7 +44,7 @@ const intakeCtas = [...home.matchAll(/<a\b[^>]*\bdata-intake-cta\b[^>]*>[\s\S]*?
 assert.equal(intakeCtas.length, 2, 'The homepage must expose exactly two intake actions.');
 for (const cta of intakeCtas) {
   assert.match(cta, /\bhref="#start"/, 'Every intake action must reveal the truthful intake state.');
-  assert.match(cta, />\s*Free Preview\s*<\/a>$/, 'Every intake action must use the exact visible label “Free Preview”.');
+  assert.match(cta, />\s*Get Free Preview\s*<\/a>$/, 'Every intake action must use the exact visible label “Get Free Preview”.');
 }
 assert.doesNotMatch(home, /mailto:arcwebhq@gmail\.com\?subject=ARC%20preview%20request/i,
   'The homepage must not fall back to an unverified preview email path.');
@@ -56,10 +56,10 @@ assert.match(intakeStatus, /Free preview requests are (?:currently|temporarily) 
   'The compiled-closed page must plainly disclose that preview requests are paused.');
 assert.match(home, /<form\b[^>]*\baria-disabled="true"[^>]*\bdata-intake-enabled="false"[^>]*\binert\b/i,
   'The compiled-closed form must remain inert and semantically disabled.');
-assert.match(home, /We(?:’|&#8217;|&rsquo;|')ll build it and email it to you\./i,
-  'The homepage must explain that ARC builds and emails the free preview.');
-assert.match(home, /Pay \$5,000 USD \+ applicable sales tax only if you approve\./i,
-  'The homepage must state that payment follows approval and includes applicable tax.');
+assert.match(home, /See Your New Website Before You Pay\./i,
+  'The homepage must lead with the preview-before-payment promise.');
+assert.match(home, /Get a custom five-page preview free\. Approve it, then pay\./i,
+  'The homepage must explain the free-preview and approval-first flow.');
 for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta', 'privacy-note', 'process-note', 'review-confirm']) {
   assert.doesNotMatch(home, new RegExp(`class="[^"]*\\b${removedClass}\\b`), `${removedClass} clutter must not render on the homepage.`);
 }

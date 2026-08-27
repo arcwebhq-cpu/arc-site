@@ -164,17 +164,17 @@ h1{margin:0;font-size:clamp(58px,7.2vw,112px);line-height:.88;letter-spacing:-.0
     <a href="#work">Work</a>
     <a href="#scope">Scope</a>
     <a href="#process">Process</a>
-    <a class="btn black keep" data-intake-cta href="#start">Free Preview</a>
+    <a class="btn black keep" data-intake-cta href="#start">Get Free Preview</a>
   </div>
 </nav>
 <main id="top" class="page" tabindex="-1">
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy-block reveal">
-        <h1>Get a free five-page website preview.</h1>
-        <p class="hero-copy">We’ll build it and email it to you. Pay $5,000 USD + applicable sales tax only if you approve.</p>
+        <h1>See Your New Website Before You Pay.</h1>
+        <p class="hero-copy">Get a custom five-page preview free. Approve it, then pay.</p>
         <div class="actions">
-          <a class="btn black" data-intake-cta href="#start">Free Preview</a>
+          <a class="btn black" data-intake-cta href="#start">Get Free Preview</a>
           <a class="hero-work-link" href="#work">See our work ↓</a>
         </div>
       </div>
@@ -905,7 +905,7 @@ form.addEventListener('submit',async event=>{
 function setIntakeAvailability(enabled){
   form.dataset.intakeEnabled=enabled?'true':'false';form.setAttribute('aria-disabled',String(!enabled));form.toggleAttribute('inert',!enabled);
   [prev,next,submit].forEach(button=>button.disabled=!enabled);intakeStatus.classList.toggle('open',enabled);
-  intakeCtas.forEach(link=>{link.href='#start';link.textContent='Free Preview'});
+  intakeCtas.forEach(link=>{link.href='#start';link.textContent='Get Free Preview'});
   intakeStatus.textContent=enabled?'Free preview requests are open.':'Free preview requests are temporarily paused.';
 }
 async function configureIntake(){
