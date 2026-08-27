@@ -1,6 +1,7 @@
 import { getStore } from '@netlify/blobs';
 import { HANDOFF_STORE, configuredEnvironment, emptyResponse, jsonResponse, parseJsonBodyText } from '../lib/arc2-handoff-core.mjs';
 import { processClaimWebhook } from '../lib/arc2-handoff-service.mjs';
+import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 
 export default async (request, context = {}) => {
@@ -10,8 +11,9 @@ export default async (request, context = {}) => {
   try {
     const input = parseJsonBodyText(await readBoundedRequestText(request, 4096), 4096);
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
+    const reviewStore = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     await processClaimWebhook(input, process.env, {
-      store, stripeAccountFetch: context.stripeAccountFetch,
+      store, reviewStore, stripeAccountFetch: context.stripeAccountFetch,
     });
     return emptyResponse(204);
   } catch (error) {

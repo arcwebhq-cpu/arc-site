@@ -55,6 +55,8 @@ const sessionId = 'cs_test_arcCheckoutLedgerContract';
 const paymentIntentId = 'pi_arcCheckoutLedgerContract';
 const paymentLinkId = 'plink_arcCheckoutLedgerContract';
 const payerEmail = 'adult-payer@example.test';
+const reviewInviteHmac = 'a'.repeat(64);
+const reviewApprovalReceiptSha256 = 'c'.repeat(64);
 const stripeAccountId = 'acct_ArcCheckoutContract123';
 const env = {
   ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'true',
@@ -115,6 +117,21 @@ function checkoutSession(overrides = {}) {
     },
     consent: { terms_of_service: 'accepted' },
     custom_fields: [{ key: 'adultpurchaserack', type: 'dropdown', dropdown: { value: 'accepted' } }],
+    ...overrides,
+  };
+}
+
+function reviewCheckoutMetadata(overrides = {}) {
+  return {
+    approval_receipt_hmac_sha256: 'b'.repeat(64),
+    approval_receipt_sha256: reviewApprovalReceiptSha256,
+    invite_hmac_sha256: reviewInviteHmac,
+    offer_contract_id: 'arc-fixed-five-page-offer-v1',
+    preview_manifest_sha256: 'd'.repeat(64),
+    recipient_email_sha256: sha256Hex(payerEmail),
+    schema: 'arc-review-checkout-session-v1',
+    scope_version: 'arc-fixed-five-page-offer-v1',
+    terms_version: '2026-08-25',
     ...overrides,
   };
 }
@@ -223,6 +240,89 @@ for (const invalidSession of [
   assert.throws(() => normalizeStripeCheckoutEvent(raw, signature(raw), env, now), /invalid|lacks|required|disagree/i);
 }
 
+const dynamicSessionId = 'cs_test_arcReviewCheckoutLedger';
+const dynamicRaw = eventRaw({
+  id: 'evt_arcReviewCheckoutCompleted',
+  session: checkoutSession({
+    id: dynamicSessionId,
+    payment_link: null,
+    client_reference_id: reviewApprovalReceiptSha256,
+    metadata: reviewCheckoutMetadata(),
+  }),
+});
+const normalizedDynamic = normalizeStripeCheckoutEvent(dynamicRaw, signature(dynamicRaw), env, now);
+assert.equal(normalizedDynamic.paymentLinkId, null);
+assert.deepEqual(normalizedDynamic.reviewCheckoutBinding, reviewCheckoutMetadata());
+for (const invalidDynamicSession of [
+  checkoutSession({ payment_link: null, client_reference_id: reviewApprovalReceiptSha256 }),
+  checkoutSession({
+    payment_link: null, client_reference_id: reviewApprovalReceiptSha256,
+    metadata: reviewCheckoutMetadata({ schema: 'untrusted-checkout-metadata' }),
+  }),
+  checkoutSession({
+    payment_link: null, client_reference_id: 'f'.repeat(64), metadata: reviewCheckoutMetadata(),
+  }),
+]) {
+  const raw = eventRaw({ id: 'evt_arcReviewCheckoutInvalid', session: invalidDynamicSession });
+  assert.throws(() => normalizeStripeCheckoutEvent(raw, signature(raw), env, now), /metadata|reference|recipient|object/i,
+    'Dynamic Checkout Sessions must carry the exact approval metadata binding.');
+}
+
+const alternateRecipientRaw = eventRaw({
+  id: 'evt_arcReviewCheckoutAlternatePayer',
+  session: checkoutSession({
+    id: 'cs_test_arcReviewCheckoutAlternatePayer',
+    payment_link: null,
+    client_reference_id: reviewApprovalReceiptSha256,
+    metadata: reviewCheckoutMetadata({ recipient_email_sha256: 'e'.repeat(64) }),
+  }),
+});
+const alternateRecipient = normalizeStripeCheckoutEvent(
+  alternateRecipientRaw, signature(alternateRecipientRaw), env, now,
+);
+assert.equal(alternateRecipient.state, 'PAID');
+assert.equal(alternateRecipient.payerEmailSha256, sha256Hex(payerEmail));
+assert.equal(alternateRecipient.reviewCheckoutBinding.recipient_email_sha256, 'e'.repeat(64));
+assert.notEqual(alternateRecipient.payerEmailSha256,
+  alternateRecipient.reviewCheckoutBinding.recipient_email_sha256,
+  'Review fulfillment recipient and Stripe payer are distinct authenticated roles.');
+
+const malformedPayerRaw = eventRaw({
+  id: 'evt_arcReviewCheckoutMalformedPayer',
+  session: checkoutSession({
+    id: 'cs_test_arcReviewCheckoutMalformedPayer',
+    payment_link: null,
+    client_reference_id: reviewApprovalReceiptSha256,
+    metadata: reviewCheckoutMetadata(),
+    customer_details: { email: 'not-an-email', address: { country: 'US', state: 'WA' } },
+  }),
+});
+const malformedPayerStore = new FakeStore();
+const malformedPayerAlerts = new FakeStore();
+const malformedPayer = await processStripeCheckoutEvent(
+  malformedPayerRaw,
+  signature(malformedPayerRaw),
+  env,
+  { store: malformedPayerStore, alertStore: malformedPayerAlerts, clock: () => new Date(now) },
+);
+assert.equal(malformedPayer.summary.state, 'REVIEW_REQUIRED');
+assert.equal(malformedPayer.summary.fulfillment_allowed, false);
+assert.equal(malformedPayer.summary.manual_review_required, true);
+assert.equal(malformedPayer.summary.payer_email_sha256, null);
+assert.equal(malformedPayerAlerts.values.size, 1,
+  'Captured review payments with unusable payer data require durable manual refund/review.');
+
+const dynamicStore = new FakeStore();
+const processedDynamic = await processStripeCheckoutEvent(dynamicRaw, signature(dynamicRaw), env, {
+  store: dynamicStore, clock: () => new Date(now),
+});
+assert.equal(processedDynamic.summary.state, 'PAID');
+assert.equal(processedDynamic.summary.payment_link_id_hmac_sha256, null);
+assert.deepEqual(processedDynamic.summary.review_checkout_binding, reviewCheckoutMetadata());
+assert.deepEqual((await readIndex(dynamicStore,
+  stripeCheckoutKeys.eventReservationKey(normalizedDynamic.eventId, env))).review_checkout_binding,
+reviewCheckoutMetadata(), 'The signed event reservation must preserve the exact approval binding.');
+
 const store = new FakeStore();
 const alertStore = new FakeStore();
 const processed = await processStripeCheckoutEvent(paidRaw, signature(paidRaw), env, {
@@ -232,6 +332,8 @@ assert.equal(processed.idempotentReplay, false);
 assert.equal(processed.summary.schema, STRIPE_CHECKOUT_SESSION_SCHEMA);
 assert.equal(processed.summary.state, 'PAID');
 assert.equal(processed.summary.fulfillment_allowed, true);
+assert.equal(Object.hasOwn(processed.summary, 'review_checkout_binding'), false,
+  'The legacy Payment Link ledger shape and binding path must remain unchanged.');
 assert.equal(processed.receipt.schema, STRIPE_CHECKOUT_RECEIPT_SCHEMA);
 assert.equal((await assertStripeCheckoutPaid(store, paymentEvidence, env)).ready, true);
 await assert.rejects(assertStripeCheckoutPaid(store, { ...paymentEvidence, amount_total_minor_units: 550_001 }, env),

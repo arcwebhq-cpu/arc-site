@@ -1,6 +1,7 @@
 import { getStore } from '@netlify/blobs';
 import { HANDOFF_STORE, authenticateBearer, configuredEnvironment, jsonResponse } from '../lib/arc2-handoff-core.mjs';
 import { getHandoffStatus } from '../lib/arc2-handoff-service.mjs';
+import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 
 export default async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
@@ -9,8 +10,10 @@ export default async (request, context = {}) => {
   const url = new URL(request.url);
   try {
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
+    const reviewStore = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     const status = await getHandoffStatus(url.searchParams.get('handoff_id') || '', process.env, {
       store,
+      reviewStore,
       clock: context.clock,
       fetch: context.fetch,
       stripeAccountFetch: context.stripeAccountFetch,

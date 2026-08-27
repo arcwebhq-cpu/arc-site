@@ -88,6 +88,10 @@ const initial = await issueReviewInvite(store, {
 assert.equal(initial.record.schema, REVIEW_INVITE_SCHEMA);
 assert.equal(initial.record.revision_round, 0);
 assert.equal(initial.record.state, 'OPEN');
+assert.equal(initial.record.email_delivery_receipt_sha256, binding.email_delivery_receipt_sha256,
+  'Legacy pre-bound receipt records remain compatible only when email outbox mode is not enabled.');
+assert.equal(initial.record.email_delivery_binding_mode, 'legacy-prebound');
+assert.equal(initial.record.email_delivery_outbox_hmac_sha256, null);
 assert.equal(JSON.stringify([...store.values.values()]).includes(initialToken), false,
   'Raw invite credentials must never be stored.');
 await assert.rejects(issueReviewInvite(store, {
@@ -95,6 +99,14 @@ await assert.rejects(issueReviewInvite(store, {
   invite_token: initialToken,
   preview_manifest_sha256: sha('c'),
 }, env, { clock: () => new Date(now) }), /INVITE_CONFLICT/);
+
+const legacyGateStore = new FakeStore();
+await issueReviewInvite(legacyGateStore, { ...binding, invite_token: 'L'.repeat(43) }, env,
+  { clock: () => new Date(now) });
+await assert.rejects(exchangeReviewInvite(legacyGateStore, 'L'.repeat(43), {
+  ...env, ARC_REVIEW_EMAIL_OUTBOX_ENABLED: 'true',
+}, { clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 12) }), /DELIVERY_UNCONFIRMED/,
+  'Enabling two-phase outbox mode must not trust a legacy pre-bound digest.');
 
 const exchanged = await exchangeReviewInvite(store, initialToken, env, {
   clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 13),
@@ -308,6 +320,12 @@ assert.match(script, /history\.replaceState\(null, '', location\.pathname \+ loc
   'The fragment credential must be cleared before exchange.');
 assert.match(script, /\/api\/review\/exchange/);
 assert.match(script, /\/api\/review\/decision/);
+assert.match(script, /checkoutPath = \/\^\\\/c\\\/pay\\\/cs_/,
+  'The browser must enforce the Stripe Checkout Session path before navigation.');
+assert.match(script, /safeFragment = target\.hash === ''/,
+  'The browser must allow Stripe Checkout fragments only through an explicit bounded validator.');
+assert.doesNotMatch(script, /target\.password \|\| target\.hash\)/,
+  'Valid Stripe Checkout Session fragments must not be rejected unconditionally.');
 assert.match(buildScript, /'review'/);
 assert.match(netlifyConfig, /for = "\/review\/\*"[\s\S]*?Cache-Control = "no-store"[\s\S]*?Referrer-Policy = "no-referrer"/);
 assert.match(robots, /Disallow: \/review\//);

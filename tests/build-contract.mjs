@@ -73,16 +73,17 @@ assert.match(home, /data-analytics-build-enabled="false"/,
   'Default production build must not invoke automatic analytics collection.');
 assert.match(await readFile(path.join(dist, 'thank-you/index.html'), 'utf8'), /data-analytics-build-enabled="false"/,
   'The default thank-you build must not flush automatic analytics collection.');
-assert.match(support, /href="mailto:arcwebhq@gmail\.com\?subject=ARC%20support%20request"/);
-assert.match(support, /by email only/i);
+assert.match(support, /<form id="support-form" novalidate>/i);
+assert.match(support, /Send Support Request/);
+assert.match(support, /One simple form/);
 assert.match(support, /does not offer 24\/7 monitoring/i);
-assert.match(support, /does not provide live chat, an online intake form, or emergency support/i);
 assert.match(support, /30 calendar days of support for reproducible launch-related bugs/i);
-assert.match(support, /Do not email passwords, payment-card details, checkout credentials/i);
-assert.doesNotMatch(support, /<form\b|data-netlify|name="form-name"|method="POST"/i);
+assert.doesNotMatch(support, /data-netlify|name="form-name"|method="POST"|mailto:/i);
 
 for (const file of files.filter((name) => name.endsWith('.html'))) {
   const html = await readFile(path.join(dist, file), 'utf8');
+  assert.doesNotMatch(html, /mailto:|arcwebhq@gmail\.com/i,
+    `${file} must not require a customer to email ARC manually.`);
   for (const match of html.matchAll(/(?:href|src)="(\/[^"#?]*)[^\"]*"/g)) {
     const relative = match[1].replace(/^\//, '');
     const target = !relative || relative.endsWith('/') ? path.join(relative, 'index.html') : relative;

@@ -24,6 +24,7 @@ export const STRIPE_CHECKOUT_EVENT_SCHEMA = 'arc-stripe-checkout-event-v1';
 export const STRIPE_CHECKOUT_SESSION_SCHEMA = 'arc-stripe-checkout-session-state-v1';
 export const STRIPE_CHECKOUT_RECEIPT_SCHEMA = 'arc-stripe-checkout-processing-receipt-v1';
 export const STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA = 'arc-stripe-checkout-handoff-binding-v1';
+export const STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA = 'arc-stripe-review-checkout-handoff-binding-v1';
 export const STRIPE_CHECKOUT_REVIEW_SCHEMA = 'arc-operational-alert-v1';
 
 const EVENT_TYPES = new Set([
@@ -40,6 +41,20 @@ const PAYMENT_INTENT_ID = /^pi_[A-Za-z0-9_]{6,128}$/;
 const PAYMENT_LINK_ID = /^plink_[A-Za-z0-9_]{6,128}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_CAS_ATTEMPTS = 8;
+const REVIEW_CHECKOUT_METADATA_SCHEMA = 'arc-review-checkout-session-v1';
+const REVIEW_CHECKOUT_OFFER_ID = 'arc-fixed-five-page-offer-v1';
+const REVIEW_CHECKOUT_TERMS_VERSION = '2026-08-25';
+const REVIEW_CHECKOUT_METADATA_KEYS = Object.freeze([
+  'approval_receipt_hmac_sha256',
+  'approval_receipt_sha256',
+  'invite_hmac_sha256',
+  'offer_contract_id',
+  'preview_manifest_sha256',
+  'recipient_email_sha256',
+  'schema',
+  'scope_version',
+  'terms_version',
+]);
 
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object.`);
@@ -76,6 +91,20 @@ function optionalEmailHash(value) {
     throw new TypeError('Stripe Checkout payer email is invalid.');
   }
   return sha256Hex(value.toLowerCase());
+}
+
+function normalizeReviewCheckoutBinding(value) {
+  const metadata = plainObject(value, 'Stripe review Checkout metadata');
+  if (JSON.stringify(Object.keys(metadata).sort()) !== JSON.stringify([...REVIEW_CHECKOUT_METADATA_KEYS].sort()) ||
+      metadata.schema !== REVIEW_CHECKOUT_METADATA_SCHEMA ||
+      metadata.offer_contract_id !== REVIEW_CHECKOUT_OFFER_ID ||
+      metadata.scope_version !== REVIEW_CHECKOUT_OFFER_ID ||
+      metadata.terms_version !== REVIEW_CHECKOUT_TERMS_VERSION ||
+      REVIEW_CHECKOUT_METADATA_KEYS.filter((key) => key.endsWith('_sha256'))
+        .some((key) => !HEX_64.test(String(metadata[key] || '')))) {
+    throw new TypeError('Stripe review Checkout metadata is invalid.');
+  }
+  return Object.freeze(Object.fromEntries(REVIEW_CHECKOUT_METADATA_KEYS.map((key) => [key, metadata[key]])));
 }
 
 function customFieldAccepted(session) {
@@ -174,7 +203,7 @@ export function normalizeStripeCheckoutEvent(raw, stripeSignature, env, now = ne
   if (!sessionId.startsWith(configuration.expectedLivemode ? 'cs_live_' : 'cs_test_')) {
     throw new TypeError('Stripe Checkout Session mode prefix is invalid.');
   }
-  const state = sessionState(event.type, session);
+  let state = sessionState(event.type, session);
   if (session.currency !== 'usd') throw new TypeError('Stripe Checkout currency is invalid.');
   const subtotal = amount(session.amount_subtotal, 'Stripe Checkout subtotal');
   const total = amount(session.amount_total, 'Stripe Checkout total');
@@ -192,13 +221,19 @@ export function normalizeStripeCheckoutEvent(raw, stripeSignature, env, now = ne
     throw new TypeError('Stripe Checkout automatic tax state is invalid.');
   }
   const paymentIntentId = optionalIdentifier(session.payment_intent, PAYMENT_INTENT_ID, 'Stripe PaymentIntent id');
-  const paymentLinkId = identifier(session.payment_link, PAYMENT_LINK_ID, 'Stripe Payment Link id');
+  const paymentLinkId = session.payment_link === null
+    ? null
+    : identifier(session.payment_link, PAYMENT_LINK_ID, 'Stripe Payment Link id');
+  const reviewCheckoutBinding = paymentLinkId === null ? normalizeReviewCheckoutBinding(session.metadata) : null;
   if (state === 'PAID' && !paymentIntentId) throw new TypeError('Paid Checkout Session lacks a PaymentIntent.');
 
   const reference = session.client_reference_id;
   if (reference !== null && reference !== undefined &&
       (typeof reference !== 'string' || reference.length < 1 || reference.length > 512 || /[\u0000-\u001f\u007f]/.test(reference))) {
     throw new TypeError('Stripe Checkout client reference is invalid.');
+  }
+  if (reviewCheckoutBinding !== null && reference !== reviewCheckoutBinding.approval_receipt_sha256) {
+    throw new TypeError('Stripe review Checkout reference is invalid.');
   }
   const customer = session.customer_details === null || session.customer_details === undefined
     ? null : plainObject(session.customer_details, 'Stripe Checkout customer details');
@@ -210,12 +245,27 @@ export function normalizeStripeCheckoutEvent(raw, stripeSignature, env, now = ne
       (region !== null && !/^[A-Z0-9-]{0,10}$/.test(region))) {
     throw new TypeError('Stripe Checkout customer destination is invalid.');
   }
-  const payerEmailSha256 = optionalEmailHash(customer?.email ?? session.customer_email ?? null);
+  let payerEmailSha256 = null;
+  let payerEmailUsable = true;
+  try {
+    payerEmailSha256 = optionalEmailHash(customer?.email ?? session.customer_email ?? null);
+    payerEmailUsable = payerEmailSha256 !== null;
+  } catch (error) {
+    // A malformed payer email on a captured review-session payment must become
+    // durable manual review, not an endless webhook retry after funds moved.
+    // Legacy Payment Link events retain their exact historical rejection.
+    if (reviewCheckoutBinding === null || state !== 'PAID') throw error;
+    payerEmailUsable = false;
+  }
   const termsAccepted = session.consent?.terms_of_service === 'accepted';
   const adultAccepted = customFieldAccepted(session);
-  if (state === 'PAID' && (!payerEmailSha256 || !country || (country === 'US' && !/^[A-Z]{2}$/.test(region)) ||
-      !termsAccepted || !adultAccepted)) {
-    throw new TypeError('Paid Checkout Session lacks required purchaser consent or destination data.');
+  const paidPurchaserDataValid = payerEmailUsable && Boolean(country) &&
+    (country !== 'US' || /^[A-Z]{2}$/.test(region)) && termsAccepted && adultAccepted;
+  if (state === 'PAID' && !paidPurchaserDataValid) {
+    if (reviewCheckoutBinding === null) {
+      throw new TypeError('Paid Checkout Session lacks required purchaser consent or destination data.');
+    }
+    state = 'REVIEW_REQUIRED';
   }
   const createdAt = new Date(event.created * 1000);
   if (!Number.isFinite(createdAt.getTime())) throw new TypeError('Stripe Checkout event timestamp is invalid.');
@@ -234,6 +284,7 @@ export function normalizeStripeCheckoutEvent(raw, stripeSignature, env, now = ne
     paymentIntentId,
     paymentLinkId,
     payerEmailSha256,
+    reviewCheckoutBinding,
     sessionId,
     state,
     subtotal,
@@ -286,9 +337,10 @@ function factsFromEvent(event, env) {
     eventType: event.eventType,
     livemode: event.livemode,
     paymentIntentIdHmac: event.paymentIntentId ? identityHmac(env, 'payment-intent-id', event.paymentIntentId) : null,
-    paymentLinkIdHmac: identityHmac(env, 'payment-link-id', event.paymentLinkId),
+    paymentLinkIdHmac: event.paymentLinkId ? identityHmac(env, 'payment-link-id', event.paymentLinkId) : null,
     payerEmailSha256: event.payerEmailSha256,
     region: event.region,
+    reviewCheckoutBinding: event.reviewCheckoutBinding,
     sessionIdHmac: identityHmac(env, 'session-id', event.sessionId),
     state: event.state,
     subtotal: event.subtotal,
@@ -323,6 +375,7 @@ function reservationValue(facts, env) {
     automatic_tax_status: facts.automaticTaxStatus,
     terms_of_service_consent: facts.termsAccepted,
     adult_purchaser_acknowledgement: facts.adultAccepted,
+    ...(facts.reviewCheckoutBinding === null ? {} : { review_checkout_binding: facts.reviewCheckoutBinding }),
   };
 }
 
@@ -347,6 +400,7 @@ function invariantConflict(current, facts, env) {
   return current.schema !== STRIPE_CHECKOUT_SESSION_SCHEMA ||
     current.checkout_session_id_hmac_sha256 !== facts.sessionIdHmac ||
     current.payment_link_id_hmac_sha256 !== facts.paymentLinkIdHmac ||
+    canonicalJson(current.review_checkout_binding ?? null) !== canonicalJson(facts.reviewCheckoutBinding) ||
     current.stripe_account_id_sha256 !== env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 ||
     current.livemode !== facts.livemode || current.currency !== facts.currency ||
     current.subtotal_amount_minor_units !== facts.subtotal || current.tax_amount_minor_units !== facts.tax ||
@@ -394,9 +448,10 @@ function nextSessionSummary(current, facts, env) {
     automatic_tax_status: facts.automaticTaxStatus,
     terms_of_service_consent: facts.termsAccepted,
     adult_purchaser_acknowledgement: facts.adultAccepted,
+    ...(facts.reviewCheckoutBinding === null ? {} : { review_checkout_binding: facts.reviewCheckoutBinding }),
     state: facts.state,
     fulfillment_allowed: facts.state === 'PAID',
-    manual_review_required: false,
+    manual_review_required: facts.state === 'REVIEW_REQUIRED',
     first_event_created_at: facts.eventCreatedAt,
     latest_event_created_at: facts.eventCreatedAt,
     latest_event_type: facts.eventType,
@@ -606,6 +661,91 @@ export async function assertStripeCheckoutPaid(store, paymentEvidence, env, adap
   return { required: true, ready: true, summary };
 }
 
+export async function assertStripeReviewCheckoutPaid(store, paymentEvidence, env, adapters = {}) {
+  const configuration = stripeCheckoutConfiguration(env);
+  if (!configuration.flagsValid) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
+  // Unlike frozen Payment Link v4, the review-session schema has no other
+  // payment evidence producer. Even in the explicit sandbox, bind it to the
+  // authenticated ledger rather than returning the legacy bypass result.
+  if (!configuration.required && !configuration.sandboxBypass) {
+    throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
+  }
+  if (!configuration.webhookOperational) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
+  const sessionId = identifier(paymentEvidence?.checkout_session_id, CHECKOUT_SESSION_ID,
+    'Review payment evidence Checkout Session id');
+  const paymentIntentId = identifier(paymentEvidence?.payment_intent_id, PAYMENT_INTENT_ID,
+    'Review payment evidence PaymentIntent id');
+  if (paymentEvidence.payment_link_id !== null) throw new Error('ARC_STRIPE_CHECKOUT_BINDING_MISMATCH');
+  await verifyStripeAccountBinding(env, { fetch: adapters.accountFetch });
+  const summary = await assertPaidSummaryAndReceipt(store, await readIndex(store, sessionStateKey(sessionId, env)));
+  const expectedMetadata = {
+    approval_receipt_hmac_sha256: paymentEvidence.approval_receipt_hmac_sha256,
+    approval_receipt_sha256: paymentEvidence.approval_receipt_sha256,
+    invite_hmac_sha256: paymentEvidence.invite_hmac_sha256,
+    offer_contract_id: REVIEW_CHECKOUT_OFFER_ID,
+    preview_manifest_sha256: paymentEvidence.preview_manifest_sha256,
+    recipient_email_sha256: paymentEvidence.claim_recipient_email_sha256,
+    schema: REVIEW_CHECKOUT_METADATA_SCHEMA,
+    scope_version: REVIEW_CHECKOUT_OFFER_ID,
+    terms_version: REVIEW_CHECKOUT_TERMS_VERSION,
+  };
+  const bindingsValid = summary.checkout_session_id_hmac_sha256 ===
+      identityHmac(env, 'session-id', sessionId) &&
+    summary.payment_intent_id_hmac_sha256 === identityHmac(env, 'payment-intent-id', paymentIntentId) &&
+    summary.payment_link_id_hmac_sha256 === null &&
+    canonicalJson(summary.review_checkout_binding) === canonicalJson(expectedMetadata) &&
+    summary.client_reference_id_sha256 === paymentEvidence.client_reference_id_sha256 &&
+    summary.payer_email_sha256 === paymentEvidence.payer_email_sha256 &&
+    summary.customer_address_country === paymentEvidence.customer_address_country &&
+    summary.customer_address_state === paymentEvidence.customer_address_state &&
+    summary.stripe_account_id_sha256 === paymentEvidence.stripe_account_id_sha256 &&
+    summary.livemode === paymentEvidence.livemode && summary.currency === paymentEvidence.currency &&
+    summary.subtotal_amount_minor_units === paymentEvidence.subtotal_amount_minor_units &&
+    summary.tax_amount_minor_units === paymentEvidence.tax_amount_minor_units &&
+    summary.amount_total_minor_units === paymentEvidence.amount_total_minor_units &&
+    summary.automatic_tax_enabled === paymentEvidence.automatic_tax_enabled &&
+    summary.automatic_tax_status === paymentEvidence.automatic_tax_status &&
+    summary.terms_of_service_consent === true && paymentEvidence.terms_of_service_consent === 'accepted' &&
+    summary.adult_purchaser_acknowledgement === true &&
+      paymentEvidence.adult_purchaser_acknowledgement === 'accepted';
+  if (!bindingsValid) throw new Error('ARC_STRIPE_CHECKOUT_BINDING_MISMATCH');
+  return { required: true, ready: true, summary };
+}
+
+export async function bindStripeReviewCheckoutToHandoff(
+  store,
+  handoffId,
+  paymentEvidence,
+  paymentEvidenceSha256,
+  env,
+  adapters = {},
+) {
+  if (!HEX_64.test(String(handoffId || '')) || !HEX_64.test(String(paymentEvidenceSha256 || ''))) {
+    throw new TypeError('Stripe review Checkout handoff binding identity is invalid.');
+  }
+  const checkout = await assertStripeReviewCheckoutPaid(store, paymentEvidence, env, adapters);
+  if (!checkout.required) return { required: false, ready: true };
+  const value = {
+    schema: STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+    handoff_id: handoffId,
+    checkout_session_id_hmac_sha256: checkout.summary.checkout_session_id_hmac_sha256,
+    payment_intent_id_hmac_sha256: checkout.summary.payment_intent_id_hmac_sha256,
+    payment_link_id_hmac_sha256: null,
+    payment_evidence_sha256: paymentEvidenceSha256,
+    bridge_immutable_binding_sha256: paymentEvidence.bridge_immutable_binding_sha256,
+    review_session_binding_sha256: paymentEvidence.review_session_binding_sha256,
+    approval_receipt_sha256: paymentEvidence.approval_receipt_sha256,
+    recipient_email_sha256: paymentEvidence.claim_recipient_email_sha256,
+    payer_email_sha256: paymentEvidence.payer_email_sha256,
+    review_checkout_binding_sha256: sha256Hex(canonicalJson(checkout.summary.review_checkout_binding)),
+    stripe_account_id_sha256: checkout.summary.stripe_account_id_sha256,
+    livemode: checkout.summary.livemode,
+  };
+  await ensureImmutable(store, handoffBindingKey(handoffId), value,
+    'ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_CONFLICT');
+  return { binding: value, required: true, ready: true, summary: checkout.summary };
+}
+
 export async function bindStripeCheckoutToHandoff(store, handoffId, paymentEvidence, paymentEvidenceSha256, env, adapters = {}) {
   if (!HEX_64.test(String(handoffId || '')) || !HEX_64.test(String(paymentEvidenceSha256 || ''))) {
     throw new TypeError('Stripe Checkout handoff binding identity is invalid.');
@@ -629,22 +769,40 @@ export async function bindStripeCheckoutToHandoff(store, handoffId, paymentEvide
 export async function assertHandoffStripeCheckoutPaid(store, handoffId, paymentEvidenceSha256, env, adapters = {}) {
   const configuration = stripeCheckoutConfiguration(env);
   if (!configuration.flagsValid) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
-  if (!configuration.required) {
-    if (!configuration.sandboxBypass) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
-    return { required: false, ready: true };
+  if (!configuration.required && !configuration.sandboxBypass) {
+    throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
   }
-  if (!configuration.webhookOperational) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
   if (!HEX_64.test(String(handoffId || '')) || !HEX_64.test(String(paymentEvidenceSha256 || ''))) {
     throw new TypeError('Stripe Checkout handoff binding identity is invalid.');
   }
-  await verifyStripeAccountBinding(env, { fetch: adapters.accountFetch });
   const binding = await readIndex(store, handoffBindingKey(handoffId));
+  // Preserve the explicit legacy sandbox bypass. Review-session handoffs have
+  // no legacy evidence producer, so their durable binding must still be read
+  // and revalidated even when the surrounding test runtime uses that bypass.
+  if (!configuration.required && configuration.sandboxBypass &&
+      binding?.schema !== STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA) {
+    return { required: false, ready: true };
+  }
+  if (!configuration.webhookOperational) throw new Error('ARC_STRIPE_CHECKOUT_LEDGER_DISABLED');
+  await verifyStripeAccountBinding(env, { fetch: adapters.accountFetch });
   if (!binding) throw new Error('ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_REQUIRED');
-  if (binding.schema !== STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA || binding.handoff_id !== handoffId ||
+  const legacyBinding = binding.schema === STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA;
+  const reviewBinding = binding.schema === STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA;
+  if ((!legacyBinding && !reviewBinding) || binding.handoff_id !== handoffId ||
       binding.payment_evidence_sha256 !== paymentEvidenceSha256 || !HEX_64.test(String(binding.checkout_session_id_hmac_sha256 || '')) ||
-      !HEX_64.test(String(binding.payment_intent_id_hmac_sha256 || '')) || !HEX_64.test(String(binding.payment_link_id_hmac_sha256 || '')) ||
+      !HEX_64.test(String(binding.payment_intent_id_hmac_sha256 || '')) ||
+      (legacyBinding ? !HEX_64.test(String(binding.payment_link_id_hmac_sha256 || '')) :
+        binding.payment_link_id_hmac_sha256 !== null) ||
       binding.stripe_account_id_sha256 !== env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 ||
       binding.livemode !== configuration.expectedLivemode) {
+    throw new Error('ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_CONFLICT');
+  }
+  if (reviewBinding && (!HEX_64.test(String(binding.bridge_immutable_binding_sha256 || '')) ||
+      !HEX_64.test(String(binding.review_session_binding_sha256 || '')) ||
+      !HEX_64.test(String(binding.approval_receipt_sha256 || '')) ||
+      !HEX_64.test(String(binding.recipient_email_sha256 || '')) ||
+      !HEX_64.test(String(binding.payer_email_sha256 || '')) ||
+      !HEX_64.test(String(binding.review_checkout_binding_sha256 || '')))) {
     throw new Error('ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_CONFLICT');
   }
   const summary = await assertPaidSummaryAndReceipt(store,
@@ -653,6 +811,12 @@ export async function assertHandoffStripeCheckoutPaid(store, handoffId, paymentE
       summary.payment_intent_id_hmac_sha256 !== binding.payment_intent_id_hmac_sha256 ||
       summary.payment_link_id_hmac_sha256 !== binding.payment_link_id_hmac_sha256 ||
       summary.stripe_account_id_sha256 !== binding.stripe_account_id_sha256 || summary.livemode !== binding.livemode) {
+    throw new Error('ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_CONFLICT');
+  }
+  if (reviewBinding && (summary.payer_email_sha256 !== binding.payer_email_sha256 ||
+      summary.review_checkout_binding?.approval_receipt_sha256 !== binding.approval_receipt_sha256 ||
+      summary.review_checkout_binding?.recipient_email_sha256 !== binding.recipient_email_sha256 ||
+      sha256Hex(canonicalJson(summary.review_checkout_binding)) !== binding.review_checkout_binding_sha256)) {
     throw new Error('ARC_STRIPE_CHECKOUT_HANDOFF_BINDING_CONFLICT');
   }
   return { binding, required: true, ready: true, summary };

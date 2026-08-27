@@ -7,6 +7,7 @@ import {
   parseJsonBodyText,
 } from '../lib/arc2-handoff-core.mjs';
 import { renewClaimInvitation } from '../lib/arc2-handoff-service.mjs';
+import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
 
 export default async (request, context = {}) => {
@@ -22,8 +23,10 @@ export default async (request, context = {}) => {
       return jsonResponse(400, { error: 'invalid_renewal' });
     }
     const store = context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' });
+    const reviewStore = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     const result = await renewClaimInvitation(body.handoff_id, process.env, {
       store,
+      reviewStore,
       clock: context.clock,
       fetch: context.fetch,
       stripeAccountFetch: context.stripeAccountFetch,

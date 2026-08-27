@@ -1,0 +1,362 @@
+{
+  "schema": "arc-review-activation-environment-v1",
+  "version": 1,
+  "default_state": "OFF",
+  "activation_order": [
+    "OFF",
+    "EMAIL_SANDBOX",
+    "CLAIM_SANDBOX",
+    "LIVE_CHECKOUT",
+    "PUBLIC_INTAKE",
+    "PILOT",
+    "OUTREACH"
+  ],
+  "profiles": {
+    "sandbox": {
+      "minimum_stage": "CLAIM_SANDBOX",
+      "stripe_key_mode": "test",
+      "blocked_controls": [],
+      "flags": {
+        "ARC_ADULT_OPERATOR_VERIFIED": "false",
+        "ARC_ALLOW_TEST_MODE_EVENTS": "true",
+        "ARC_BUSINESS_LICENSE_VERIFIED": "false",
+        "ARC_HANDOFF_ENABLED": "false",
+        "ARC_PAYMENT_ARC2_BRIDGE_ENABLED": "true",
+        "ARC_PAYMENT_ARC2_WORKER_ENABLED": "true",
+        "ARC_REVIEW_CHECKOUT_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_PORTAL_ENABLED": "true",
+        "ARC_REVIEW_REVISION_OUTBOX_ENABLED": "true",
+        "ARC_RUNTIME_ENVIRONMENT": "sandbox",
+        "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED": "true",
+        "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED": "false",
+        "ARC_STRIPE_LIVE_MODE_ENABLED": "false",
+        "ARC_STRIPE_REVERSAL_BINDING_ENABLED": "true",
+        "ARC_STRIPE_REVERSAL_CONTROL_REQUIRED": "false",
+        "ARC_STRIPE_REVERSAL_RECHECK_ENABLED": "true",
+        "ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED": "true",
+        "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED": "true",
+        "ARC_STRIPE_REVIEW_REVOCATION_ENABLED": "true",
+        "ARC_TAX_REGISTRATION_VERIFIED": "false",
+        "ARC_TRANSACTIONAL_EMAIL_VERIFIED": "false"
+      }
+    },
+    "production": {
+      "minimum_stage": "LIVE_CHECKOUT",
+      "stripe_key_mode": "live",
+      "flags": {
+        "ARC_ADULT_OPERATOR_VERIFIED": "true",
+        "ARC_ALLOW_TEST_MODE_EVENTS": "false",
+        "ARC_BUSINESS_LICENSE_VERIFIED": "true",
+        "ARC_HANDOFF_ENABLED": "true",
+        "ARC_PAYMENT_ARC2_BRIDGE_ENABLED": "true",
+        "ARC_PAYMENT_ARC2_WORKER_ENABLED": "true",
+        "ARC_REVIEW_CHECKOUT_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_PORTAL_ENABLED": "true",
+        "ARC_REVIEW_REVISION_OUTBOX_ENABLED": "true",
+        "ARC_RUNTIME_ENVIRONMENT": "production",
+        "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED": "true",
+        "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED": "true",
+        "ARC_STRIPE_LIVE_MODE_ENABLED": "true",
+        "ARC_STRIPE_REVERSAL_BINDING_ENABLED": "true",
+        "ARC_STRIPE_REVERSAL_CONTROL_REQUIRED": "true",
+        "ARC_STRIPE_REVERSAL_RECHECK_ENABLED": "true",
+        "ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED": "true",
+        "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED": "true",
+        "ARC_STRIPE_REVIEW_REVOCATION_ENABLED": "true",
+        "ARC_TAX_REGISTRATION_VERIFIED": "true",
+        "ARC_TRANSACTIONAL_EMAIL_VERIFIED": "true"
+      },
+      "blocked_controls": []
+    }
+  },
+  "activation_flags": [
+    "ARC_ADULT_OPERATOR_VERIFIED",
+    "ARC_ALLOW_TEST_MODE_EVENTS",
+    "ARC_BUSINESS_LICENSE_VERIFIED",
+    "ARC_HANDOFF_ENABLED",
+    "ARC_PAYMENT_ARC2_BRIDGE_ENABLED",
+    "ARC_PAYMENT_ARC2_WORKER_ENABLED",
+    "ARC_REVIEW_CHECKOUT_ENABLED",
+    "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED",
+    "ARC_REVIEW_EMAIL_OUTBOX_ENABLED",
+    "ARC_REVIEW_PORTAL_ENABLED",
+    "ARC_REVIEW_REVISION_OUTBOX_ENABLED",
+    "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED",
+    "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED",
+    "ARC_STRIPE_LIVE_MODE_ENABLED",
+    "ARC_STRIPE_REVERSAL_BINDING_ENABLED",
+    "ARC_STRIPE_REVERSAL_CONTROL_REQUIRED",
+    "ARC_STRIPE_REVERSAL_RECHECK_ENABLED",
+    "ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED",
+    "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED",
+    "ARC_STRIPE_REVIEW_REVOCATION_ENABLED",
+    "ARC_TAX_REGISTRATION_VERIFIED",
+    "ARC_TRANSACTIONAL_EMAIL_VERIFIED"
+  ],
+  "secrets": [
+    {
+      "name": "ARC_ACTIVATION_MANIFEST_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_INVITE_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_SESSION_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_RECORD_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_DECISION_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_INTERNAL_API_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions", "zapier_email_worker"]
+    },
+    {
+      "name": "ARC_REVIEW_REVISION_OUTBOX_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_REVIEW_REVISION_SUPPLY_CHAIN_HMAC_SECRET",
+      "authority": "preview_supply_chain",
+      "consumers": ["netlify_functions", "zapier_revision_worker"]
+    },
+    {
+      "name": "ARC_REVIEW_REVISION_INVITE_RESERVATION_HMAC_SECRET",
+      "authority": "preview_supply_chain",
+      "consumers": ["netlify_functions", "zapier_revision_worker"]
+    },
+    {
+      "name": "ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions", "zapier_revision_worker"]
+    },
+    {
+      "name": "ARC_STRIPE_REVIEW_SECRET_KEY",
+      "authority": "stripe",
+      "consumers": ["netlify_review_checkout"]
+    },
+    {
+      "name": "ARC_STRIPE_ACCOUNT_VERIFICATION_KEY",
+      "authority": "stripe",
+      "consumers": ["netlify_review_checkout"]
+    },
+    {
+      "name": "ARC_STRIPE_WEBHOOK_SIGNING_SECRET",
+      "authority": "stripe",
+      "consumers": ["netlify_stripe_webhook"]
+    },
+    {
+      "name": "ARC_STRIPE_REVERSAL_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_review_checkout", "review_checkout_revocation_worker"]
+    },
+    {
+      "name": "ARC_STRIPE_REVERSAL_BINDING_SECRET",
+      "authority": "checkout_evidence_producer",
+      "consumers": ["netlify_functions", "stripe_reversal_binding_worker"]
+    },
+    {
+      "name": "ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions", "stripe_reversal_binding_worker"]
+    },
+    {
+      "name": "ARC_STRIPE_REVERSAL_RECHECK_SECRET",
+      "authority": "stripe_recheck_producer",
+      "consumers": ["netlify_functions", "stripe_reversal_recheck_worker"]
+    },
+    {
+      "name": "ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions", "stripe_reversal_recheck_worker"]
+    },
+    {
+      "name": "ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions"]
+    },
+    {
+      "name": "ARC_PAYMENT_ARC2_WORKER_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_functions", "zapier_payment_arc2_worker"]
+    }
+  ],
+  "bindings": [
+    {
+      "name": "ARC_EXPECTED_NETLIFY_SITE_ID",
+      "format": "uuid"
+    },
+    {
+      "name": "ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_EXPECTED_PRICE_ID",
+      "format": "stripe_price_id"
+    },
+    {
+      "name": "ARC_EXPECTED_PRODUCT_ID",
+      "format": "stripe_product_id"
+    },
+    {
+      "name": "ARC_EXPECTED_PRODUCT_TAX_CODE",
+      "format": "stripe_tax_code"
+    },
+    {
+      "name": "ARC_EXPECTED_PRODUCT_NAME",
+      "format": "exact_product_name"
+    },
+    {
+      "name": "ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER",
+      "format": "checkout_integration_id"
+    },
+    {
+      "name": "ARC_STRIPE_CHECKOUT_OFFER_ID",
+      "format": "exact_offer_id"
+    },
+    {
+      "name": "ARC_STRIPE_CHECKOUT_TERMS_VERSION",
+      "format": "exact_terms_version"
+    },
+    {
+      "name": "ARC_STRIPE_WEBHOOK_API_VERSION",
+      "format": "exact_stripe_api_version"
+    },
+    {
+      "name": "ARC_STRIPE_CHECKOUT_SUCCESS_URL",
+      "format": "exact_checkout_success_url"
+    },
+    {
+      "name": "ARC_STRIPE_CHECKOUT_CANCEL_URL",
+      "format": "exact_checkout_cancel_url"
+    },
+    {
+      "name": "ARC_REVIEW_PUBLIC_ORIGIN",
+      "format": "exact_public_origin"
+    },
+    {
+      "name": "ARC_REVIEW_PREVIEW_ORIGIN",
+      "format": "exact_preview_origin"
+    },
+    {
+      "name": "ARC_REVIEW_CHECKOUT_ORIGIN",
+      "format": "exact_checkout_origin"
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_PROVIDER",
+      "format": "provider_slug"
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_PROVIDER_ACCOUNT_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_SENDER_IDENTITY_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_NATIVE_WEBHOOK_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_REVIEW_EMAIL_NATIVE_SUPPRESSION_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_ZAPIER_REVIEW_EMAIL_WORKFLOW_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_ZAPIER_REVIEW_REVISION_WORKFLOW_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_ZAPIER_PAYMENT_ARC2_WORKFLOW_ID_SHA256",
+      "format": "sha256"
+    },
+    {
+      "name": "ARC_ZAPIER_REVIEW_CHECKOUT_REVOCATION_WORKFLOW_ID_SHA256",
+      "format": "sha256"
+    }
+  ],
+  "routes": {
+    "review_public": [
+      { "method": "POST", "path": "/api/review/exchange" },
+      { "method": "GET", "path": "/api/review/status" },
+      { "method": "POST", "path": "/api/review/decision" },
+      { "method": "POST", "path": "/api/review/checkout" }
+    ],
+    "email_worker": [
+      { "method": "POST", "path": "/api/internal/review-email/prepare" },
+      { "method": "POST", "path": "/api/internal/review-email/reserve", "claim_next_body": { "claim_next": true } },
+      { "method": "POST", "path": "/api/internal/review-email/ack" }
+    ],
+    "revision_worker": [
+      { "method": "POST", "path": "/api/internal/review-revision/claim", "claim_next_body": { "cursor": null } },
+      { "method": "POST", "path": "/api/internal/review-revision/complete" }
+    ],
+    "payment_arc2_worker": [
+      { "method": "POST", "path": "/internal/payment-arc2/claim", "claim_next_fields": ["claim_token"] },
+      { "method": "POST", "path": "/internal/payment-arc2/start" },
+      { "method": "POST", "path": "/internal/payment-arc2/complete" }
+    ]
+  },
+  "readback": {
+    "env_name": "ARC_REVIEW_ACTIVATION_READBACK_JSON",
+    "schema": "arc-review-activation-readback-v1",
+    "maximum_age_seconds": 900,
+    "provider_controls_state": "OFF",
+    "required_sha256_fields": [
+      "netlify.env_name_set_readback_sha256",
+      "netlify.route_matrix_readback_sha256",
+      "netlify.route_probe_receipt_sha256",
+      "stripe.catalog_readback_sha256",
+      "stripe.checkout_session_expire_capability_readback_sha256",
+      "stripe.checkout_session_retrieve_capability_readback_sha256",
+      "stripe.webhook_destination_readback_sha256",
+      "email.native_webhook_readback_sha256",
+      "email.native_suppression_readback_sha256",
+      "email.sandbox_delivery_receipt_sha256",
+      "zapier.email_workflow_version_readback_sha256",
+      "zapier.revision_workflow_version_readback_sha256",
+      "zapier.payment_arc2_workflow_version_readback_sha256",
+      "zapier.payment_arc2_start_contract_receipt_sha256",
+      "zapier.checkout_revocation_workflow_version_readback_sha256",
+      "zapier.checkout_revocation_worker_contract_receipt_sha256",
+      "zapier.claim_next_contract_receipt_sha256"
+    ]
+  }
+}

@@ -28,6 +28,15 @@ import {
   acknowledgeFinalDelivery,
   finalDeliveryReceiptContract,
 } from '../netlify/lib/arc2-handoff-service.mjs';
+import {
+  STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+  stripeCheckoutKeys,
+} from '../netlify/lib/stripe-checkout-core.mjs';
+import {
+  STRIPE_REVERSAL_BINDING_SCHEMA,
+  STRIPE_REVERSAL_RECHECK_SCHEMA,
+  stripeReversalKeys,
+} from '../netlify/lib/stripe-reversal-core.mjs';
 import deliveryAckHandler, { config as deliveryAckConfig } from '../netlify/functions/arc2-final-delivery-ack.mjs';
 
 class FakeStore {
@@ -235,9 +244,54 @@ function makeRecord({
   return { record: { ...candidate, outbox_claim_key_hmac_sha256: outbox.digest }, outbox };
 }
 
-async function seed(store, record, outbox) {
+async function seed(store, record, outbox, authorityNow = now) {
   await createEntry(store, `handoffs/${record.handoff_id}`, record);
   await createIndex(store, outbox.key, outbox.value);
+  const checkoutSessionId = `cs_test_Ack${record.handoff_id.slice(0, 24)}`;
+  const paymentIntentId = `pi_Ack${record.handoff_id.slice(0, 24)}`;
+  const checkoutSessionIdHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `stripe-checkout-session-id-v1\n${checkoutSessionId}`);
+  const paymentIntentIdHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `stripe-checkout-payment-intent-id-v1\n${paymentIntentId}`);
+  await createIndex(store, stripeCheckoutKeys.handoffBindingKey(record.handoff_id), {
+    schema: STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+    handoff_id: record.handoff_id,
+    checkout_session_id_hmac_sha256: checkoutSessionIdHmac,
+    payment_intent_id_hmac_sha256: paymentIntentIdHmac,
+    payment_link_id_hmac_sha256: 'a'.repeat(64),
+    payment_evidence_sha256: record.payment_evidence_sha256,
+    stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+    livemode: false,
+  });
+  const reversalCheckoutHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `checkout-session-v1\n${checkoutSessionId}`);
+  const reversalPaymentHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `payment-intent-v1\n${paymentIntentId}`);
+  const bindingEvidenceSha256 = sha256Hex(`ack-binding:${record.handoff_id}`);
+  await createIndex(store, stripeReversalKeys.handoffBindingKey(record.handoff_id), {
+    schema: STRIPE_REVERSAL_BINDING_SCHEMA,
+    handoff_id: record.handoff_id,
+    checkout_session_id_hmac_sha256: reversalCheckoutHmac,
+    payment_intent_id_hmac_sha256: reversalPaymentHmac,
+    stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+    livemode: false,
+    payment_evidence_sha256: record.payment_evidence_sha256,
+    binding_evidence_sha256: bindingEvidenceSha256,
+  });
+  await createIndex(store, stripeReversalKeys.recheckKey(record.handoff_id), {
+    schema: STRIPE_REVERSAL_RECHECK_SCHEMA,
+    handoff_id: record.handoff_id,
+    checkout_session_id_hmac_sha256: reversalCheckoutHmac,
+    payment_intent_id_hmac_sha256: reversalPaymentHmac,
+    stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+    livemode: false,
+    payment_intent_status: 'succeeded',
+    refunded_amount_minor_units: 0,
+    dispute_status: 'none',
+    issued_at: authorityNow.toISOString(),
+    evidence_sha256: sha256Hex(`ack-recheck:${record.handoff_id}`),
+    binding_evidence_sha256: bindingEvidenceSha256,
+  });
 }
 
 const providerAccountHmac = hmacHex(
@@ -619,7 +673,7 @@ const endpointRecord = {
   updated_at: new Date(endpointNow.getTime() - 60_000).toISOString(),
   final_deploy_ready_at: new Date(endpointNow.getTime() - 60_000).toISOString(),
 };
-await seed(endpointStore, endpointRecord, endpointFixture.outbox);
+await seed(endpointStore, endpointRecord, endpointFixture.outbox, endpointNow);
 const endpointReceiptValue = receiptFor(endpointRecord, {
   provider_event_id: 'endpoint-event-id',
   provider_message_id: 'endpoint-message-id',
@@ -660,13 +714,18 @@ try {
     headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
     body,
   });
+  const endpointContext = {
+    arc2Store: endpointStore,
+    reviewStore: new FakeStore(),
+    clock: () => new Date(endpointNow),
+  };
   const genericSecretResponse = await deliveryAckHandler(request(env.ARC_HANDOFF_TRIGGER_SECRET), { arc2Store: endpointStore });
   assert.equal(genericSecretResponse.status, 401, 'The generic trigger secret cannot invoke final delivery acknowledgement.');
-  const firstResponse = await deliveryAckHandler(request(), { arc2Store: endpointStore });
+  const firstResponse = await deliveryAckHandler(request(), endpointContext);
   const firstBody = await firstResponse.json();
-  const replayResponse = await deliveryAckHandler(request(), { arc2Store: endpointStore });
+  const replayResponse = await deliveryAckHandler(request(), endpointContext);
   const replayBody = await replayResponse.json();
-  assert.equal(firstResponse.status, 200);
+  assert.equal(firstResponse.status, 200, JSON.stringify(firstBody));
   assert.equal(replayResponse.status, 200);
   assert.deepEqual(replayBody, firstBody, 'Endpoint exact replay must have a stable response.');
   assert.deepEqual(firstBody, { handoff_id: handoffId, delivery_status: 'DELIVERED', delivered_at: endpointReceiptValue.delivered_at });
@@ -674,11 +733,11 @@ try {
 
   const unauthorized = await deliveryAckHandler(new Request('https://arcweb.onl/internal/arc2/final-delivery-ack', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body,
-  }), { arc2Store: endpointStore });
+  }), endpointContext);
   assert.equal(unauthorized.status, 401);
   const wrongMethod = await deliveryAckHandler(new Request('https://arcweb.onl/internal/arc2/final-delivery-ack', {
     method: 'GET', headers: { authorization: `Bearer ${env.ARC_FINAL_DELIVERY_ACK_SECRET}` },
-  }), { arc2Store: endpointStore });
+  }), endpointContext);
   assert.equal(wrongMethod.status, 405);
   const wrongType = await deliveryAckHandler(new Request('https://arcweb.onl/internal/arc2/final-delivery-ack', {
     method: 'POST', headers: { authorization: `Bearer ${env.ARC_FINAL_DELIVERY_ACK_SECRET}`, 'content-type': 'text/plain' }, body,
@@ -698,7 +757,7 @@ try {
     method: 'POST',
     headers: { authorization: `Bearer ${env.ARC_FINAL_DELIVERY_ACK_SECRET}`, 'content-type': 'application/json' },
     body: conflictBody,
-  }), { arc2Store: endpointStore });
+  }), endpointContext);
   assert.equal(conflictResponse.status, 409);
   assert.deepEqual(await conflictResponse.json(), { error: 'delivery_acknowledgement_conflict' });
 } finally {
