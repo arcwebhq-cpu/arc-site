@@ -7,6 +7,7 @@ import {
   deliverIntakeToArc1,
 } from '../lib/intake-arc1-bridge-core.mjs';
 import { INTAKE_STORE } from '../lib/intake-submission-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const response = (status, value) => new Response(JSON.stringify(value), { status, headers: {
   'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8',
@@ -76,7 +77,15 @@ export function createIntakeArc1BridgeHandler() {
   };
 }
 
-export default createIntakeArc1BridgeHandler();
+const handler = createIntakeArc1BridgeHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-bridge',
+  paths: ['/internal/intake/arc1/deliver'],
+  active: ({ env }) => publicIntakeAuthorityReady(env) &&
+    env[INTAKE_ARC1_BRIDGE_ENABLED_ENV] === 'true',
+  handler,
+});
 
 export const config = {
   path: '/internal/intake/arc1/deliver', method: 'POST',

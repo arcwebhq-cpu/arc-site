@@ -9,11 +9,16 @@ import {
 import { renewClaimInvitation } from '../lib/arc2-handoff-service.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_HANDOFF_TRIGGER_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
+  const renewalOperationId = request.headers.get('idempotency-key') || '';
+  if (!/^[A-Za-z0-9._~-]{16,128}$/.test(renewalOperationId)) {
+    return jsonResponse(400, { error: 'invalid_renewal' });
+  }
   if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     return jsonResponse(415, { error: 'json_required' });
   }
@@ -30,6 +35,7 @@ export default async (request, context = {}) => {
       clock: context.clock,
       fetch: context.fetch,
       stripeAccountFetch: context.stripeAccountFetch,
+      renewalOperationId,
     });
     if (!result) return jsonResponse(404, { error: 'handoff_not_found' });
     const origin = new URL(process.env.ARC_PUBLIC_ORIGIN).origin;
@@ -55,6 +61,13 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'claim_invitation_renewal_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-claim-invitation-renew',
+  paths: ['/internal/arc2/claim-invitation-renew'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/internal/arc2/claim-invitation-renew',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
-import bridgeHandler, { config as bridgeConfig, createIntakeArc1BridgeHandler } from '../netlify/functions/intake-arc1-bridge.mjs';
+import { config as bridgeConfig, createIntakeArc1BridgeHandler } from '../netlify/functions/intake-arc1-bridge.mjs';
 import {
   INTAKE_ARC1_ACK_SCHEMA,
   INTAKE_ARC1_CONSUMER_SCHEMA,
@@ -13,6 +13,7 @@ import {
   validateIntakeSubmissionForBridge,
 } from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
+import { consumeIntakeEmailVerificationToken, reserveIntakeEmailVerification } from '../netlify/lib/intake-email-verification-core.mjs';
 import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 class FakeStore {
@@ -30,6 +31,12 @@ class FakeStore {
     if (options.onlyIfMatch && !existing) return { modified: false };
     const etag = `etag-${++this.sequence}`;
     this.values.set(key, { data: structuredClone(data), etag });
+    if (!existing && key.startsWith('submissions/') && data?.schema === 'arc-intake-function-submission-v1') {
+      const verification = await reserveIntakeEmailVerification(data, env, this, { clock: () => receivedAt });
+      await consumeIntakeEmailVerificationToken(new URL(verification.verification_url).hash.slice(1), env, this, {
+        clock: () => receivedAt,
+      });
+    }
     return { modified: true, etag };
   }
 }
@@ -65,6 +72,11 @@ const env = {
   ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET: 'proof-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ASSET_RETRIEVAL_SECRET: 'asset-retrieval-secret-unique-0123456789',
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
+  ARC_INTAKE_EMAIL_VERIFICATION_ENABLED: 'true',
+  ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET: 'verification-state-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET: 'verification-token-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET: 'verification-recipient-secret-unique-012345',
+  ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET: 'verification-release-secret-unique-01234567',
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   SITE_NAME: 'arcsites',
@@ -240,7 +252,7 @@ try {
   });
   assert.equal(disabled.status, 503);
   assert.deepEqual(await disabled.json(), { error: 'bridge_disabled' });
-  assert.equal((await bridgeHandler(new Request('https://arcweb.onl/internal/intake/arc1/deliver'))).status, 405);
+  assert.equal((await handler(new Request('https://arcweb.onl/internal/intake/arc1/deliver'))).status, 405);
   assert.equal(bridgeConfig.path, '/internal/intake/arc1/deliver');
   assert.equal(bridgeConfig.method, 'POST');
 } finally {

@@ -8,6 +8,7 @@ import {
   reviewRevisionInternalWorkerAdapter,
   reviewRevisionOutboxConfiguration,
 } from '../lib/review-revision-outbox-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 function bearerSecret(request) {
   if (request.headers.has('origin')) return null;
@@ -24,7 +25,7 @@ function workerError(error) {
   return [503, 'revision_worker_unavailable'];
 }
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!reviewRevisionOutboxConfiguration(process.env).enabled) {
     return reviewJsonResponse(503, { error: 'revision_worker_disabled' });
   }
@@ -62,6 +63,13 @@ export default async (request, context = {}) => {
     return reviewJsonResponse(status, { error: code });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'review-revision-claim',
+  paths: ['/api/internal/review-revision/claim'],
+  active: ({ env }) => reviewRevisionOutboxConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/api/internal/review-revision/claim', method: 'POST',

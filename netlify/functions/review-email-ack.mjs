@@ -9,6 +9,7 @@ import {
 } from '../lib/review-email-http-core.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { reviewJsonResponse } from '../lib/review-http-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const PATH = '/api/internal/review-email/ack';
 
@@ -18,7 +19,7 @@ function exactFields(value, fields) {
     JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...fields].sort());
 }
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!reviewEmailInternalApiConfiguration(process.env).enabled) {
     return reviewJsonResponse(503, { error: 'review_email_worker_disabled' });
   }
@@ -46,6 +47,13 @@ export default async (request, context = {}) => {
     return reviewJsonResponse(status, { error: code });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'review-email-ack',
+  paths: [PATH],
+  active: ({ env }) => reviewEmailInternalApiConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/api/internal/review-email/ack', method: 'POST',

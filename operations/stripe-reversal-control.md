@@ -17,8 +17,15 @@ Netlify Blobs cannot atomically lock a Stripe webhook key and a Netlify provider
 
 ## Required external setup
 
-1. Use only the verified ARC Stripe account. Create separate test and live webhook event destinations; never reuse their secrets.
-2. Pin the event destination to API version `2026-07-29.dahlia` and select exactly:
+1. Use only the verified ARC Stripe account. Create one event destination per
+   mode at `/internal/stripe/reversal-webhook`; test and live remain separate
+   destinations and never reuse secrets. Within one mode, Checkout and
+   refund/dispute events must share that one endpoint and its single
+   `ARC_STRIPE_WEBHOOK_SIGNING_SECRET`. Do not create a second Checkout webhook.
+2. Pin that destination to API version `2026-07-29.dahlia` and select exactly
+   this complete union:
+   - `checkout.session.completed`, `checkout.session.async_payment_succeeded`
+   - `checkout.session.async_payment_failed`, `checkout.session.expired`
    - `refund.created`, `refund.updated`, `refund.failed`
    - `charge.refunded`
    - `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`

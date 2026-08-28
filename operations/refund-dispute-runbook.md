@@ -4,8 +4,9 @@ Status: operational template. Only the verified adult operator may authorize a
 real refund. Never act in the currently connected non-ARC Stripe account.
 
 1. Locate the exact ARC Checkout Session and PaymentIntent in the authoritative
-   ARC Stripe account. Match account hash, mode, Payment Link, Price, customer,
-   approved preview hash, subtotal, tax, total, and fulfillment record.
+   ARC Stripe account. Match account hash, mode, Price, customer, approved
+   preview hash, subtotal, tax, total, and fulfillment record. The V11 Session
+   must have `payment_link=null`; any Payment Link belongs to the retired flow.
 2. Confirm the published refund policy version accepted at checkout and whether
    claim/final delivery occurred. Preserve the customer's request and evidence.
 3. Check for a prior refund, dispute, duplicate request, or pending asynchronous

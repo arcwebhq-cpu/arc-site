@@ -9,8 +9,9 @@ import {
 import { acknowledgeFinalDelivery } from '../lib/arc2-handoff-service.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_FINAL_DELIVERY_ACK_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
@@ -51,6 +52,13 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'delivery_acknowledgement_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-final-delivery-ack',
+  paths: ['/internal/arc2/final-delivery-ack'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/internal/arc2/final-delivery-ack',

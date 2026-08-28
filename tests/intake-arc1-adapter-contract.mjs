@@ -2,12 +2,27 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import adapterHandler, { config as adapterConfig } from '../netlify/functions/intake-arc1-adapter.mjs';
-import backgroundHandler, { config as backgroundConfig } from '../netlify/functions/intake-arc1-adapter-background.mjs';
-import claimHandler, { config as claimConfig } from '../netlify/functions/intake-arc1-adapter-claim.mjs';
-import completionHandler, { config as completionConfig } from '../netlify/functions/intake-arc1-adapter-complete.mjs';
-import migrationHandler, { config as migrationConfig } from '../netlify/functions/intake-arc1-adapter-legacy-migration.mjs';
-import recoveryHandler, { config as recoveryConfig } from '../netlify/functions/intake-arc1-adapter-recovery.mjs';
+import { config as adapterConfig, createIntakeArc1AdapterHandler } from '../netlify/functions/intake-arc1-adapter.mjs';
+import {
+  config as backgroundConfig,
+  createIntakeArc1AdapterBackgroundHandler,
+} from '../netlify/functions/intake-arc1-adapter-background.mjs';
+import {
+  config as claimConfig,
+  createIntakeArc1AdapterClaimHandler,
+} from '../netlify/functions/intake-arc1-adapter-claim.mjs';
+import {
+  config as completionConfig,
+  createIntakeArc1AdapterCompletionHandler,
+} from '../netlify/functions/intake-arc1-adapter-complete.mjs';
+import {
+  config as migrationConfig,
+  createIntakeArc1AdapterLegacyMigrationHandler,
+} from '../netlify/functions/intake-arc1-adapter-legacy-migration.mjs';
+import {
+  config as recoveryConfig,
+  createIntakeArc1AdapterRecoveryHandler,
+} from '../netlify/functions/intake-arc1-adapter-recovery.mjs';
 import {
   INTAKE_ARC1_ADAPTER_BACKGROUND_SCHEMA,
   INTAKE_ARC1_ADAPTER_CLAIM_REQUEST_SCHEMA,
@@ -33,12 +48,27 @@ import {
 } from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import { retrievePrivateAsset } from '../netlify/lib/intake-private-asset-core.mjs';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
+import { consumeIntakeEmailVerificationToken, reserveIntakeEmailVerification } from '../netlify/lib/intake-email-verification-core.mjs';
 import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
+const adapterHandler = createIntakeArc1AdapterHandler();
+const backgroundHandler = createIntakeArc1AdapterBackgroundHandler();
+const claimHandler = createIntakeArc1AdapterClaimHandler();
+const completionHandler = createIntakeArc1AdapterCompletionHandler();
+const migrationHandler = createIntakeArc1AdapterLegacyMigrationHandler();
+const recoveryHandler = createIntakeArc1AdapterRecoveryHandler();
+
 class FakeStore {
-  constructor() { this.values = new Map(); this.sequence = 0; this.writes = []; this.reads = 0; this.failReviewWrites = false; }
+  constructor() {
+    this.values = new Map(); this.sequence = 0; this.writes = []; this.reads = 0;
+    this.failReviewWrites = false; this.failReadKeyOnce = null;
+  }
   async getWithMetadata(key) {
     this.reads += 1;
+    if (key === this.failReadKeyOnce) {
+      this.failReadKeyOnce = null;
+      throw new TypeError('synthetic transient Blob read outage');
+    }
     const current = this.values.get(key);
     return current ? { data: structuredClone(current.data), etag: current.etag } : null;
   }
@@ -51,6 +81,12 @@ class FakeStore {
     if (options.onlyIfMatch && !current) return { modified: false };
     const etag = `etag-${++this.sequence}`;
     this.values.set(key, { data: structuredClone(data), etag });
+    if (!current && key.startsWith('submissions/') && data?.schema === 'arc-intake-function-submission-v1') {
+      const verification = await reserveIntakeEmailVerification(data, env, this, { clock: () => now });
+      await consumeIntakeEmailVerificationToken(new URL(verification.verification_url).hash.slice(1), env, this, {
+        clock: () => now,
+      });
+    }
     return { modified: true, etag };
   }
   async delete(key) { this.values.delete(key); }
@@ -104,6 +140,11 @@ const env = {
   ARC_INTAKE_ARC1_PACKET_SECRET: 'packet-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ARC1_CONSUMER_BEARER: 'consumer-bearer-unique-0123456789-abcdef',
   ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET: 'consumer-receipt-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_ENABLED: 'true',
+  ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET: 'verification-state-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET: 'verification-token-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET: 'verification-recipient-secret-unique-012345',
+  ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET: 'verification-release-secret-unique-01234567',
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   SITE_NAME: 'arcsites', URL: 'https://arcweb.onl',
@@ -182,6 +223,21 @@ try {
   assert.equal(await replayResponse.text(), acknowledgementJson);
   assert.equal(ingressStore.writes.filter((item) => item.key === ingressKey && item.onlyIfNew).length, 1,
     'A sequential exact replay must not create a second durable ingress record.');
+
+  const tamperedAckStore = new FakeStore();
+  for (const [key, item] of ingressStore.values) await tamperedAckStore.setJSON(key, item.data, { onlyIfNew: true });
+  const tamperedAckEntry = tamperedAckStore.values.get(ingressKey);
+  const tamperedAckWrapper = JSON.parse(tamperedAckEntry.data.acknowledgement_json);
+  tamperedAckWrapper.hmac_sha256 = '0'.repeat(64);
+  tamperedAckEntry.data.acknowledgement_json = canonicalJson(tamperedAckWrapper);
+  tamperedAckEntry.data.acknowledgement_sha256 = createHash('sha256')
+    .update(tamperedAckEntry.data.acknowledgement_json).digest('hex');
+  await assert.rejects(acceptArc1AdapterEnvelope(adapterRequestBody, new Request(env.ARC_INTAKE_ARC1_ENDPOINT, {
+    method: 'POST', headers: adapterRequestHeaders, body: adapterRequestBody,
+  }), env, {
+    get source() { throw new Error('Tampered durable ACK replay must fail before source access.'); },
+    adapter: tamperedAckStore,
+  }), /ACK_CONFLICT/, 'A self-consistent Blob hash cannot replace the exact ACK HMAC.');
 
   // Two simultaneous first deliveries use different request clocks but still
   // converge because claim_created_at is bound to immutable producer evidence.
@@ -802,6 +858,18 @@ try {
     `https://arcweb.onl/internal/intake/arc1/adapter/recover?cursor=${encodeURIComponent(corruptedCursor)}`,
     { method: 'POST' },
   ), env, { source: sourceStore, adapter: starvationStore }), /cursor signature/i);
+
+  const outageStore = new FakeStore();
+  const outagePendingKey = `pending/${'0'.repeat(64)}`;
+  await outageStore.setJSON(outagePendingKey, { malformed: true }, { onlyIfNew: true });
+  outageStore.failReadKeyOnce = outagePendingKey;
+  await assert.rejects(recoverPendingArc1AdapterDispatches(new Request(
+    'https://arcweb.onl/internal/intake/arc1/adapter/recover', { method: 'POST' },
+  ), env, { source: sourceStore, adapter: outageStore }), /transient Blob read outage/);
+  assert.equal(outageStore.values.has(outagePendingKey), true,
+    'A transient provider read failure must retain recovery visibility.');
+  assert.equal([...outageStore.values.keys()].some((key) => key.startsWith('quarantine/')), false,
+    'Provider unavailability is not corruption evidence.');
 
   // All endpoints honor revocation before parsing or touching Blob/network.
   for (const flag of ['ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {

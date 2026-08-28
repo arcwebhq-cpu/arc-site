@@ -8,11 +8,13 @@ import {
   INTAKE_ARC1_ADAPTER_STORE,
   INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV,
   acceptArc1AdapterEnvelope,
+  arc1AdapterProtocolEnabled,
   authorizeArc1AdapterIngress,
   markArc1AdapterQueueUnavailable,
   queueArc1AdapterDispatch,
 } from '../lib/intake-arc1-adapter-core.mjs';
 import { INTAKE_STORE } from '../lib/intake-submission-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const securityHeaders = Object.freeze({
   'Cache-Control': 'no-store',
@@ -70,7 +72,7 @@ export function createIntakeArc1AdapterHandler() {
     } catch (error) {
       if (error?.message === 'ARC1_ADAPTER_DISABLED') return json(503, { error: 'adapter_disabled' });
       if (error?.message === 'ARC1_ADAPTER_UNAUTHORIZED') return json(401, { error: 'unauthorized' });
-      if (/ARC1_ADAPTER_(?:ENVELOPE|ASSET|INGRESS|PENDING_INDEX)_CONFLICT/.test(error?.message || '') ||
+      if (/ARC1_ADAPTER_(?:ACK|ENVELOPE|ASSET|INGRESS|PENDING_INDEX)_CONFLICT/.test(error?.message || '') ||
           error?.message === 'ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED') {
         return json(409, { error: 'adapter_conflict' });
       }
@@ -80,7 +82,14 @@ export function createIntakeArc1AdapterHandler() {
   };
 }
 
-export default createIntakeArc1AdapterHandler();
+const handler = createIntakeArc1AdapterHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-adapter',
+  paths: ['/internal/intake/arc1/adapter'],
+  active: ({ env }) => publicIntakeAuthorityReady(env) && arc1AdapterProtocolEnabled(env),
+  handler,
+});
 
 export const config = {
   path: '/internal/intake/arc1/adapter', method: 'POST',

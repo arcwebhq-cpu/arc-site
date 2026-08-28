@@ -5,12 +5,18 @@ import {
   renewExpiredReadyReviewEmail,
 } from '../lib/review-email-outbox-core.mjs';
 import {
+  REVIEW_EMAIL_RESEND_CAPSULE_ENABLED_ENV,
+  sealPreviewReviewEmailCapsule,
+} from '../lib/review-email-resend-core.mjs';
+import { EMAIL_RECIPIENT_VAULT_STORE } from '../lib/email-recipient-vault-core.mjs';
+import {
   readAuthenticatedReviewEmailJson,
   reviewEmailInternalApiConfiguration,
   reviewEmailInternalHttpError,
 } from '../lib/review-email-http-core.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { reviewJsonResponse } from '../lib/review-http-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const PATH = '/api/internal/review-email/prepare';
 const INVITE_FIELDS = Object.freeze([
@@ -25,7 +31,7 @@ function exactFields(value, fields) {
     JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...fields].sort());
 }
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!reviewEmailInternalApiConfiguration(process.env).enabled) {
     return reviewJsonResponse(503, { error: 'review_email_worker_disabled' });
   }
@@ -34,12 +40,21 @@ export default async (request, context = {}) => {
     const value = await readAuthenticatedReviewEmailJson(request, PATH, 20_000, process.env, {
       clock: context.clock,
     });
+    const capsuleEnabled = process.env[REVIEW_EMAIL_RESEND_CAPSULE_ENABLED_ENV] === 'true';
     const prepare = exactFields(value, ['invite']) ||
-      exactFields(value, ['invite', 'source_reference_hmac_sha256']);
+      exactFields(value, ['invite', 'source_reference_hmac_sha256']) ||
+      capsuleEnabled && (exactFields(value, ['invite', 'recipient_email']) ||
+        exactFields(value, ['invite', 'recipient_email', 'source_reference_hmac_sha256']));
     const renew = exactFields(value, ['invite', 'replaced_invite_hmac_sha256']) ||
-      exactFields(value, ['invite', 'replaced_invite_hmac_sha256', 'source_reference_hmac_sha256']);
+      exactFields(value, ['invite', 'replaced_invite_hmac_sha256', 'source_reference_hmac_sha256']) ||
+      capsuleEnabled && (exactFields(value, ['invite', 'recipient_email', 'replaced_invite_hmac_sha256']) ||
+        exactFields(value, ['invite', 'recipient_email', 'replaced_invite_hmac_sha256',
+          'source_reference_hmac_sha256']));
     if ((!prepare && !renew) || !exactFields(value.invite, INVITE_FIELDS)) {
       throw new TypeError('Review email preparation fields are invalid.');
+    }
+    if (capsuleEnabled && typeof value.recipient_email !== 'string') {
+      throw new TypeError('Review email capsule recipient is required.');
     }
     const store = context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' });
     const result = renew
@@ -52,7 +67,17 @@ export default async (request, context = {}) => {
         clock: context.clock,
         sourceReferenceHmacSha256: value.source_reference_hmac_sha256,
       });
+    if (capsuleEnabled) {
+      const vaultStore = context.vaultStore ||
+        getStore({ name: EMAIL_RECIPIENT_VAULT_STORE, consistency: 'strong' });
+      await sealPreviewReviewEmailCapsule(vaultStore, {
+        invite_token: value.invite.invite_token,
+        prepared: result,
+        recipient_email: value.recipient_email,
+      }, process.env, { clock: context.clock, randomBytes: context.randomBytes });
+    }
     return reviewJsonResponse(200, {
+      capsule_sealed: capsuleEnabled,
       idempotent_replay: result.idempotent_replay,
       invite_hmac_sha256: result.invite.invite_hmac_sha256,
       outbox_hmac_sha256: result.outbox.outbox_hmac_sha256,
@@ -65,6 +90,13 @@ export default async (request, context = {}) => {
     return reviewJsonResponse(status, { error: code });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'review-email-prepare',
+  paths: [PATH],
+  active: ({ env }) => reviewEmailInternalApiConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/api/internal/review-email/prepare', method: 'POST',

@@ -37,7 +37,7 @@ import {
   STRIPE_REVERSAL_RECHECK_SCHEMA,
   stripeReversalKeys,
 } from '../netlify/lib/stripe-reversal-core.mjs';
-import deliveryAckHandler, { config as deliveryAckConfig } from '../netlify/functions/arc2-final-delivery-ack.mjs';
+import deliveryAckRouteHandler, { config as deliveryAckConfig } from '../netlify/functions/arc2-final-delivery-ack.mjs';
 
 class FakeStore {
   constructor() {
@@ -95,6 +95,7 @@ const secretNames = [
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
   'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+  'ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET',
 ];
 const secrets = Object.fromEntries(secretNames.map((name, index) => [
   name,
@@ -155,6 +156,12 @@ const env = {
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
   COMMIT_REF: activationDeploymentSha,
   ARC_ACTIVATION_MANIFEST: activationManifest,
+};
+const retentionFenceStore = new FakeStore();
+const deliveryAckHandler = (request, context = {}) => {
+  const fencedContext = Object.create(context);
+  fencedContext.retentionFenceStore = retentionFenceStore;
+  return deliveryAckRouteHandler(request, fencedContext);
 };
 assert.equal(configuredEnvironment(env).enabled, true);
 assert.equal(configuredEnvironment({ ...env, ARC_FINAL_DELIVERY_RECEIPT_SECRET: env.ARC_EMAIL_CLAIM_BINDING_SECRET }).enabled, false,

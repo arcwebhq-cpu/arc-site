@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import acknowledgeHandler, { config as acknowledgeConfig } from '../netlify/functions/review-email-ack.mjs';
-import prepareHandler, { config as prepareConfig } from '../netlify/functions/review-email-prepare.mjs';
-import reserveHandler, { config as reserveConfig } from '../netlify/functions/review-email-reserve.mjs';
+import acknowledgeRouteHandler, { config as acknowledgeConfig } from '../netlify/functions/review-email-ack.mjs';
+import prepareRouteHandler, { config as prepareConfig } from '../netlify/functions/review-email-prepare.mjs';
+import reserveRouteHandler, { config as reserveConfig } from '../netlify/functions/review-email-reserve.mjs';
 import {
   reviewEmailInternalApiConfiguration,
   signReviewEmailInternalRequest,
@@ -62,6 +62,13 @@ const managedEnv = {
   ARC_REVIEW_PUBLIC_ORIGIN: 'https://arcweb.onl',
   ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED: 'true',
   ARC_REVIEW_EMAIL_INTERNAL_API_SECRET: 'function-email-internal-api-secret-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'function-retention-fence-secret-0123456789abcdef',
+  ARC_OPERATIONS_AUDIT_ENABLED: 'true',
+  ARC_OPERATIONS_AUDIT_SECRET: 'function-operations-audit-secret-0123456789abcdef',
+  ARC_OPERATIONS_ALERT_HMAC_SECRET: 'function-operations-alert-secret-0123456789abcdef',
+  ARC_EMAIL_CLAIM_BINDING_SECRET: 'function-email-claim-binding-secret-0123456789abcdef',
+  ARC_HANDOFF_STATE_SECRET: 'function-handoff-state-secret-0123456789abcdef',
 };
 const previous = Object.fromEntries(Object.keys(managedEnv).map(key => [key, process.env[key]]));
 Object.assign(process.env, managedEnv);
@@ -128,6 +135,17 @@ assert.match(sources[3], /x-arc-review-email-signature/);
 assert.match(sources[3], /x-arc-review-email-timestamp/);
 
 const store = new FakeStore();
+const retentionFenceStore = new FakeStore();
+const retentionFenceAlertStore = new FakeStore();
+const fencedHandler = (handler) => (request, context = {}) => {
+  const fencedContext = Object.create(context);
+  fencedContext.retentionFenceStore = retentionFenceStore;
+  fencedContext.retentionFenceAlertStore = retentionFenceAlertStore;
+  return handler(request, fencedContext);
+};
+const acknowledgeHandler = fencedHandler(acknowledgeRouteHandler);
+const prepareHandler = fencedHandler(prepareRouteHandler);
+const reserveHandler = fencedHandler(reserveRouteHandler);
 process.env.ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED = 'false';
 assert.equal((await prepareHandler(requestFor('/api/internal/review-email/prepare', { invite }), {
   reviewStore: store, clock: () => new Date(now),
@@ -375,9 +393,9 @@ assert.deepEqual(await pendingComplaintAck.json(), { error: 'review_email_retry'
 const complaintAck = await acknowledgeHandler(requestFor('/api/internal/review-email/ack', {
   delivery_receipt_evidence: complaintEvidence,
   delivery_receipt_evidence_hmac_sha256: complaintSignature,
-}, { timestamp: new Date(now.getTime() + 20_000).toISOString() }), {
+}, { timestamp: new Date(now.getTime() + 140_000).toISOString() }), {
   reviewStore: store,
-  clock: () => new Date(now.getTime() + 20_000),
+  clock: () => new Date(now.getTime() + 140_000),
   expireRecipientCheckouts: expiryHook,
 });
 assert.equal(complaintAck.status, 200, await complaintAck.clone().text());

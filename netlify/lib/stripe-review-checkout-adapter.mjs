@@ -26,6 +26,14 @@ import {
   reviewCheckoutExpiryIdempotencyKey,
   reviewCheckoutRevocationConfiguration,
 } from './review-checkout-revocation-core.mjs';
+import {
+  REVIEW_ACTIVATION_ROUTE_MATRIX_SHA256,
+  REVIEW_ACTIVATION_STRIPE_WEBHOOK_EVENT_SET_SHA256,
+  ensureReviewActivationRuntimeReadback,
+  reviewActivationRuntimeEnvironmentNamesSha256,
+  reviewActivationRuntimeReadbackConfiguration,
+  selectedNetlifyCredentialName,
+} from './review-activation-runtime-readback-core.mjs';
 import { reviewPortalConfiguration } from './review-flow-core.mjs';
 import { stripeAccountVerificationConfigured } from './stripe-account-verification.mjs';
 import { stripeCheckoutConfiguration } from './stripe-checkout-core.mjs';
@@ -49,15 +57,12 @@ const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9_]{6,128}$/;
 const INTEGRATION_IDENTIFIER = /^arc_review_checkout_[a-z]{8}$/;
 const DEPLOYMENT_SHA = /^[a-f0-9]{40}$/;
 const READBACK_MAXIMUM_AGE_MS = 15 * 60_000;
-const REVIEW_ACTIVATION_ENVIRONMENT_NAMES_SHA256 =
-  'd278b0e95c01f3ee27d82521ed14d9358f19f331bf9ef943b2addcd5d1c16747';
-const REVIEW_ACTIVATION_ROUTE_MATRIX_SHA256 =
-  'ebed05f05eb14e2bfff11190927cbd3ec4fdb8c40c02f2519327a0d58f1d0ee0';
 const SANDBOX_RETURN_ORIGINS = new Set(['https://arcweb.onl', 'https://arcsites.netlify.app']);
 const PRODUCTION_RETURN_ORIGINS = new Set(['https://arcweb.onl']);
 const INPUT_KEYS = Object.freeze([
   'approval_receipt_hmac_sha256',
   'approval_receipt_sha256',
+  'checkout_expires_at',
   'idempotency_key',
   'invite_hmac_sha256',
   'preview_manifest_sha256',
@@ -77,17 +82,18 @@ const METADATA_KEYS = Object.freeze([
 ]);
 const READBACK_TOP_FIELDS = Object.freeze([
   'schema', 'version', 'mode', 'minimum_stage', 'provider_controls_state', 'observed_at',
-  'expires_at', 'netlify', 'stripe', 'email', 'zapier',
+  'expires_at', 'netlify', 'stripe', 'email', 'operations_alert', 'zapier',
 ]);
 const READBACK_NETLIFY_FIELDS = Object.freeze([
   'deployment_sha', 'env_name_set_readback_sha256', 'route_matrix_readback_sha256',
-  'route_probe_receipt_sha256', 'site_id_sha256',
+  'route_probe_receipt_sha256', 'site_id_sha256', 'handoff_credential_environment_name',
 ]);
 const READBACK_STRIPE_FIELDS = Object.freeze([
   'account_id_sha256', 'catalog_readback_sha256',
   'checkout_session_expire_capability_readback_sha256',
   'checkout_session_retrieve_capability_readback_sha256', 'integration_identifier_sha256',
   'price_id_sha256', 'product_id_sha256', 'webhook_destination_readback_sha256',
+  'webhook_endpoint_path', 'webhook_event_set_readback_sha256',
 ]);
 const READBACK_EMAIL_FIELDS = Object.freeze([
   'native_suppression_id_sha256', 'native_suppression_readback_sha256',
@@ -103,6 +109,10 @@ const READBACK_ZAPIER_FIELDS = Object.freeze([
   'payment_arc2_workflow_id_sha256', 'payment_arc2_workflow_version_readback_sha256',
   'revision_claim_next_path', 'revision_workflow_id_sha256',
   'revision_workflow_version_readback_sha256',
+]);
+const READBACK_OPERATIONS_ALERT_FIELDS = Object.freeze([
+  'audit_enabled', 'delivery_enabled', 'failure_alert_verified',
+  'native_delivery_receipt_sha256', 'provider_event_type',
 ]);
 
 function exactBoolean(value) {
@@ -185,6 +195,7 @@ export function stripeReviewCheckoutConsumerReadiness(env = process.env, nowValu
       !exactKeys(readback.netlify, READBACK_NETLIFY_FIELDS) ||
       !exactKeys(readback.stripe, READBACK_STRIPE_FIELDS) ||
       !exactKeys(readback.email, READBACK_EMAIL_FIELDS) ||
+      !exactKeys(readback.operations_alert, READBACK_OPERATIONS_ALERT_FIELDS) ||
       !exactKeys(readback.zapier, READBACK_ZAPIER_FIELDS) ||
       readback.schema !== 'arc-review-activation-readback-v1' || readback.version !== 1 ||
       readback.mode !== 'production' || readback.minimum_stage !== 'LIVE_CHECKOUT' ||
@@ -201,7 +212,8 @@ export function stripeReviewCheckoutConsumerReadiness(env = process.env, nowValu
     'netlify.route_probe_receipt_sha256', 'stripe.catalog_readback_sha256',
     'stripe.checkout_session_expire_capability_readback_sha256',
     'stripe.checkout_session_retrieve_capability_readback_sha256',
-    'stripe.webhook_destination_readback_sha256', 'email.native_webhook_readback_sha256',
+    'stripe.webhook_destination_readback_sha256', 'stripe.webhook_event_set_readback_sha256',
+    'email.native_webhook_readback_sha256',
     'email.native_suppression_readback_sha256', 'email.sandbox_delivery_receipt_sha256',
     'zapier.email_workflow_version_readback_sha256',
     'zapier.revision_workflow_version_readback_sha256',
@@ -214,13 +226,18 @@ export function stripeReviewCheckoutConsumerReadiness(env = process.env, nowValu
   if (requiredReceipts.some(path => !nonzeroSha256(valueAtPath(readback, path)))) return false;
   const bindingsValid = readback.netlify.deployment_sha === deploymentSha &&
     readback.netlify.site_id_sha256 === sha256(String(env.ARC_EXPECTED_NETLIFY_SITE_ID || '')) &&
-    readback.netlify.env_name_set_readback_sha256 === REVIEW_ACTIVATION_ENVIRONMENT_NAMES_SHA256 &&
+    readback.netlify.env_name_set_readback_sha256 ===
+      reviewActivationRuntimeEnvironmentNamesSha256(env) &&
     readback.netlify.route_matrix_readback_sha256 === REVIEW_ACTIVATION_ROUTE_MATRIX_SHA256 &&
+    readback.netlify.handoff_credential_environment_name === selectedNetlifyCredentialName(env) &&
     readback.stripe.account_id_sha256 === env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 &&
     readback.stripe.price_id_sha256 === sha256(String(env.ARC_EXPECTED_PRICE_ID || '')) &&
     readback.stripe.product_id_sha256 === sha256(String(env.ARC_EXPECTED_PRODUCT_ID || '')) &&
     readback.stripe.integration_identifier_sha256 ===
       sha256(String(env.ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER || '')) &&
+    readback.stripe.webhook_endpoint_path === '/internal/stripe/reversal-webhook' &&
+    readback.stripe.webhook_event_set_readback_sha256 ===
+      REVIEW_ACTIVATION_STRIPE_WEBHOOK_EVENT_SET_SHA256 &&
     readback.email.provider === env.ARC_REVIEW_EMAIL_PROVIDER &&
     readback.email.provider_account_id_sha256 === env.ARC_REVIEW_EMAIL_PROVIDER_ACCOUNT_ID_SHA256 &&
     readback.email.sender_identity_sha256 === env.ARC_REVIEW_EMAIL_SENDER_IDENTITY_SHA256 &&
@@ -234,7 +251,13 @@ export function stripeReviewCheckoutConsumerReadiness(env = process.env, nowValu
     readback.zapier.email_claim_next_path === '/api/internal/review-email/reserve' &&
     readback.zapier.revision_claim_next_path === '/api/internal/review-revision/claim' &&
     readback.zapier.payment_arc2_claim_next_path === '/internal/payment-arc2/claim' &&
-    readback.zapier.payment_arc2_start_path === '/internal/payment-arc2/start';
+    readback.zapier.payment_arc2_start_path === '/internal/payment-arc2/start' &&
+    env.ARC_OPERATIONS_AUDIT_ENABLED === 'true' &&
+    readback.operations_alert.audit_enabled === true &&
+    readback.operations_alert.delivery_enabled === false &&
+    readback.operations_alert.failure_alert_verified === false &&
+    readback.operations_alert.native_delivery_receipt_sha256 === '0'.repeat(64) &&
+    readback.operations_alert.provider_event_type === 'email.delivered';
   return bindingsValid && signedReadbackBoundToDeployment(env, readback, deploymentSha, now);
 }
 
@@ -286,7 +309,13 @@ function resolveConfiguration(env, now = new Date()) {
   const ledger = stripeCheckoutConfiguration(env);
   const paymentBridge = paymentArc2BridgeConfiguration(env);
   const revocation = reviewCheckoutRevocationConfiguration(env);
-  const consumerReadinessValid = stripeReviewCheckoutConsumerReadiness(env, now);
+  const runtimeReadback = reviewActivationRuntimeReadbackConfiguration(env, now);
+  // Production never falls back to the legacy one-shot environment receipt.
+  // It must bind the verifier authority and every Checkout request must strong-
+  // read a current signed receipt before any customer/provider mutation.
+  const consumerReadinessValid = mode === 'production'
+    ? runtimeReadback.enabled
+    : stripeReviewCheckoutConsumerReadiness(env, now);
   const successUrl = checkoutReturnUrl(env.ARC_STRIPE_CHECKOUT_SUCCESS_URL, 'success', mode);
   const cancelUrl = checkoutReturnUrl(env.ARC_STRIPE_CHECKOUT_CANCEL_URL, 'cancel', mode);
   const producerFlagValid = exactBoolean(env.ARC_STRIPE_REVIEW_CHECKOUT_ENABLED);
@@ -332,6 +361,7 @@ function resolveConfiguration(env, now = new Date()) {
     env.ARC_TAX_REGISTRATION_VERIFIED,
     env.ARC_TRANSACTIONAL_EMAIL_VERIFIED,
   ].every(value => value === 'true');
+  const taxReadbackRequired = mode === 'production' && env.ARC_TAX_REGISTRATION_VERIFIED === 'true';
   const ledgerValid = ledger.webhookOperational && (mode !== 'production' || ledger.enabled);
   const apiVersionValid = env.ARC_STRIPE_WEBHOOK_API_VERSION === STRIPE_REVIEW_CHECKOUT_API_VERSION;
   const keyValid = keyMatch !== null && keyMatch[1] === keyMode;
@@ -363,11 +393,14 @@ function resolveConfiguration(env, now = new Date()) {
     productName: env.ARC_EXPECTED_PRODUCT_NAME,
     productionAttestationsValid,
     reviewFlagsExact,
+    runtimeReadbackConfigured: runtimeReadback.enabled,
+    runtimeReadbackRequested: runtimeReadback.requested,
     revocationEnabled: revocation.enabled,
     secretKey: env.ARC_STRIPE_REVIEW_SECRET_KEY,
     secretsDistinct,
     successUrl,
     taxCodeId: env.ARC_EXPECTED_PRODUCT_TAX_CODE,
+    taxReadbackRequired,
     urlsValid,
   };
 }
@@ -391,7 +424,10 @@ export function stripeReviewCheckoutConfiguration(env = process.env, now = new D
     productionAttestationsValid: configuration.productionAttestationsValid,
     reviewFlagsExact: configuration.reviewFlagsExact,
     revocationEnabled: configuration.revocationEnabled,
+    runtimeReadbackConfigured: configuration.runtimeReadbackConfigured,
+    runtimeReadbackRequested: configuration.runtimeReadbackRequested,
     secretsDistinct: configuration.secretsDistinct,
+    taxReadbackRequired: configuration.taxReadbackRequired,
     urlsValid: configuration.urlsValid,
   });
 }
@@ -400,6 +436,7 @@ function normalizeInput(input, env) {
   if (!exactKeys(input, INPUT_KEYS) || !INPUT_KEYS.filter(key => key.endsWith('_sha256'))
     .every(key => HEX_64.test(String(input[key] || ''))) ||
       input.scope_version !== OFFER_CONTRACT_ID ||
+      !Number.isSafeInteger(input.checkout_expires_at) || input.checkout_expires_at < 1 ||
       !/^arc_review_[a-f0-9]{64}$/.test(String(input.idempotency_key || ''))) {
     throw new TypeError('ARC review Checkout binding is invalid.');
   }
@@ -433,6 +470,65 @@ function validateCatalog(price, configuration) {
   }
 }
 
+export function validateStripeReviewTaxReadiness(settings, registrations, expectedLivemode,
+  nowValue = new Date()) {
+  const nowSeconds = Math.floor(new Date(nowValue).getTime() / 1000);
+  if (typeof expectedLivemode !== 'boolean' || !Number.isSafeInteger(nowSeconds) ||
+      !settings || typeof settings !== 'object' ||
+      Array.isArray(settings) || settings.object !== 'tax.settings' ||
+      settings.livemode !== expectedLivemode || settings.status !== 'active' ||
+      !settings.head_office || typeof settings.head_office !== 'object' || Array.isArray(settings.head_office) ||
+      !settings.head_office.address || typeof settings.head_office.address !== 'object' ||
+      Array.isArray(settings.head_office.address) ||
+      !/^[A-Z]{2}$/.test(String(settings.head_office.address.country || '')) ||
+      !registrations || typeof registrations !== 'object' || Array.isArray(registrations) ||
+      registrations.object !== 'list' || registrations.has_more !== false ||
+      !Array.isArray(registrations.data) || registrations.data.length < 1 || registrations.data.length > 100 ||
+      registrations.data.some((registration) => !registration || typeof registration !== 'object' ||
+        Array.isArray(registration) || registration.object !== 'tax.registration' ||
+        !/^taxreg_[A-Za-z0-9_]{6,128}$/.test(String(registration.id || '')) ||
+        registration.livemode !== expectedLivemode || registration.status !== 'active' ||
+        !Number.isSafeInteger(registration.active_from) || registration.active_from > nowSeconds ||
+        (registration.expires_at !== null &&
+          (!Number.isSafeInteger(registration.expires_at) || registration.expires_at <= nowSeconds)) ||
+        !/^[A-Z]{2}$/.test(String(registration.country || '')))) {
+    throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_TAX_READBACK');
+  }
+  const washingtonStateSalesTaxActive = registrations.data.some((registration) =>
+    registration.country === 'US' && plainObject(registration.country_options) &&
+    plainObject(registration.country_options.us) &&
+    registration.country_options.us.state === 'WA' &&
+    registration.country_options.us.type === 'state_sales_tax');
+  if (!washingtonStateSalesTaxActive) {
+    throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_TAX_READBACK');
+  }
+}
+
+async function readCheckoutProviderBindings(client, configuration, now) {
+  let account;
+  let price;
+  let settings = null;
+  let registrations = null;
+  try {
+    const reads = [
+      client.accounts.retrieve(),
+      client.prices.retrieve(configuration.priceId, { expand: ['product'] }),
+    ];
+    if (configuration.taxReadbackRequired) {
+      reads.push(client.tax.settings.retrieve());
+      reads.push(client.tax.registrations.list({ status: 'active', limit: 100 }));
+    }
+    [account, price, settings, registrations] = await Promise.all(reads);
+  } catch (cause) {
+    throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_PROVIDER_READ', { cause });
+  }
+  validateAccount(account, configuration);
+  validateCatalog(price, configuration);
+  if (configuration.taxReadbackRequired) {
+    validateStripeReviewTaxReadiness(settings, registrations, configuration.expectedLivemode, now);
+  }
+}
+
 function checkoutMetadata(input) {
   return Object.freeze({
     approval_receipt_hmac_sha256: input.approval_receipt_hmac_sha256,
@@ -452,7 +548,6 @@ function checkoutParameters(input, configuration) {
   return {
     allow_promotion_codes: false,
     automatic_tax: { enabled: true },
-    billing_address_collection: 'required',
     cancel_url: configuration.cancelUrl,
     client_reference_id: input.approval_receipt_sha256,
     consent_collection: { terms_of_service: 'required' },
@@ -464,6 +559,7 @@ function checkoutParameters(input, configuration) {
       type: 'dropdown',
     }],
     customer_creation: 'always',
+    expires_at: input.checkout_expires_at,
     invoice_creation: { enabled: false },
     integration_identifier: configuration.integrationIdentifier,
     line_items: [{ price: configuration.priceId, quantity: 1 }],
@@ -489,6 +585,7 @@ function validateSession(session, input, metadata, configuration) {
       session.livemode !== configuration.expectedLivemode ||
       session.payment_link !== null || session.status !== 'open' || session.payment_status !== 'unpaid' ||
       session.currency !== 'usd' || session.amount_subtotal !== SUBTOTAL_MINOR_UNITS ||
+      session.expires_at !== input.checkout_expires_at ||
       session.client_reference_id !== input.approval_receipt_sha256 ||
       session.integration_identifier !== configuration.integrationIdentifier ||
       session.automatic_tax?.enabled !== true || !exactKeys(session.metadata, METADATA_KEYS) ||
@@ -511,6 +608,9 @@ function stripeClient(configuration, adapters) {
     : new Stripe(configuration.secretKey, options));
   if (!client?.accounts || typeof client.accounts.retrieve !== 'function' ||
       !client?.prices || typeof client.prices.retrieve !== 'function' ||
+      (configuration.taxReadbackRequired && (!client?.tax?.settings ||
+        typeof client.tax.settings.retrieve !== 'function' || !client?.tax?.registrations ||
+        typeof client.tax.registrations.list !== 'function')) ||
       !client?.checkout?.sessions || typeof client.checkout.sessions.create !== 'function' ||
       typeof client.checkout.sessions.retrieve !== 'function' ||
       typeof client.checkout.sessions.expire !== 'function') {
@@ -552,6 +652,7 @@ function validateBoundProviderSession(session, binding, configuration) {
       session.livemode !== binding.session_livemode || session.livemode !== configuration.expectedLivemode ||
       session.payment_link !== null || session.integration_identifier !== binding.integration_identifier ||
       session.client_reference_id !== binding.approval_receipt_sha256 || session.currency !== 'usd' ||
+      session.expires_at !== binding.checkout_expires_at ||
       session.amount_subtotal !== SUBTOTAL_MINOR_UNITS || session.automatic_tax?.enabled !== true ||
       !exactKeys(session.metadata, METADATA_KEYS) ||
       METADATA_KEYS.some(key => !safeEqual(session.metadata[key], metadata[key])) ||
@@ -566,6 +667,7 @@ function checkoutInputFromBinding(binding, env) {
   return normalizeInput({
     approval_receipt_hmac_sha256: binding.approval_receipt_hmac_sha256,
     approval_receipt_sha256: binding.approval_receipt_sha256,
+    checkout_expires_at: binding.checkout_expires_at,
     idempotency_key: `arc_review_${hmac256(env.ARC_REVIEW_DECISION_HMAC_SECRET,
       CHECKOUT_IDEMPOTENCY_PREFIX + binding.invite_hmac_sha256)}`,
     invite_hmac_sha256: binding.invite_hmac_sha256,
@@ -585,13 +687,7 @@ async function recoverAmbiguousSuppressedSession(store, initial, suppression,
     throw new Error('ARC_REVIEW_CHECKOUT_SUPPRESSION_RECOVERY_STATE_INVALID');
   }
   const input = checkoutInputFromBinding(binding, env);
-  let price;
-  try {
-    price = await client.prices.retrieve(configuration.priceId, { expand: ['product'] });
-  } catch (cause) {
-    throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_PROVIDER_READ', { cause });
-  }
-  validateCatalog(price, configuration);
+  await readCheckoutProviderBindings(client, configuration, adapters.clock?.() || new Date());
   const parameters = checkoutParameters(input, configuration);
   let session;
   try {
@@ -779,7 +875,7 @@ async function revokeAfterRecipientSuppression(store, binding, suppression, env,
 
 function bindingMatchesInput(binding, input) {
   return binding && [
-    'approval_receipt_hmac_sha256', 'approval_receipt_sha256', 'invite_hmac_sha256',
+    'approval_receipt_hmac_sha256', 'approval_receipt_sha256', 'checkout_expires_at', 'invite_hmac_sha256',
     'preview_manifest_sha256', 'recipient_email_sha256', 'scope_version',
   ].every(field => safeEqual(binding[field], input[field]));
 }
@@ -808,18 +904,7 @@ async function recoverSuppressedAmbiguousCreate(store, input, suppression, confi
       throw new Error('ARC_REVIEW_CHECKOUT_SUPPRESSION_RECOVERY_STATE_INVALID');
     }
     const client = stripeClient(configuration, adapters);
-    let account;
-    let price;
-    try {
-      [account, price] = await Promise.all([
-        client.accounts.retrieve(),
-        client.prices.retrieve(configuration.priceId, { expand: ['product'] }),
-      ]);
-    } catch (cause) {
-      throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_PROVIDER_READ', { cause });
-    }
-    validateAccount(account, configuration);
-    validateCatalog(price, configuration);
+    await readCheckoutProviderBindings(client, configuration, adapters.clock?.() || new Date());
     const parameters = checkoutParameters(input, configuration);
     let session;
     try {
@@ -851,6 +936,22 @@ export async function createStripeReviewCheckout(rawInput, env = process.env, ad
     throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_CONFIGURATION');
   }
   const input = normalizeInput(rawInput, env);
+  if (configuration.mode === 'production' && configuration.runtimeReadbackRequested) {
+    if (!configuration.runtimeReadbackConfigured ||
+        !adapters.readbackStore?.getWithMetadata || !adapters.readbackStore?.setJSON) {
+      throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_RUNTIME_READBACK');
+    }
+    try {
+      await ensureReviewActivationRuntimeReadback(
+        env,
+        adapters.readbackStore,
+        adapters.clock?.() || new Date(),
+        { fetch: adapters.fetch },
+      );
+    } catch (cause) {
+      throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_RUNTIME_READBACK', { cause });
+    }
+  }
   const store = adapters.store;
   let authority;
   try {
@@ -873,24 +974,14 @@ export async function createStripeReviewCheckout(rawInput, env = process.env, ad
     binding = await reserveReviewCheckoutBinding(store, {
       approval_receipt_hmac_sha256: input.approval_receipt_hmac_sha256,
       approval_receipt_sha256: input.approval_receipt_sha256,
+      checkout_expires_at: input.checkout_expires_at,
       invite_hmac_sha256: input.invite_hmac_sha256,
       preview_manifest_sha256: input.preview_manifest_sha256,
       recipient_email_sha256: input.recipient_email_sha256,
       scope_version: input.scope_version,
     }, env, adapters.clock?.() || new Date());
     const client = stripeClient(configuration, adapters);
-    let account;
-    let price;
-    try {
-      [account, price] = await Promise.all([
-        client.accounts.retrieve(),
-        client.prices.retrieve(configuration.priceId, { expand: ['product'] }),
-      ]);
-    } catch (cause) {
-      throw new Error('ARC_REVIEW_CHECKOUT_UNAVAILABLE_PROVIDER_READ', { cause });
-    }
-    validateAccount(account, configuration);
-    validateCatalog(price, configuration);
+    await readCheckoutProviderBindings(client, configuration, adapters.clock?.() || new Date());
     const beforeCreate = await ownedRecipientControl(store, input, authority, env);
     if (controlSuppression(beforeCreate)) throw new Error('ARC_REVIEW_CHECKOUT_RECIPIENT_SUPPRESSED');
     const parameters = checkoutParameters(input, configuration);

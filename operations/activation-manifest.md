@@ -24,6 +24,27 @@ Each stage carries every earlier evidence kind in the exact order below.
 | `PILOT` | `pilot_acceptance` |
 | `OUTREACH` | `outreach_approval` |
 
+The only pre-evidence exception is `TEST_BOOTSTRAP`, and it is limited to the
+next single sandbox receipt. At `EMAIL_SANDBOX` it contains no evidence. At
+`CLAIM_SANDBOX` it must still contain the reviewed `email_sandbox_e2e`
+receipt; only the not-yet-created `claim_sandbox_e2e` receipt is omitted. Both
+forms expire within 15 minutes and are accepted only for the explicit sandbox
+tuple: test events on, live Stripe off, handoff off,
+public-intake/build/analytics controls off, and any configured Stripe key in
+test mode. Both are rejected for `LIVE_CHECKOUT` and `PUBLIC_INTAKE`, so they
+cannot authorize a live charge or public form.
+
+The claim bootstrap has one additional runtime fence. Before any handoff,
+provider, or ARC2 state mutation, its manifest is atomically bound in the
+strong ARC2 store to exactly one deterministic paid review-session handoff.
+An exact retry of that handoff may continue while the same manifest remains
+current; another handoff, the legacy payment-link start path, a missing
+binding, or an expired/deployment-mismatched manifest fails closed. Every
+ordinary paid-session, Stripe ledger, reversal, recipient-continuity,
+suppression, and Netlify ownership check remains in force. Remove the
+bootstrap after the bounded run and issue a normal `CLAIM_SANDBOX` manifest
+whose `claim_sandbox_e2e` digest names the reviewed receipt.
+
 The runtime minimums are deliberately narrower than the names imply:
 
 - sandbox ARC2 configuration requires `CLAIM_SANDBOX`;
@@ -43,6 +64,11 @@ current `PUBLIC_INTAKE` authority at execution time before authentication-secret
 parsing, Blob access, or network entry. A job queued while authority was valid
 therefore fails closed if the manifest is missing, expired, deployment-mismatched,
 or below `PUBLIC_INTAKE` when the queued invocation starts.
+
+The public-asset readiness gate additionally requires the HMAC-signed ARC1
+adapter attestation's `asset_producer_consumer_tests_sha256` to equal the
+`public_intake_provider_e2e` digest in the current deployment-bound manifest.
+Code presence or a mutable boolean can never satisfy that gate.
 
 ## Exact manifest contract
 
@@ -109,6 +135,10 @@ the secret or place it on a command line. Store the returned string as
 evidence digests, expiry, and deployed SHA.
 
 `issued_at` and `expires_at` must be millisecond-precision UTC timestamps.
+`TEST_BOOTSTRAP` authority may last at most 15 minutes and is valid only for
+the exact sandbox constraints above. Its `EMAIL_SANDBOX` evidence array is
+empty; its `CLAIM_SANDBOX` evidence array contains exactly the prior
+`email_sandbox_e2e` receipt.
 `ROLLOUT` authority may last at most 24 hours and is required through
 `PUBLIC_INTAKE`. A `STEADY_STATE` authority is accepted only at `PILOT` or
 `OUTREACH`, may last at most 90 days, and must append these exact reviewed

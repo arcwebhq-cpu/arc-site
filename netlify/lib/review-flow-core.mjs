@@ -20,9 +20,11 @@ const RECORD_SIGNATURE_PREFIX = 'arc-preview-review-record-signature-v1\n';
 const INVITE_ID_PREFIX = 'arc-preview-review-invite-id-v1\n';
 const SESSION_SIGNATURE_PREFIX = 'arc-preview-review-session-signature-v1\n';
 const SESSION_NONCE_PREFIX = 'arc-preview-review-session-nonce-v1\n';
+const SESSION_NONCE_DERIVATION_PREFIX = 'arc-preview-review-session-nonce-derivation-v1\n';
 const DECISION_IDEMPOTENCY_PREFIX = 'arc-preview-review-decision-idempotency-v1\n';
 const APPROVAL_SIGNATURE_PREFIX = 'arc-preview-customer-approval-signature-v1\n';
 const CHECKOUT_IDEMPOTENCY_PREFIX = 'arc-preview-checkout-idempotency-v1\n';
+const CHECKOUT_SESSION_LIFETIME_SECONDS = 23 * 60 * 60;
 const EMAIL_DELIVERY_BINDING_SIGNATURE_PREFIX = 'arc-preview-review-email-delivery-binding-signature-v1\n';
 const EMAIL_SUPPRESSION_BINDING_SIGNATURE_PREFIX = 'arc-preview-review-email-suppression-binding-signature-v1\n';
 const EMAIL_RECIPIENT_SUPPRESSION_ID_PREFIX = 'arc-preview-review-email-recipient-suppression-id-v1\n';
@@ -935,11 +937,31 @@ async function exchangeReviewInviteUnlocked(store, inviteToken, env = process.en
     }
   }
   if (entry.record.state !== 'OPEN') throw new Error('ARC_REVIEW_INVITE_INACTIVE');
-  if (entry.record.session_nonce_hmac_sha256 !== null) throw new Error('ARC_REVIEW_INVITE_ALREADY_EXCHANGED');
-  const random = adapters.randomBytes?.(32);
-  if (!Buffer.isBuffer(random) || random.length !== 32) throw new Error('ARC_REVIEW_SESSION_RANDOMNESS_UNAVAILABLE');
-  const sessionNonce = random.toString('base64url');
+  // The nonce is secret-derived from the immutable invite credential so an
+  // exact retry can reconstruct the same session after the invite CAS succeeds
+  // but before the HTTP response is delivered. Raw credentials remain absent
+  // from storage and the derivation is infeasible without the session secret.
+  const sessionNonce = createHmac('sha256', env.ARC_REVIEW_SESSION_HMAC_SECRET)
+    .update(`${SESSION_NONCE_DERIVATION_PREFIX}${inviteToken}\n${entry.record.invite_hmac_sha256}\n${entry.record.created_at}`)
+    .digest('base64url');
   const sessionNonceHmac = hmacHex(env.ARC_REVIEW_SESSION_HMAC_SECRET, SESSION_NONCE_PREFIX + sessionNonce);
+  if (entry.record.session_nonce_hmac_sha256 !== null) {
+    if (!safeEqual(entry.record.session_nonce_hmac_sha256, sessionNonceHmac)) {
+      throw new Error('ARC_REVIEW_INVITE_ALREADY_EXCHANGED');
+    }
+    const sessionExpiresAt = new Date(Math.min(Date.parse(entry.record.expires_at),
+      Date.parse(entry.record.exchanged_at) + REVIEW_SESSION_TTL_SECONDS * 1000)).toISOString();
+    if (Date.parse(sessionExpiresAt) <= now.getTime()) throw new Error('ARC_REVIEW_INVITE_ALREADY_EXCHANGED');
+    return {
+      max_age: Math.max(1, Math.floor((Date.parse(sessionExpiresAt) - now.getTime()) / 1000)),
+      session_token: encodeSession({
+        schema: REVIEW_SESSION_SCHEMA,
+        invite_hmac_sha256: inviteHmac,
+        session_nonce: sessionNonce,
+        expires_at: sessionExpiresAt,
+      }, env),
+    };
+  }
   const sessionExpiresAt = new Date(Math.min(Date.parse(entry.record.expires_at),
     now.getTime() + REVIEW_SESSION_TTL_SECONDS * 1000)).toISOString();
   const updated = signRecord({
@@ -1172,6 +1194,8 @@ async function createApprovedCheckoutUnlocked(store, sessionToken, env = process
   }
   const created = await adapters.createCheckout({
     idempotency_key: `arc_review_${idempotencyKey}`,
+    checkout_expires_at: Math.floor(Date.parse(record.decision.decided_at) / 1000) +
+      CHECKOUT_SESSION_LIFETIME_SECONDS,
     approval_receipt_sha256: receiptSha,
     approval_receipt_hmac_sha256: receiptHmac,
     invite_hmac_sha256: record.invite_hmac_sha256,

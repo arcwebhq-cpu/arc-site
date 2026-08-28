@@ -11,8 +11,9 @@ import {
   operationsAuditConfiguration,
   runOperationsAudit,
 } from '../lib/operations-audit-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!operationsAuditConfiguration(process.env).enabled) return jsonResponse(503, { error: 'operations_audit_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_OPERATIONS_AUDIT_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
@@ -31,6 +32,13 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'operations_audit_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'operations-audit',
+  paths: ['/internal/operations/audit'],
+  active: ({ env }) => operationsAuditConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/internal/operations/audit',

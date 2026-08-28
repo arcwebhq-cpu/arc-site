@@ -2,8 +2,9 @@ import { getStore } from '@netlify/blobs';
 import { HANDOFF_STORE, authenticateBearer, configuredEnvironment, jsonResponse, parseJsonBodyText, publicStatus } from '../lib/arc2-handoff-core.mjs';
 import { startHandoff } from '../lib/arc2-handoff-service.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_HANDOFF_TRIGGER_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
@@ -44,5 +45,12 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'handoff_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-handoff-start',
+  paths: ['/api/arc2/handoff/start'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = { path: '/api/arc2/handoff/start', method: 'POST', rateLimit: { windowLimit: 12, windowSize: 60, aggregateBy: ['ip', 'domain'] } };

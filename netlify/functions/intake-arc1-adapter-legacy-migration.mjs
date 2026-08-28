@@ -7,6 +7,7 @@ import {
   authorizeArc1AdapterDispatch,
   migrateLegacyArc1AdapterRecords,
 } from '../lib/intake-arc1-adapter-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const headers = Object.freeze({
   'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8',
@@ -37,7 +38,15 @@ export function createIntakeArc1AdapterLegacyMigrationHandler() {
   };
 }
 
-export default createIntakeArc1AdapterLegacyMigrationHandler();
+const handler = createIntakeArc1AdapterLegacyMigrationHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-adapter-legacy-migration',
+  paths: ['/internal/intake/arc1/adapter/migrate-legacy'],
+  active: ({ env }) => publicIntakeAuthorityReady(env) &&
+    arc1AdapterLegacyMigrationEnabled(env),
+  handler,
+});
 // Netlify extracts route configuration at build time, so keep these values literal.
 export const config = {
   path: '/internal/intake/arc1/adapter/migrate-legacy', method: 'POST',

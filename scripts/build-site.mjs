@@ -5,7 +5,13 @@ import { activationBuildIdentityModule } from './activation-build-identity.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'dist');
-const intakeBuildEnabled = process.env.ARC_BUILD_INTAKE_ENABLED === 'true';
+const intakeBuildRequested = process.env.ARC_BUILD_INTAKE_ENABLED === 'true';
+const turnstileBuildRequested = process.env.ARC_BUILD_TURNSTILE_ENABLED === 'true';
+const turnstileSiteKey = String(process.env.ARC_TURNSTILE_SITE_KEY || '');
+const turnstileAction = String(process.env.ARC_TURNSTILE_EXPECTED_ACTION || '');
+const turnstileBuildConfigured = turnstileBuildRequested &&
+  /^[A-Za-z0-9_-]{20,80}$/.test(turnstileSiteKey) && turnstileAction === 'arc_intake_submit';
+const intakeBuildEnabled = intakeBuildRequested && turnstileBuildConfigured;
 const analyticsBuildEnabled = process.env.ARC_BUILD_ANALYTICS_ENABLED === 'true';
 const intakeBuildMarkerPath = path.join(root, 'netlify/lib/intake-build-marker.mjs');
 const activationBuildIdentityPath = path.join(root, 'netlify/lib/activation-build-identity.mjs');
@@ -46,6 +52,62 @@ await mkdir(output, { recursive: true });
 for (const entry of publicEntries) {
   await cp(path.join(root, entry), path.join(output, entry), { recursive: true, errorOnExist: true });
 }
+
+const intakePage = path.join(output, 'index.html');
+const enabledStatus = '<div class="intake-status open" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are open.</div>';
+const pausedStatus = '<div class="intake-status" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are paused.</div>';
+const enabledForm = '<form action="/api/intake/submit" aria-disabled="false" data-intake-enabled="true" enctype="multipart/form-data" id="projectForm" method="POST" novalidate>';
+const pausedForm = '<form aria-disabled="true" data-intake-enabled="false" enctype="multipart/form-data" id="projectForm" inert novalidate>';
+const enabledSubmit = '<button class="btn black" type="submit" id="submit">Request Free Preview</button>';
+const pausedSubmit = '<button class="btn black" type="submit" id="submit" disabled>Request Free Preview</button>';
+let intakeHtml = await readFile(intakePage, 'utf8');
+const turnstileWidgetAnchor = '<!-- ARC_TURNSTILE_WIDGET -->';
+const turnstileBootstrapAnchor = `let turnstileReady=false;
+function ensureTurnstile(){}
+function resetTurnstileChallenge(){turnstileReady=false}`;
+if (intakeHtml.split(turnstileWidgetAnchor).length !== 2 || intakeHtml.split(turnstileBootstrapAnchor).length !== 2) {
+  throw new Error('Expected exact Turnstile build anchors.');
+}
+if (intakeBuildEnabled) {
+  const widget = '<div class="turnstile-slot" id="turnstileWidget" aria-label="Security check"></div><noscript><p>JavaScript is required to request a preview.</p></noscript>';
+  const bootstrap = `const turnstileSiteKey=${JSON.stringify(turnstileSiteKey)},turnstileAction=${JSON.stringify(turnstileAction)};
+let turnstileReady=false,turnstileWidgetId=null,turnstileLoading=false;
+function turnstileFailure(){turnstileReady=false;if(current===reviewIndex)err.textContent='Security check unavailable. Refresh and try again.'}
+function renderTurnstile(){
+  if(turnstileWidgetId!==null||!window.turnstile)return;
+  try{turnstileWidgetId=window.turnstile.render('#turnstileWidget',{sitekey:turnstileSiteKey,action:turnstileAction,cData:ensureSubmissionRequestId(),theme:'light',size:'flexible',callback:()=>{turnstileReady=true;if(err.textContent.startsWith('Security check'))err.textContent=''},'expired-callback':()=>{turnstileReady=false;err.textContent='Security check expired. Complete it again.'},'error-callback':()=>{turnstileFailure();return true}})}catch(error){turnstileFailure()}
+}
+function ensureTurnstile(){
+  if(turnstileWidgetId!==null)return;
+  if(window.turnstile){renderTurnstile();return}
+  if(turnstileLoading)return;
+  turnstileLoading=true;
+  const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';script.async=true;script.defer=true;script.referrerPolicy='no-referrer';script.onload=renderTurnstile;script.onerror=turnstileFailure;document.head.appendChild(script);
+}
+function resetTurnstileChallenge(){turnstileReady=false;if(turnstileWidgetId!==null&&window.turnstile)try{window.turnstile.reset(turnstileWidgetId)}catch(error){turnstileFailure()}}`;
+  intakeHtml = intakeHtml.replace(turnstileWidgetAnchor, widget).replace(turnstileBootstrapAnchor, bootstrap);
+} else {
+  intakeHtml = intakeHtml.replace(turnstileWidgetAnchor, '');
+}
+for (const [label, snippet] of [['status', enabledStatus], ['form', enabledForm], ['submit', enabledSubmit]]) {
+  if (intakeHtml.split(snippet).length !== 2) throw new Error(`Expected exactly one enabled intake ${label} template.`);
+}
+if (intakeBuildRequested && !turnstileBuildConfigured) {
+  console.warn('ARC intake request was compiled closed because the build-scoped Turnstile widget is not configured.');
+}
+if (!intakeBuildEnabled) {
+  intakeHtml = intakeHtml
+    .replace(enabledStatus, pausedStatus)
+    .replace(enabledForm, pausedForm)
+    .replace(enabledSubmit, pausedSubmit);
+}
+if (/\bdata-netlify\b|\bnetlify-honeypot\b|name="form-name"/i.test(intakeHtml)) {
+  throw new Error('Native Netlify Forms registration must not enter the public build.');
+}
+if (!intakeBuildEnabled && /<form\b[^>]*(?:action="\/api\/intake\/submit"|method="POST")/i.test(intakeHtml)) {
+  throw new Error('Production intake could not be compiled fail-closed.');
+}
+await writeFile(intakePage, intakeHtml);
 
 if (!analyticsBuildEnabled) {
   for (const relative of ['index.html', 'thank-you/index.html']) {

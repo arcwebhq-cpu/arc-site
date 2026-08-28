@@ -110,6 +110,8 @@ const env = {
   ARC_REVIEW_EMAIL_OUTBOX_ENABLED: 'true',
   ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET: 'review-email-outbox-secret-unique-0123456789abcdef',
   ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET: 'review-email-receipt-secret-unique-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'review-revision-fence-secret-unique-0123456789abcdef',
   ARC_REVIEW_PUBLIC_ORIGIN: 'https://arcweb.onl',
   ARC_REVIEW_PREVIEW_ORIGIN: 'https://arcwebhq-cpu.github.io',
   ARC_REVIEW_CHECKOUT_ORIGIN: 'https://checkout.stripe.com',
@@ -552,7 +554,8 @@ const decisionRequest = () => new Request('https://arcweb.onl/api/review/decisio
     idempotency_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision_notes: notes }),
 });
 const disabledDecision = await reviewDecisionHandler(decisionRequest(), {
-  reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore, clock: () => plus(5_000),
+  reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore,
+  retentionFenceStore: new FakeStore(), clock: () => plus(5_000),
 });
 assert.equal(disabledDecision.status, 503, 'Unavailable revision automation must fail before recording a decision.');
 assert.equal((await authorizeReviewSession(automatedReviewStore, automatedExchange.session_token,
@@ -572,7 +575,8 @@ const crashingRevisionStore = {
   },
 };
 const crashedDecision = await reviewDecisionHandler(decisionRequest(), {
-  reviewStore: automatedReviewStore, revisionStore: crashingRevisionStore, clock: () => plus(5_000),
+  reviewStore: automatedReviewStore, revisionStore: crashingRevisionStore,
+  retentionFenceStore: new FakeStore(), clock: () => plus(5_000),
 });
 assert.equal(crashedDecision.status, 503);
 assert.equal((await authorizeReviewSession(automatedReviewStore, automatedExchange.session_token,
@@ -582,13 +586,15 @@ const rejectedBrowserClaim = await reviewRevisionClaimHandler(new Request(
   'https://arcweb.onl/api/internal/review-revision/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${env.ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET}`,
       'Content-Type': 'application/json', Origin: 'https://arcweb.onl' }, body: JSON.stringify({ cursor: null }),
-  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore });
+  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore,
+    retentionFenceStore: new FakeStore() });
 assert.equal(rejectedBrowserClaim.status, 401, 'Internal revision workers must reject browser-origin requests.');
 const claimResponse = await reviewRevisionClaimHandler(new Request(
   'https://arcweb.onl/api/internal/review-revision/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${env.ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET}`,
       'Content-Type': 'application/json' }, body: JSON.stringify({ cursor: null }),
-  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore, clock: () => plus(8_000) });
+  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore,
+    retentionFenceStore: new FakeStore(), clock: () => plus(8_000) });
 assert.equal(claimResponse.status, 200);
 const discoveredClaim = await claimResponse.json();
 assert.equal(discoveredClaim.empty, undefined);
@@ -604,6 +610,7 @@ const completeResponse = await reviewRevisionCompleteHandler(new Request(
       successor_commit_sha: successor.commit_sha, successor_manifest_sha256: successor.manifest_sha256,
       artifact_evidence: {}, invite_reservation: {} }),
   }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore, clock: () => plus(10_000),
+    retentionFenceStore: new FakeStore(),
     verifySuccessorArtifacts: endpointAdapters.verifySuccessorArtifacts,
     reserveSuccessorInvite: endpointAdapters.reserveSuccessorInvite });
 assert.equal(completeResponse.status, 200);
@@ -612,7 +619,8 @@ const emptyClaim = await reviewRevisionClaimHandler(new Request(
   'https://arcweb.onl/api/internal/review-revision/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${env.ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET}`,
       'Content-Type': 'application/json' }, body: JSON.stringify({ cursor: null }),
-  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore, clock: () => plus(11_000) });
+  }), { reviewStore: automatedReviewStore, revisionStore: automatedRevisionStore,
+    retentionFenceStore: new FakeStore(), clock: () => plus(11_000) });
 assert.deepEqual(await emptyClaim.json(), { empty: true, next_cursor: null },
   'The pending index must be removed only after durable completion.');
 for (const key of envKeys) {

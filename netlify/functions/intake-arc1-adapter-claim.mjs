@@ -7,9 +7,11 @@ import {
   INTAKE_ARC1_ADAPTER_MAX_CONTROL_BYTES,
   INTAKE_ARC1_ADAPTER_STORE,
   INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV,
+  arc1AdapterProtocolEnabled,
   authorizeArc1AdapterConsumer,
   claimArc1AdapterConsumer,
 } from '../lib/intake-arc1-adapter-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const headers = Object.freeze({
   'Cache-Control': 'no-store',
@@ -66,7 +68,14 @@ export function createIntakeArc1AdapterClaimHandler() {
   };
 }
 
-export default createIntakeArc1AdapterClaimHandler();
+const handler = createIntakeArc1AdapterClaimHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-adapter-claim',
+  paths: ['/internal/intake/arc1/adapter/claim'],
+  active: ({ env }) => publicIntakeAuthorityReady(env) && arc1AdapterProtocolEnabled(env),
+  handler,
+});
 // Netlify extracts route configuration at build time, so keep these values literal.
 export const config = {
   path: '/internal/intake/arc1/adapter/claim', method: 'POST',

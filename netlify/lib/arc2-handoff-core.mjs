@@ -369,28 +369,37 @@ export function configuredEnvironment(env = process.env, now = new Date()) {
   const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name) || name === 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY');
   const shortSecrets = secretNames.filter((name) => String(env[name] || '').length < 32 || String(env[name] || '').length > 512);
   const duplicateSecrets = new Set(secretNames.map((name) => String(env[name] || '')).filter(Boolean)).size !== secretNames.filter((name) => env[name]).length;
-  const attestations = [
-    'ARC_ADULT_OPERATOR_VERIFIED',
-    'ARC_BUSINESS_LICENSE_VERIFIED',
-    'ARC_TAX_REGISTRATION_VERIFIED',
-    'ARC_TRANSACTIONAL_EMAIL_VERIFIED',
+  const operationalAttestations = [
     'ARC_RETENTION_CONTROL_VERIFIED',
     'ARC_POSTCLAIM_READBACK_VERIFIED',
     'ARC_DEVICE_QA_VERIFIED',
     'ARC_LEAD_ROUTE_VERIFIED',
-    'ARC_STRIPE_REVERSAL_CONTROL_REQUIRED',
     'ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED',
     'ARC_STRIPE_REVERSAL_BINDING_ENABLED',
     'ARC_STRIPE_REVERSAL_RECHECK_ENABLED',
     'ARC_STRIPE_CHECKOUT_LEDGER_ENABLED',
   ];
-  const invalidAttestations = attestations.filter((name) => env[name] !== 'true');
+  const productionOnlyAttestations = [
+    'ARC_ADULT_OPERATOR_VERIFIED',
+    'ARC_BUSINESS_LICENSE_VERIFIED',
+    'ARC_TAX_REGISTRATION_VERIFIED',
+    'ARC_TRANSACTIONAL_EMAIL_VERIFIED',
+    'ARC_STRIPE_REVERSAL_CONTROL_REQUIRED',
+  ];
   const liveModeSetting = String(env.ARC_STRIPE_LIVE_MODE_ENABLED || '');
   const allowTestModeSetting = String(env.ARC_ALLOW_TEST_MODE_EVENTS || '');
   const runtimeEnvironment = String(env.ARC_RUNTIME_ENVIRONMENT || '');
   const productionMode = liveModeSetting === 'true' && allowTestModeSetting === 'false' && env.ARC_HANDOFF_ENABLED === 'true' && runtimeEnvironment === 'production';
   const sandboxMode = liveModeSetting === 'false' && allowTestModeSetting === 'true' && env.ARC_HANDOFF_ENABLED === 'false' && runtimeEnvironment === 'sandbox';
   const liveModeValid = productionMode || sandboxMode;
+  const invalidAttestations = [
+    ...operationalAttestations.filter((name) => env[name] !== 'true'),
+    ...(productionMode
+      ? productionOnlyAttestations.filter((name) => env[name] !== 'true')
+      : sandboxMode
+        ? productionOnlyAttestations.filter((name) => !['true', 'false'].includes(env[name]))
+        : productionOnlyAttestations),
+  ];
   const activationManifest = validateActivationManifestEnvironment(env, {
     minimumStage: productionMode ? 'LIVE_CHECKOUT' : 'CLAIM_SANDBOX',
     now,
@@ -1169,6 +1178,10 @@ export function createInitialRecord(normalized, env, key, now = new Date(), rand
     lead_route_receipt_sha256: null,
     claim_token_hmac_sha256: null,
     claim_invitation_generation: 0,
+    claim_invitation_renewal_operation_hmac_sha256: null,
+    claim_invitation_renewal_previous_expires_at: null,
+    claim_invitation_renewal_previous_job_key: null,
+    claim_invitation_renewal_source_generation: null,
     claim_token_consumed_hmac_sha256: null,
     claim_token_expires_at: null,
     claim_token_used_at: null,
@@ -1845,6 +1858,10 @@ export function createClaimStateEvidence(record, env, authorizedAt = new Date())
 
 const LEGACY_HANDOFF_DEFAULTS = Object.freeze({
   claim_invitation_generation: 0,
+  claim_invitation_renewal_operation_hmac_sha256: null,
+  claim_invitation_renewal_previous_expires_at: null,
+  claim_invitation_renewal_previous_job_key: null,
+  claim_invitation_renewal_source_generation: null,
   lead_route_mode: 'netlify_form',
   lead_route_recipient_hmac_sha256: null,
   lead_route_migration: null,
@@ -1914,6 +1931,27 @@ export function validateExpectedBindings(value) {
   }
   if (record.claim_token_hmac_sha256 !== null) hex64(record.claim_token_hmac_sha256, 'claim_token_hmac_sha256');
   if (record.claim_token_consumed_hmac_sha256 !== null) hex64(record.claim_token_consumed_hmac_sha256, 'claim_token_consumed_hmac_sha256');
+  const renewalOperationHmac = record.claim_invitation_renewal_operation_hmac_sha256 ?? null;
+  const renewalPreviousExpiresAt = record.claim_invitation_renewal_previous_expires_at ?? null;
+  const renewalPreviousJobKey = record.claim_invitation_renewal_previous_job_key ?? null;
+  const renewalSourceGeneration = record.claim_invitation_renewal_source_generation ?? null;
+  if (renewalOperationHmac === null) {
+    if (renewalPreviousExpiresAt !== null || renewalPreviousJobKey !== null ||
+        renewalSourceGeneration !== null) {
+      throw new TypeError('Claim invitation renewal operation binding is invalid.');
+    }
+  } else {
+    hex64(renewalOperationHmac,
+      'claim_invitation_renewal_operation_hmac_sha256');
+    if (!Number.isSafeInteger(renewalSourceGeneration) || renewalSourceGeneration < 1 ||
+        renewalSourceGeneration + 1 !== record.claim_invitation_generation) {
+      throw new TypeError('Claim invitation renewal source generation is invalid.');
+    }
+    hex64(renewalPreviousJobKey,
+      'claim_invitation_renewal_previous_job_key');
+    isoTimestamp(renewalPreviousExpiresAt,
+      'claim_invitation_renewal_previous_expires_at');
+  }
   if (record.lead_route_receipt_sha256 !== null) hex64(record.lead_route_receipt_sha256, 'lead_route_receipt_sha256');
   for (const field of ['preclaim_deploy_attempted_at', 'final_deploy_attempted_at', 'email_hook_attempted_at']) {
     if (record[field] !== null) isoTimestamp(record[field], field);

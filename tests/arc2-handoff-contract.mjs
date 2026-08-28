@@ -66,11 +66,14 @@ import {
   STRIPE_CHECKOUT_SESSION_SCHEMA,
   stripeCheckoutKeys,
 } from '../netlify/lib/stripe-checkout-core.mjs';
-import claimHandler, { config as claimConfig } from '../netlify/functions/arc2-claim.mjs';
-import webhookHandler, { config as webhookConfig } from '../netlify/functions/arc2-claim-webhook.mjs';
-import invitationHandler, { config as invitationConfig } from '../netlify/functions/arc2-claim-invitation-ready.mjs';
-import startHandler, { config as startConfig } from '../netlify/functions/arc2-handoff-start.mjs';
-import statusHandler, { config as statusConfig } from '../netlify/functions/arc2-handoff-status.mjs';
+import claimRouteHandler, { config as claimConfig } from '../netlify/functions/arc2-claim.mjs';
+import webhookRouteHandler, { config as webhookConfig } from '../netlify/functions/arc2-claim-webhook.mjs';
+import invitationRouteHandler, { config as invitationConfig } from '../netlify/functions/arc2-claim-invitation-ready.mjs';
+import invitationRenewRouteHandler, {
+  config as invitationRenewConfig,
+} from '../netlify/functions/arc2-claim-invitation-renew.mjs';
+import startRouteHandler, { config as startConfig } from '../netlify/functions/arc2-handoff-start.mjs';
+import statusRouteHandler, { config as statusConfig } from '../netlify/functions/arc2-handoff-status.mjs';
 
 const now = new Date('2026-08-12T18:00:00.000Z');
 const stripeAccountId = 'acct_ArcHandoffContract123';
@@ -94,6 +97,7 @@ const secrets = Object.fromEntries([
   'NETLIFY_ADMIN_PAT',
   'NETLIFY_OAUTH_CLIENT_SECRET',
   'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+  'ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET',
 ].map((name, index) => [name, `${name.toLowerCase()}-${String(index).padStart(2, '0')}-unique-test-secret-0123456789`]));
 const activationNow = new Date();
 const activationDeploymentSha = '9'.repeat(40);
@@ -156,6 +160,15 @@ assert.equal(configuredEnvironment({ ...env, ARC_HANDOFF_ENABLED: 'true' }).enab
   'Test-mode events require a disabled handoff on an explicit nonproduction sandbox.');
 const sandboxEnv = { ...env };
 assert.deepEqual(configuredEnvironment(sandboxEnv), { enabled: true, missing: [], invalid: [] });
+assert.deepEqual(configuredEnvironment({
+  ...sandboxEnv,
+  ARC_ADULT_OPERATOR_VERIFIED: 'false',
+  ARC_BUSINESS_LICENSE_VERIFIED: 'false',
+  ARC_TAX_REGISTRATION_VERIFIED: 'false',
+  ARC_TRANSACTIONAL_EMAIL_VERIFIED: 'false',
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
+}), { enabled: true, missing: [], invalid: [] },
+'The ARC2 sandbox must accept the exact false pre-completion attestations required by review activation.');
 assert.equal(configuredEnvironment({ ...sandboxEnv, ARC_ACTIVATION_MANIFEST: '' }).enabled, false,
   'Sandbox ARC2 mutations must require a signed activation authority.');
 assert.equal(configuredEnvironment({
@@ -1112,6 +1125,18 @@ class FakeStore {
   }
 }
 
+const fencedHandler = (handler) => (request, context = {}) => {
+  const fencedContext = Object.create(context);
+  fencedContext.retentionFenceStore = new FakeStore();
+  return handler(request, fencedContext);
+};
+const claimHandler = fencedHandler(claimRouteHandler);
+const webhookHandler = fencedHandler(webhookRouteHandler);
+const invitationHandler = fencedHandler(invitationRouteHandler);
+const invitationRenewHandler = fencedHandler(invitationRenewRouteHandler);
+const startHandler = fencedHandler(startRouteHandler);
+const statusHandler = fencedHandler(statusRouteHandler);
+
 const rejectedLegacyV3Store = new FakeStore();
 let rejectedLegacyV3AccountReads = 0;
 await assert.rejects(startHandoff(legacyV3Input, env, {
@@ -1804,6 +1829,17 @@ assert.equal(payload.iat, Math.floor(claimAt.getTime() / 1000));
 assert.equal(payload.exp, payload.iat + CLAIM_JWT_TTL_SECONDS,
   'The irreversible external claim JWT must expire quickly even while the invitation wrapper has a longer lifetime.');
 
+const immediateClaimReplayAt = new Date(claimAt.getTime() + 1_000);
+const immediateClaimReplay = await exchangeClaimBearer(started.handoffId, randomClaimToken, env, {
+  ...adapters,
+  store,
+  clock: () => new Date(immediateClaimReplayAt),
+});
+assert.equal(immediateClaimReplay.claimUrl, claimUrl,
+  'A route-marker response loss must replay the same still-live private provider claim URL.');
+assert.equal(immediateClaimReplay.record.claim_jwt_issued_at, payload.iat,
+  'An exact replay must not rotate a still-live provider JWT.');
+
 const refreshedAt = new Date(claimAt.getTime() + (CLAIM_JWT_TTL_SECONDS + 1) * 1000);
 const refreshStore = new FakeStore();
 refreshStore.values = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
@@ -2035,8 +2071,10 @@ assert.equal(startConfig.path, '/api/arc2/handoff/start');
 assert.equal(claimConfig.path, '/api/arc2/claim');
 assert.equal(webhookConfig.path, '/api/arc2/claim-webhook');
 assert.equal(invitationConfig.path, '/internal/arc2/claim-invitation-ready');
+assert.equal(invitationRenewConfig.path, '/internal/arc2/claim-invitation-renew');
 assert.equal(statusConfig.path, '/internal/arc2/handoff-status');
-for (const config of [startConfig, claimConfig, webhookConfig, invitationConfig, statusConfig]) assert.equal(typeof config.rateLimit.windowLimit, 'number');
+for (const config of [startConfig, claimConfig, webhookConfig, invitationConfig,
+  invitationRenewConfig, statusConfig]) assert.equal(typeof config.rateLimit.windowLimit, 'number');
 
 const configuredSnapshot = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
 Object.assign(process.env, sandboxEnv);
@@ -2124,6 +2162,19 @@ try {
     }));
     assert.equal(blockedInvitation.status, 400);
     assert.deepEqual(await blockedInvitation.json(), { error: 'invalid_receipt' });
+    const missingRenewalIdentity = await invitationRenewHandler(new Request(
+      'https://arcweb.onl/internal/arc2/claim-invitation-renew', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${env.ARC_HANDOFF_TRIGGER_SECRET}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ handoff_id: started.handoffId }),
+      }), {
+      get arc2Store() { throw new Error('Missing renewal identity must not touch storage.'); },
+    });
+    assert.equal(missingRenewalIdentity.status, 400);
+    assert.deepEqual(await missingRenewalIdentity.json(), { error: 'invalid_renewal' });
     const blockedClaim = await claimHandler(new Request('https://arcweb.onl/api/arc2/claim', {
       method: 'POST',
       headers: { authorization: `Bearer ${randomClaimToken}`, 'x-arc-handoff-id': started.handoffId },
@@ -2157,6 +2208,7 @@ try {
     [claimHandler, new Request('https://arcweb.onl/api/arc2/claim', { method: 'POST' })],
     [webhookHandler, new Request('https://arcweb.onl/api/arc2/claim-webhook', { method: 'POST' })],
     [invitationHandler, new Request('https://arcweb.onl/internal/arc2/claim-invitation-ready', { method: 'POST' })],
+    [invitationRenewHandler, new Request('https://arcweb.onl/internal/arc2/claim-invitation-renew', { method: 'POST' })],
     [statusHandler, new Request('https://arcweb.onl/internal/arc2/handoff-status')],
   ]) {
     const response = await handler(request);

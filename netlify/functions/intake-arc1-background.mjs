@@ -6,6 +6,7 @@ import {
 } from '../lib/intake-arc1-dispatch-core.mjs';
 import { deliverIntakeToArc1 } from '../lib/intake-arc1-bridge-core.mjs';
 import { INTAKE_STORE } from '../lib/intake-submission-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const response = (status, value) => new Response(status === 204 ? null : JSON.stringify(value), { status, headers: {
   'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff',
@@ -66,5 +67,12 @@ export function createIntakeArc1BackgroundHandler() {
   };
 }
 
-export default createIntakeArc1BackgroundHandler();
+const handler = createIntakeArc1BackgroundHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-background',
+  active: ({ env }) => publicIntakeAuthorityReady(env) &&
+    env[INTAKE_ARC1_DISPATCH_ENABLED_ENV] === 'true',
+  handler,
+});
 export const config = { background: true };

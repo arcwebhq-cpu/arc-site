@@ -8,6 +8,7 @@ import {
   ACTIVATION_MANIFEST_SCHEMA,
   ACTIVATION_MANIFEST_SECRET_ENV,
   ACTIVATION_MANIFEST_STEADY_MAX_LIFETIME_MS,
+  ACTIVATION_TEST_BOOTSTRAP_MAX_LIFETIME_MS,
   ACTIVATION_NEXT_MANIFEST_ENV,
   ACTIVATION_STEADY_EVIDENCE_KINDS,
   ACTIVATION_MANIFEST_VERSION,
@@ -40,6 +41,16 @@ const unsigned = (stage, overrides = {}) => ({
   ...overrides,
 });
 const signed = (stage, overrides = {}) => signActivationManifest(unsigned(stage, overrides), secret);
+const testBootstrap = signed('EMAIL_SANDBOX', {
+  authority_mode: 'TEST_BOOTSTRAP',
+  expires_at: new Date(now.getTime() + 10 * 60_000).toISOString(),
+  evidence: [],
+});
+const claimTestBootstrap = signed('CLAIM_SANDBOX', {
+  authority_mode: 'TEST_BOOTSTRAP',
+  expires_at: new Date(now.getTime() + 10 * 60_000).toISOString(),
+  evidence: evidenceFor('EMAIL_SANDBOX'),
+});
 
 const steadyEvidenceFor = (stage) => [...evidenceFor(stage), ...ACTIVATION_STEADY_EVIDENCE_KINDS.map((kind) => ({
   kind,
@@ -56,6 +67,34 @@ for (const [stageIndex, stage] of ACTIVATION_STAGES.entries()) {
   }
 }
 assert.equal(activationStageAtLeast('UNKNOWN', 'OFF'), false);
+
+const bootstrapValidated = validateActivationManifest(testBootstrap, {
+  secret, deploymentSha, minimumStage: 'EMAIL_SANDBOX', now,
+});
+assert.equal(bootstrapValidated.valid, true);
+assert.equal(bootstrapValidated.authority_mode, 'TEST_BOOTSTRAP');
+assert.deepEqual(validateActivationManifest(testBootstrap, {
+  secret, deploymentSha, minimumStage: 'CLAIM_SANDBOX', now,
+}).reason_codes, ['STAGE_INSUFFICIENT'],
+'A bootstrap authority is scoped below claim, Checkout, and public-intake authority.');
+const claimBootstrapValidated = validateActivationManifest(claimTestBootstrap, {
+  secret, deploymentSha, minimumStage: 'CLAIM_SANDBOX', now,
+});
+assert.equal(claimBootstrapValidated.valid, true);
+assert.equal(claimBootstrapValidated.authority_mode, 'TEST_BOOTSTRAP');
+assert.deepEqual(validateActivationManifest(claimTestBootstrap, {
+  secret, deploymentSha, minimumStage: 'LIVE_CHECKOUT', now,
+}).reason_codes, ['STAGE_INSUFFICIENT'],
+'The one-use claim bootstrap cannot authorize live Checkout.');
+assert.deepEqual(validateActivationManifest(signed('CLAIM_SANDBOX', {
+  authority_mode: 'TEST_BOOTSTRAP', evidence: [],
+}), { secret, deploymentSha, minimumStage: 'EMAIL_SANDBOX', now }).reason_codes,
+['EVIDENCE_INCOMPLETE']);
+assert.deepEqual(validateActivationManifest(signed('EMAIL_SANDBOX', {
+  authority_mode: 'TEST_BOOTSTRAP', evidence: [],
+  expires_at: new Date(now.getTime() + ACTIVATION_TEST_BOOTSTRAP_MAX_LIFETIME_MS + 1).toISOString(),
+}), { secret, deploymentSha, minimumStage: 'EMAIL_SANDBOX', now }).reason_codes,
+['MANIFEST_NOT_CURRENT']);
 
 for (const stage of ACTIVATION_STAGES) {
   const validated = validateActivationManifest(signed(stage), {
@@ -160,7 +199,71 @@ const env = {
   COMMIT_REF: '8'.repeat(40),
 };
 assert.equal(activationManifestSecretIsDistinct(env), true);
-assert.equal(validateActivationManifestEnvironment(env, { minimumStage: 'PUBLIC_INTAKE', now }).valid, true);
+const publicEnvironmentValidation = validateActivationManifestEnvironment(
+  env,
+  { minimumStage: 'PUBLIC_INTAKE', now },
+);
+assert.equal(publicEnvironmentValidation.valid, true, JSON.stringify(publicEnvironmentValidation));
+const bootstrapEnv = {
+  ...env,
+  [ACTIVATION_MANIFEST_ENV]: testBootstrap,
+  ARC_RUNTIME_ENVIRONMENT: 'sandbox',
+  ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
+  ARC_ALLOW_TEST_MODE_EVENTS: 'true',
+  ARC_HANDOFF_ENABLED: 'false',
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'bootstrapRestrictedKey0123456789'].join('_'),
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'bootstrapRestrictedKey0123456789'].join('_'),
+};
+assert.equal(validateActivationManifestEnvironment(bootstrapEnv, {
+  minimumStage: 'EMAIL_SANDBOX', now,
+}).valid, true);
+const claimBootstrapEnv = {
+  ...bootstrapEnv,
+  [ACTIVATION_MANIFEST_ENV]: claimTestBootstrap,
+  ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
+  ARC_PUBLIC_ORIGIN: 'https://claim-sandbox.example.test/',
+  SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
+  SITE_NAME: 'arc2-sandbox',
+  URL: 'https://claim-sandbox.example.test/',
+};
+const forbiddenLiveSecretFixture = ['sk', 'live', 'bootstrapMustNeverUseLiveKey012345'].join('_');
+const forbiddenLiveRestrictedFixture = ['rk', 'live', 'claimBootstrapMustNeverUseLiveKey012345'].join('_');
+assert.equal(validateActivationManifestEnvironment(claimBootstrapEnv, {
+  minimumStage: 'CLAIM_SANDBOX', now,
+}).valid, true);
+for (const unsafe of [
+  { ARC_RUNTIME_ENVIRONMENT: 'production' },
+  { ARC_STRIPE_LIVE_MODE_ENABLED: 'true' },
+  { ARC_HANDOFF_ENABLED: 'true' },
+  { ARC_BUILD_INTAKE_ENABLED: 'true' },
+  { ARC_STRIPE_REVIEW_SECRET_KEY: forbiddenLiveSecretFixture },
+]) {
+  const blocked = validateActivationManifestEnvironment({ ...bootstrapEnv, ...unsafe }, {
+    minimumStage: 'EMAIL_SANDBOX', now,
+  });
+  assert.equal(blocked.valid, false);
+  assert.deepEqual(blocked.reason_codes, ['TEST_BOOTSTRAP_ENVIRONMENT_INVALID']);
+}
+assert.equal(validateActivationManifestEnvironment(bootstrapEnv, {
+  minimumStage: 'LIVE_CHECKOUT', now,
+}).valid, false, 'Bootstrap authority cannot enable live Checkout.');
+assert.equal(validateActivationManifestEnvironment(bootstrapEnv, {
+  minimumStage: 'PUBLIC_INTAKE', now,
+}).valid, false, 'Bootstrap authority cannot enable public intake.');
+for (const unsafe of [
+  { ARC_RUNTIME_ENVIRONMENT: 'production' },
+  { ARC_STRIPE_LIVE_MODE_ENABLED: 'true' },
+  { ARC_HANDOFF_ENABLED: 'true' },
+  { SITE_NAME: 'arcsites' },
+  { SITE_ID: '11111111-1111-4111-8111-111111111111' },
+  { ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: forbiddenLiveRestrictedFixture },
+]) {
+  const blocked = validateActivationManifestEnvironment({ ...claimBootstrapEnv, ...unsafe }, {
+    minimumStage: 'CLAIM_SANDBOX', now,
+  });
+  assert.equal(blocked.valid, false);
+  assert.deepEqual(blocked.reason_codes, ['TEST_BOOTSTRAP_ENVIRONMENT_INVALID']);
+}
 assert.equal(validateActivationManifestEnvironment({ ...env, COMMIT_REF: 'not-a-sha' }, {
   minimumStage: 'PUBLIC_INTAKE', now,
 }).valid, true, 'runtime COMMIT_REF must not influence the embedded build identity');

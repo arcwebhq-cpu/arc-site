@@ -82,6 +82,8 @@ const env = {
   ARC_STRIPE_REVERSAL_RECHECK_SECRET: 'recheck-evidence-secret-unique-0123456789abcdef',
   ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET: 'recheck-endpoint-secret-unique-0123456789abcdef',
   ARC_HANDOFF_STATE_SECRET: 'handoff-state-secret-unique-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'reversal-retention-fence-secret-unique-0123456789abcdef',
   ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256: accountHash,
   NETLIFY_TEAM_ACCOUNT_ID: 'team-account-123',
 };
@@ -454,10 +456,12 @@ assert.equal(JSON.stringify([...store.values.entries()]).includes('pi_unboundArc
 const endpointSnapshot = Object.fromEntries(Object.keys(pausedRecheckEnv).map((key) => [key, process.env[key]]));
 Object.assign(process.env, pausedRecheckEnv);
 try {
+  const endpointFence = new FakeStore();
   const pausedWebhook = await webhookHandler(new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
     method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': eventSignature(eventRaw) }, body: eventRaw,
   }), {
-    arc2Store: store, alertStore, clock: () => new Date(now), stripeAccountFetch: accountFetch,
+    arc2Store: store, alertStore, clock: () => new Date(now),
+    retentionFenceStore: endpointFence, stripeAccountFetch: accountFetch,
   });
   assert.equal(pausedWebhook.status, 200, 'Pausing recheck production must not disable signed reversal ingestion.');
   const oversizedWebhook = new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
@@ -469,7 +473,9 @@ try {
     } }),
     duplex: 'half',
   });
-  assert.equal((await webhookHandler(oversizedWebhook, { arc2Store: store, alertStore })).status, 413,
+  assert.equal((await webhookHandler(oversizedWebhook, {
+    arc2Store: store, alertStore, retentionFenceStore: endpointFence,
+  })).status, 413,
     'Chunked webhooks must be canceled before buffering beyond one MiB.');
 } finally {
   for (const [key, value] of Object.entries(endpointSnapshot)) {
@@ -500,7 +506,7 @@ try {
         cancel() { canceled = true; },
       }),
     });
-    const context = {};
+    const context = { retentionFenceStore: new FakeStore() };
     Object.defineProperty(context, contextKey, { get() { storeReads += 1; throw new Error('store must remain untouched'); } });
     assert.equal((await handler(request, context)).status, 413,
       `${endpoint} must reject a headerless oversized body before parsing or storage.`);

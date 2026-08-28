@@ -14,6 +14,14 @@ import {
   retentionKeys,
   runRetentionManifest,
 } from '../netlify/lib/retention-control-core.mjs';
+import {
+  RETENTION_GENERATION_FENCE_STATE_KEY,
+  retentionGenerationFenceKeys,
+  validateRetentionGenerationFenceState,
+  validateRetentionFinalizeReceipt,
+  validateRetentionMissingSourceAnomaly,
+  validateRetentionFreezeIntent,
+} from '../netlify/lib/retention-generation-fence-core.mjs';
 import retentionHandler, { config as retentionConfig } from '../netlify/functions/retention-cleanup.mjs';
 
 class FakeStore {
@@ -41,6 +49,15 @@ class FakeStore {
   async delete(key) {
     this.values.delete(key);
   }
+  list({ prefix, paginate }) {
+    assert.equal(paginate, true);
+    const keys = [...this.values.keys()].filter((key) => key.startsWith(prefix)).sort();
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { blobs: keys.map((key) => ({ key })), directories: [] };
+      },
+    };
+  }
 }
 
 const now = new Date('2026-08-13T12:00:00.000Z');
@@ -51,6 +68,7 @@ const env = {
   ARC_RETENTION_MANIFEST_SECRET: 'retention-manifest-secret-unique-0123456789abcdef',
   ARC_RETENTION_RECORD_HMAC_SECRET: 'retention-record-hmac-secret-unique-0123456789abcdef',
   ARC_RETENTION_ADULT_APPROVAL_SECRET: 'retention-adult-approval-secret-unique-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET: 'legacy-retention-global-fence-secret-0123456789abcdef',
 };
 assert.equal(retentionConfiguration(env).enabled, true);
 assert.equal(retentionConfiguration({}).enabled, false);
@@ -163,7 +181,8 @@ const applied = await runRetentionManifest(applyManifest, sign(applyManifest, ap
   intake: applyIntake, control: applyControl,
 }, { clock: () => new Date(now) });
 assert.equal(applied.deleted, 1);
-assert.equal(await applyIntake.getWithMetadata(`submissions/${submissionId}`), null);
+assert.equal((await applyIntake.getWithMetadata(`submissions/${submissionId}`)).data.schema,
+  'arc-retention-record-tombstone-v1');
 assert.equal([...applyControl.values.keys()].filter((key) => key.startsWith('delete-intents/')).length, 1);
 assert.equal([...applyControl.values.keys()].filter((key) => key.startsWith('delete-receipts/')).length, 1);
 const appliedReplay = await runRetentionManifest(applyManifest, sign(applyManifest, applyEnv), applyEnv, {
@@ -188,7 +207,8 @@ await assert.rejects(runRetentionManifest(crashManifest, sign(crashManifest, app
     throw new Error('simulated_crash_after_delete');
   }
 } }), /simulated_crash/);
-assert.equal(await crashIntake.getWithMetadata(`submissions/${crashId}`), null);
+assert.equal((await crashIntake.getWithMetadata(`submissions/${crashId}`)).data.schema,
+  'arc-retention-record-tombstone-v1');
 assert.equal([...crashControl.values.keys()].filter((key) => key.startsWith('delete-intents/')).length, 1);
 assert.equal([...crashControl.values.keys()].filter((key) => key.startsWith('delete-receipts/')).length, 0);
 const resumed = await runRetentionManifest(crashManifest, sign(crashManifest, applyEnv), applyEnv, {
@@ -281,6 +301,132 @@ assert.equal(retentionConfig.path, '/internal/retention/cleanup');
 const bodyLimitSnapshot = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
 Object.assign(process.env, env);
 try {
+  const multiFirstId = '70707070-7070-4070-8070-707070707070';
+  const multiSecondId = '71717171-7171-4171-8171-717171717171';
+  const multiFirst = intakeRecord(multiFirstId);
+  const multiSecond = intakeRecord(multiSecondId);
+  const multiValue = manifestFor('72727272-7272-4272-8272-727272727272', multiFirstId, multiFirst);
+  multiValue.targets.push({
+    key: `submissions/${multiSecondId}`,
+    last_interaction_at: '2024-07-01T00:00:00.000Z',
+    record_sha256: sha256Hex(canonicalJson(multiSecond)),
+    retention_class: 'unpaid-preview',
+    store: 'arc-intake-submissions',
+  });
+  const multiManifest = canonicalJson(multiValue);
+  const multiControl = new FakeStore();
+  const multiResponse = await retentionHandler(new Request(
+    'https://arcweb.onl/internal/retention/cleanup', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.ARC_RETENTION_CLEANUP_SECRET}`,
+        'content-type': 'application/json' },
+      body: JSON.stringify({ manifest: multiManifest,
+        manifest_hmac_sha256: sign(multiManifest) }),
+    }), { retentionStore: multiControl, intakeStore: new FakeStore(), clock: () => new Date(now) });
+  assert.equal(multiResponse.status, 400);
+  assert.equal((await multiResponse.json()).error, 'single_subject_retention_manifest_required');
+  assert.equal(await multiControl.getWithMetadata(RETENTION_GENERATION_FENCE_STATE_KEY), null,
+    'A multi-subject legacy request must fail before taking FROZEN.');
+
+  const routeId = '77777777-7777-4777-8777-777777777777';
+  const routeRecord = intakeRecord(routeId);
+  const routeValue = manifestFor('78787878-7878-4878-8878-787878787878', routeId, routeRecord);
+  const routeManifest = canonicalJson(routeValue);
+  const routeRequest = () => new Request('https://arcweb.onl/internal/retention/cleanup', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.ARC_RETENTION_CLEANUP_SECRET}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      manifest: routeManifest,
+      manifest_hmac_sha256: sign(routeManifest),
+    }),
+  });
+  const routeControl = new FakeStore();
+  const routeIntake = new FakeStore();
+  await routeIntake.setJSON(`submissions/${routeId}`, routeRecord);
+  const routeContext = {
+    retentionStore: routeControl,
+    intakeStore: routeIntake,
+    clock: () => new Date(now),
+  };
+  const routed = await retentionHandler(routeRequest(), routeContext);
+  assert.equal(routed.status, 200, 'Legacy cleanup must complete only through the global retention freeze.');
+  const routedResult = await routed.json();
+  assert.equal(routedResult.eligible, 1);
+  assert.equal(routedResult.mode, 'dry-run');
+  assert.equal(routedResult.deleted, 0, 'A dry-run gate completion must not claim a destructive result.');
+  const openedFence = validateRetentionGenerationFenceState(
+    (await routeControl.getWithMetadata(RETENTION_GENERATION_FENCE_STATE_KEY)).data, env,
+  );
+  assert.equal(openedFence.status, 'OPEN');
+  assert.equal(openedFence.generation, 1, 'A signed finalize receipt must reopen the next generation.');
+  assert.equal([...routeControl.values.keys()].filter((key) =>
+    key.startsWith('first-party-retention/generation-fence/finalize-receipts/')).length, 1);
+  const completedFreezeIntentKey = [...routeControl.values.keys()].find((key) =>
+    key.startsWith('first-party-retention/generation-fence/freeze-intents/'));
+  const completedFreezeIntent = validateRetentionFreezeIntent(
+    (await routeControl.getWithMetadata(completedFreezeIntentKey)).data, env,
+  );
+  const dryRunFenceReceipt = validateRetentionFinalizeReceipt(
+    (await routeControl.getWithMetadata(retentionGenerationFenceKeys.finalizeReceipt(
+      completedFreezeIntent.operation_hmac_sha256))).data,
+    completedFreezeIntent,
+    env,
+  );
+  assert.equal(dryRunFenceReceipt.primary_tombstone_sha256,
+    dryRunFenceReceipt.tombstone_set_sha256,
+    'Dry-run fence evidence must use one explicit non-destructive sentinel, not tombstone output claims.');
+  const routedReplay = await retentionHandler(routeRequest(), routeContext);
+  assert.equal(routedReplay.status, 200);
+  assert.equal((await routedReplay.json()).idempotent_replay, true);
+  assert.equal(validateRetentionGenerationFenceState(
+    (await routeControl.getWithMetadata(RETENTION_GENERATION_FENCE_STATE_KEY)).data, env,
+  ).generation, 1, 'An exact completed retry must be a read-only replay, not a new freeze generation.');
+
+  const missingId = '88888888-8888-4888-8888-888888888888';
+  const missingRecord = intakeRecord(missingId);
+  const missingValue = manifestFor('89898989-8989-4989-8989-898989898989', missingId, missingRecord);
+  const missingManifest = canonicalJson(missingValue);
+  const missingRequest = () => new Request('https://arcweb.onl/internal/retention/cleanup', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.ARC_RETENTION_CLEANUP_SECRET}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ manifest: missingManifest,
+      manifest_hmac_sha256: sign(missingManifest) }),
+  });
+  const missingControl = new FakeStore();
+  const missingContext = {
+    retentionStore: missingControl,
+    intakeStore: new FakeStore(),
+    clock: () => new Date(now),
+  };
+  const missingResponse = await retentionHandler(missingRequest(), missingContext);
+  assert.equal(missingResponse.status, 409);
+  assert.equal((await missingResponse.json()).error, 'retention_missing_source');
+  const frozenFence = validateRetentionGenerationFenceState(
+    (await missingControl.getWithMetadata(RETENTION_GENERATION_FENCE_STATE_KEY)).data, env,
+  );
+  assert.equal(frozenFence.status, 'FROZEN', 'A partial missing-source run must never release FROZEN.');
+  assert.equal(await missingControl.getWithMetadata(retentionKeys.completionKey(missingValue.run_id)), null,
+    'A missing target must never produce a legacy completion.');
+  const freezeIntent = validateRetentionFreezeIntent((await missingControl.getWithMetadata(
+    retentionGenerationFenceKeys.freezeIntent(frozenFence.operation_hmac_sha256))).data, env);
+  const anomalyKeys = [...missingControl.values.keys()].filter((key) =>
+    key.startsWith(retentionGenerationFenceKeys.missingSourcePrefix(frozenFence.operation_hmac_sha256)));
+  assert.equal(anomalyKeys.length, 1, 'A listed missing manifest target must persist one signed anomaly.');
+  validateRetentionMissingSourceAnomaly(
+    (await missingControl.getWithMetadata(anomalyKeys[0])).data, freezeIntent, env,
+  );
+  const contention = await retentionHandler(missingRequest(), missingContext);
+  assert.equal(contention.status, 409, 'Fresh exact contention must retry without releasing FROZEN.');
+  assert.equal([...missingControl.values.keys()].filter((key) =>
+    key.startsWith('first-party-retention/generation-fence/critical-alerts/')).length, 0,
+  'Normal lock contention must not create a permanent alert.');
+
   let canceled = false;
   let storeReads = 0;
   const request = new Request('https://arcweb.onl/internal/retention/cleanup', {

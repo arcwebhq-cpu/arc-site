@@ -33,7 +33,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(202, { 'cache-control': 'no-store' }).end();
     return;
   }
-  if (request.method === 'POST' && request.url?.split('?')[0] === '/thank-you/') {
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/api/intake/submit') {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     intakeRequests.push({ url: request.url, headers: request.headers, body: Buffer.concat(chunks) });
@@ -114,10 +114,35 @@ try {
     await page.addInitScript(() => {
       sessionStorage.setItem('arc-analytics-session', 'stale-session');
       sessionStorage.setItem('arc-pending-preview-analytics', 'stale-pending-event');
+      let renderedOptions;
+      window.turnstile = {
+        render(selector, options) {
+          renderedOptions = options;
+          const container = document.querySelector(selector);
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'cf-turnstile-response';
+          input.value = 'browser-contract-turnstile-token';
+          container.appendChild(input);
+          queueMicrotask(() => options.callback(input.value));
+          return 'browser-contract-widget';
+        },
+        reset() {
+          const input = document.querySelector('input[name="cf-turnstile-response"]');
+          if (input) input.value = 'browser-contract-turnstile-token-refreshed';
+          if (input && renderedOptions) queueMicrotask(() => renderedOptions.callback(input.value));
+        },
+      };
     });
 
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1150);
+    assert.equal(await page.locator('#projectForm').getAttribute('data-intake-enabled'), 'true',
+      `${viewport.name}: browser contract requires the explicitly enabled build`);
+    assert.equal(await page.locator('#projectForm').getAttribute('action'), '/api/intake/submit',
+      `${viewport.name}: enabled form did not use the first-party intake Function`);
+    assert.equal(await page.locator('#projectForm').getAttribute('data-netlify'), null,
+      `${viewport.name}: enabled form must not register a native Netlify bypass`);
     const analyticsOffState = await page.evaluate(() => ({
       session: sessionStorage.getItem('arc-analytics-session'),
       pending: sessionStorage.getItem('arc-pending-preview-analytics'),
@@ -261,8 +286,10 @@ try {
       /name="submission_request_id"\r\n\r\n[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\r\n/i,
       `${viewport.name}: multipart intake omitted its exact-retry nonce`);
     assert.match(intakeRequest.body.toString('utf8'),
-      /name="form-name"\r\n\r\narc-preview\r\n/i,
-      `${viewport.name}: native intake omitted the ARC1 form name`);
+      /name="cf-turnstile-response"\r\n\r\nbrowser-contract-turnstile-token(?:-refreshed)?\r\n/i,
+      `${viewport.name}: multipart intake omitted its server-bound security challenge`);
+    assert.doesNotMatch(intakeRequest.body.toString('utf8'), /name="form-name"/i,
+      `${viewport.name}: first-party intake unexpectedly posted a native Netlify form name`);
     assert.deepEqual(errors, [], `${viewport.name}: browser errors: ${errors.join('; ')}`);
     await page.close();
 
@@ -304,13 +331,17 @@ try {
     }))), [
       { href: '#start', label: 'Get Free Preview' },
       { href: '#start', label: 'Get Free Preview' },
-    ], 'The no-script page must direct both “Get Free Preview” actions to the native request form.');
+    ], 'The no-script page must direct both “Get Free Preview” actions to the request form.');
     assert.equal(await noScriptPage.locator('#projectForm').getAttribute('aria-disabled'), 'false',
-      'The no-script native form must remain semantically enabled.');
+      'The no-script first-party form must remain semantically enabled.');
     assert.equal(await noScriptPage.locator('#projectForm').getAttribute('inert'), null,
-      'The no-script native form must not be inert.');
-    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('data-netlify'), 'true',
-      'The no-script page lost its native Netlify form registration.');
+      'The no-script first-party form must not be inert.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('action'), '/api/intake/submit',
+      'The no-script page lost its first-party intake endpoint.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('method'), 'POST',
+      'The no-script page lost its first-party POST method.');
+    assert.equal(await noScriptPage.locator('#projectForm').getAttribute('data-netlify'), null,
+      'The no-script page must not register a native Netlify bypass.');
     assert.match(await noScriptPage.locator('#intakeStatus').textContent(), /Free preview requests are open\./i,
       'The no-script page must plainly disclose the open state.');
     await noScriptPage.close();

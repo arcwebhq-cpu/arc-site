@@ -47,6 +47,8 @@ const env = {
   ARC_REVIEW_SESSION_HMAC_SECRET: 'review-session-secret-unique-0123456789abcdef',
   ARC_REVIEW_RECORD_HMAC_SECRET: 'review-record-secret-unique-0123456789abcdef',
   ARC_REVIEW_DECISION_HMAC_SECRET: 'review-decision-secret-unique-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'review-flow-retention-fence-secret-unique-0123456789abcdef',
   ARC_REVIEW_PREVIEW_ORIGIN: 'https://arcwebhq-cpu.github.io',
   ARC_REVIEW_CHECKOUT_ORIGIN: 'https://checkout.stripe.com',
 };
@@ -114,9 +116,11 @@ const exchanged = await exchangeReviewInvite(store, initialToken, env, {
 assert.doesNotMatch(exchanged.session_token, new RegExp(initialToken));
 assert.equal(JSON.stringify([...store.values.values()]).includes(exchanged.session_token), false,
   'Raw review sessions must never be stored.');
-await assert.rejects(exchangeReviewInvite(store, initialToken, env, {
+const exchangedReplay = await exchangeReviewInvite(store, initialToken, env, {
   clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 14),
-}), /ALREADY_EXCHANGED/);
+});
+assert.deepEqual(exchangedReplay, exchanged,
+  'An exact exchange retry must reconstruct the same session after an ambiguous response.');
 
 const authorized = await authorizeReviewSession(store, exchanged.session_token, env, new Date(now));
 assert.equal(authorized.record.state, 'OPEN');
@@ -220,6 +224,12 @@ assert.equal(checkoutObservations[0].idempotency_key, checkoutObservations[1].id
   'Provider retries must use one deterministic checkout idempotency key.');
 assert.equal(checkoutObservations[0].approval_receipt_sha256,
   checkoutObservations[1].approval_receipt_sha256, 'Checkout retries must stay bound to one approval.');
+assert.equal(checkoutObservations[0].checkout_expires_at,
+  Math.floor(now.getTime() / 1000) + 23 * 60 * 60,
+  'A private Checkout Session must expire 23 hours after its durable approval.');
+assert.equal(checkoutObservations[0].checkout_expires_at,
+  checkoutObservations[1].checkout_expires_at,
+  'Checkout retries must preserve the exact approval-bound expiration.');
 
 const unavailableStore = new FakeStore();
 const unavailable = await issueReviewInvite(unavailableStore, {
@@ -253,18 +263,20 @@ assert.equal((await reviewExchangeHandler(new Request('https://arcweb.onl/api/re
 }))).status, 503, 'The deployed review endpoints must default off.');
 Object.assign(process.env, env);
 const handlerStore = new FakeStore();
+const retentionFenceStore = new FakeStore();
+const routeContext = { retentionFenceStore, retentionFenceClock: () => new Date(now) };
 const handlerInvite = await issueReviewInvite(handlerStore, {
   ...binding, invite_token: 'E'.repeat(43),
 }, env, { clock: () => new Date(now) });
 const wrongOrigin = await reviewExchangeHandler(new Request('https://arcweb.onl/api/review/exchange', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
   body: JSON.stringify({ invite_token: 'E'.repeat(43) }),
-}), { reviewStore: handlerStore, clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 18) });
+}), { ...routeContext, reviewStore: handlerStore, clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 18) });
 assert.equal(wrongOrigin.status, 403);
 const exchangeResponse = await reviewExchangeHandler(new Request('https://arcweb.onl/api/review/exchange', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://arcweb.onl' },
   body: JSON.stringify({ invite_token: 'E'.repeat(43) }),
-}), { reviewStore: handlerStore, clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 18) });
+}), { ...routeContext, reviewStore: handlerStore, clock: () => new Date(now), randomBytes: () => Buffer.alloc(32, 18) });
 assert.equal(exchangeResponse.status, 200);
 assert.equal((await exchangeResponse.clone().text()).includes('E'.repeat(43)), false);
 const setCookie = exchangeResponse.headers.get('set-cookie');
@@ -272,7 +284,7 @@ assert.match(setCookie, /^__Host-arc_review_session=[^;]+; Path=\/; Max-Age=\d+;
 const cookie = setCookie.split(';', 1)[0];
 const statusResponse = await reviewStatusHandler(new Request('https://arcweb.onl/api/review/status', {
   headers: { Cookie: cookie },
-}), { reviewStore: handlerStore, clock: () => new Date(now) });
+}), { ...routeContext, reviewStore: handlerStore, clock: () => new Date(now) });
 assert.equal(statusResponse.status, 200);
 const handlerStatus = await statusResponse.json();
 assert.equal(handlerStatus.preview_manifest_sha256, binding.preview_manifest_sha256);
@@ -280,7 +292,8 @@ const decisionResponse = await reviewDecisionHandler(new Request('https://arcweb
   method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: 'https://arcweb.onl' },
   body: JSON.stringify({ action: 'APPROVE_AND_PAY', expected_revision: handlerStatus.record_revision,
     idempotency_key: '99999999-9999-4999-8999-999999999999' }),
-}), { reviewStore: handlerStore, clock: () => new Date(now) });
+}), { retentionFenceStore: new FakeStore(), retentionFenceClock: () => new Date(now),
+  reviewStore: handlerStore, clock: () => new Date(now) });
 assert.equal(decisionResponse.status, 200);
 const blockedCheckout = await reviewCheckoutHandler(new Request('https://arcweb.onl/api/review/checkout', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: 'https://arcweb.onl' }, body: '{}',
@@ -289,6 +302,8 @@ assert.equal(blockedCheckout.status, 503, 'No default provider adapter may creat
 const handlerCheckout = await reviewCheckoutHandler(new Request('https://arcweb.onl/api/review/checkout', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: 'https://arcweb.onl' }, body: '{}',
 }), {
+  retentionFenceStore: new FakeStore(),
+  retentionFenceClock: () => new Date(now),
   reviewStore: handlerStore,
   clock: () => new Date(now),
   createCheckout: async () => {

@@ -88,6 +88,10 @@ const PENDING_INDEX_FIELDS = Object.freeze(['delivery_id_sha256', 'ingress_key',
 const REVIEW_INDEX_FIELDS = Object.freeze([
   'delivery_id_sha256', 'ingress_key', 'review_code', 'review_required_at', 'schema',
 ]);
+const ACK_FIELDS = Object.freeze([
+  'ack_id', 'asset_receipt_sha256', 'bridge_contract_sha256', 'consumer_claim_key_hmac_sha256',
+  'consumer_schema', 'delivery_id', 'evidence_sha256', 'received_at', 'schema', 'status', 'version',
+]);
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const hmac = (secret, value) => createHmac('sha256', secret).update(value).digest('hex');
@@ -597,8 +601,9 @@ async function ensurePendingIndex(store, deliveryId, resolved) {
     }
     return;
   }
-  const result = await store.setJSON(key, expected, { onlyIfNew: true });
-  if (result?.modified) return;
+  await store.setJSON(key, expected, { onlyIfNew: true });
+  // ACK authority requires the recovery marker to be observable through the
+  // provider's strong-read path, not merely reported by a write response.
   const raced = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
   if (!raced || !exactKeys(raced.data, PENDING_INDEX_FIELDS) || canonicalJson(raced.data) !== canonicalJson(expected)) {
     throw new Error('ARC1_ADAPTER_PENDING_INDEX_CONFLICT');
@@ -672,6 +677,39 @@ function sameImmutableRecord(stored, expected) {
   return safeEqual(canonicalJson(projection(stored)), canonicalJson(expected));
 }
 
+function validateStoredAcknowledgement(record, resolved) {
+  let wrapper;
+  try { wrapper = JSON.parse(record.acknowledgement_json); } catch {
+    throw new Error('ARC1_ADAPTER_ACK_CONFLICT');
+  }
+  if (canonicalJson(wrapper) !== record.acknowledgement_json ||
+      !exactKeys(wrapper, ['acknowledgement', 'hmac_sha256']) ||
+      !exactKeys(wrapper.acknowledgement, ACK_FIELDS) || !SHA256_PATTERN.test(wrapper.hmac_sha256)) {
+    throw new Error('ARC1_ADAPTER_ACK_CONFLICT');
+  }
+  const ack = wrapper.acknowledgement;
+  const expectedIdentity = hmac(resolved.ARC_INTAKE_ARC1_ACK_SECRET,
+    `arc1-function-intake-ack-id-v1\n${record.delivery_id}\n${record.bridge_evidence_sha256}\n${record.asset_receipt_sha256}`);
+  let receivedAt;
+  try { receivedAt = iso(ack.received_at, 'adapter acknowledgement received_at'); } catch {
+    throw new Error('ARC1_ADAPTER_ACK_CONFLICT');
+  }
+  const acknowledgementRaw = canonicalJson(ack);
+  const expectedHmac = hmac(resolved.ARC_INTAKE_ARC1_ACK_SECRET,
+    `arc-intake-arc1-consumer-ack-v1\n${acknowledgementRaw}`);
+  if (ack.schema !== INTAKE_ARC1_ACK_SCHEMA || ack.version !== 1 || ack.status !== 'ACCEPTED' ||
+      ack.consumer_schema !== INTAKE_ARC1_CONSUMER_SCHEMA ||
+      ack.bridge_contract_sha256 !== INTAKE_ARC1_CONTRACT_SHA256 || ack.delivery_id !== record.delivery_id ||
+      !safeEqual(ack.evidence_sha256, record.bridge_evidence_sha256) ||
+      !safeEqual(ack.asset_receipt_sha256, record.asset_receipt_sha256) ||
+      !safeEqual(ack.consumer_claim_key_hmac_sha256, record.consumer_claim_key_hmac_sha256) ||
+      ack.ack_id !== `arc1ack_${expectedIdentity.slice(0, 40)}` ||
+      Date.parse(receivedAt) > Date.parse(record.claim_created_at) || !safeEqual(wrapper.hmac_sha256, expectedHmac)) {
+    throw new Error('ARC1_ADAPTER_ACK_CONFLICT');
+  }
+  return record.acknowledgement_json;
+}
+
 export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, stores, adapters = {}) {
   assertPublicIntakeAuthority(env);
   const now = new Date((adapters.clock || (() => new Date()))());
@@ -703,6 +741,7 @@ export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, store
     if (!safeEqual(existing.value.envelope_sha256, sha256(envelopeRaw)) ||
         !safeEqual(existing.value.bridge_evidence_sha256, sha256(evidenceRaw)) ||
         existing.value.source_submission_id !== parsed.evidence.submission_id) throw new Error('ARC1_ADAPTER_INGRESS_CONFLICT');
+    validateStoredAcknowledgement(existing.value, resolved);
     if (recordTerminal(existing.value)) {
       await finalizeTerminalIndex(stores.adapter, existing.value, resolved);
     } else {
@@ -725,19 +764,18 @@ export async function acceptArc1AdapterEnvelope(envelopeRaw, request, env, store
   };
   validateArc1AdapterRecord(value);
   const result = await stores.adapter.setJSON(key, value, { onlyIfNew: true });
-  if (result?.modified) {
-    existing = { value, etag: result.etag };
-    created = true;
-  } else {
-    existing = await readEntry(stores.adapter, key);
-    if (existing) {
-      claimCreatedAt = existing.value.claim_created_at;
-      artifacts = deriveAdapterArtifacts(sourceEntry.data, envelopeRaw, resolved, claimCreatedAt, now);
-      immutable = immutableRecordFrom(artifacts, parsed.evidence, envelopeRaw, claimCreatedAt);
-    }
+  created = result?.modified === true;
+  // Never trust a write response as the durable claim. A strong read must
+  // observe and validate the exact record before its signed ACK can escape.
+  existing = await readEntry(stores.adapter, key);
+  if (existing) {
+    claimCreatedAt = existing.value.claim_created_at;
+    artifacts = deriveAdapterArtifacts(sourceEntry.data, envelopeRaw, resolved, claimCreatedAt, now);
+    immutable = immutableRecordFrom(artifacts, parsed.evidence, envelopeRaw, claimCreatedAt);
   }
   if (existing?.legacy) throw new Error('ARC1_ADAPTER_LEGACY_MIGRATION_REQUIRED');
   if (!existing || !sameImmutableRecord(existing.value, immutable)) throw new Error('ARC1_ADAPTER_INGRESS_CONFLICT');
+  validateStoredAcknowledgement(existing.value, resolved);
   if (recordTerminal(existing.value)) {
     await finalizeTerminalIndex(stores.adapter, existing.value, resolved);
   } else {
@@ -1177,10 +1215,19 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
   });
   const quarantine = async (key) => {
     const identity = hmac(resolved.ARC_INTAKE_ARC1_STATE_SECRET, `arc-intake-arc1-adapter-quarantine-v1\n${key}`);
-    await stores.adapter.setJSON(`quarantine/${identity}`, {
+    const quarantineKey = `quarantine/${identity}`;
+    const expected = {
       schema: 'arc-intake-arc1-adapter-quarantine-v1', source_key_hmac_sha256: identity,
       code: 'INVALID_PENDING_INDEX', detected_at: new Date((adapters.clock || (() => new Date()))()).toISOString(),
-    }, { onlyIfNew: true });
+    };
+    try { await stores.adapter.setJSON(quarantineKey, expected, { onlyIfNew: true }); } catch {}
+    const durable = await stores.adapter.getWithMetadata(quarantineKey, { type: 'json', consistency: 'strong' });
+    if (!durable || !exactKeys(durable.data, ['code', 'detected_at', 'schema', 'source_key_hmac_sha256']) ||
+        durable.data.schema !== expected.schema || durable.data.source_key_hmac_sha256 !== identity ||
+        durable.data.code !== expected.code) throw new Error('ARC1_ADAPTER_QUARANTINE_UNAVAILABLE');
+    iso(durable.data.detected_at, 'ARC1 adapter quarantine detected_at');
+    // Recovery visibility is removed only after the corruption marker itself
+    // is durably observable. A provider outage must leave pending work intact.
     if (typeof stores.adapter.delete === 'function') await stores.adapter.delete(key);
   };
   let emptyShards = 0;
@@ -1230,17 +1277,30 @@ export async function recoverPendingArc1AdapterDispatches(request, env, stores, 
         scanned += 1;
         let index;
         let entry;
-        try {
-          index = await stores.adapter.getWithMetadata(blob.key, { type: 'json', consistency: 'strong' });
-          if (!index || !exactKeys(index.data, PENDING_INDEX_FIELDS) || index.data.schema !== INTAKE_ARC1_ADAPTER_PENDING_INDEX_SCHEMA ||
-              !SHA256_PATTERN.test(index.data.delivery_id_sha256) || !/^ingress\/[a-f0-9]{64}$/.test(index.data.ingress_key)) {
-            throw new Error('INVALID_INDEX');
+        // Keep provider I/O outside the validation catches. Fetch-backed Blob
+        // clients may report outages as TypeError; those must propagate and
+        // retain pending visibility rather than being treated as corruption.
+        index = await stores.adapter.getWithMetadata(blob.key, { type: 'json', consistency: 'strong' });
+        let invalidIndex = !index || !exactKeys(index.data, PENDING_INDEX_FIELDS) ||
+          index.data.schema !== INTAKE_ARC1_ADAPTER_PENDING_INDEX_SCHEMA ||
+          !SHA256_PATTERN.test(index.data.delivery_id_sha256) || !/^ingress\/[a-f0-9]{64}$/.test(index.data.ingress_key);
+        if (!invalidIndex) {
+          const rawEntry = await stores.adapter.getWithMetadata(index.data.ingress_key, { type: 'json', consistency: 'strong' });
+          if (!rawEntry) invalidIndex = true;
+          else {
+            try {
+              const value = validateArc1AdapterRecord(rawEntry.data);
+              entry = { value, etag: rawEntry.etag, legacy: value.schema === INTAKE_ARC1_ADAPTER_LEGACY_RECORD_SCHEMA };
+            } catch (error) {
+              if (!(error instanceof TypeError)) throw error;
+              invalidIndex = true;
+            }
           }
-          entry = await readEntry(stores.adapter, index.data.ingress_key);
-          if (!entry || sha256(entry.value.delivery_id) !== index.data.delivery_id_sha256 ||
-              index.data.ingress_key !== adapterKey(entry.value.delivery_id, resolved) ||
-              blob.key !== pendingKey(entry.value.delivery_id, resolved)) throw new Error('INVALID_INDEX');
-        } catch {
+        }
+        if (!invalidIndex && (sha256(entry.value.delivery_id) !== index.data.delivery_id_sha256 ||
+            index.data.ingress_key !== adapterKey(entry.value.delivery_id, resolved) ||
+            blob.key !== pendingKey(entry.value.delivery_id, resolved))) invalidIndex = true;
+        if (invalidIndex) {
           invalid += 1;
           await quarantine(blob.key);
           advance();

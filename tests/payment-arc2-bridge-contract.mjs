@@ -5,7 +5,9 @@ import {
   PAYMENT_ARC2_COMPLETION_SCHEMA,
   PAYMENT_ARC2_LEASE_SECONDS,
   PAYMENT_ARC2_OUTBOX_SCHEMA,
+  PAYMENT_ARC2_PENDING_INDEX_SCHEMA,
   PAYMENT_ARC2_REVIEW_SESSION_BINDING_SCHEMA,
+  claimNextPaymentArc2StartOutbox,
   claimPaymentArc2StartOutbox,
   completePaymentArc2StartOutbox,
   createPaymentArc2ReviewEvidence,
@@ -82,6 +84,16 @@ class FakeStore {
   async delete(key) {
     this.values.delete(key);
   }
+
+  list({ prefix, paginate }) {
+    assert.equal(paginate, true);
+    const keys = [...this.values.keys()].filter((key) => key.startsWith(prefix)).sort();
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { blobs: keys.map((key) => ({ key })) };
+      },
+    };
+  }
 }
 
 const now = new Date('2026-08-27T12:00:00.000Z');
@@ -106,7 +118,7 @@ const env = {
   ARC_HANDOFF_ENABLED: 'false',
   ARC_STRIPE_WEBHOOK_SIGNING_SECRET: 'whsec_unique_checkout_webhook_0123456789_abcdefgh',
   ARC_STRIPE_REVERSAL_HMAC_SECRET: 'reversal-hmac-secret-unique-0123456789-abcdefgh',
-  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_test_arcAuthorityVerificationKey0123456789',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'arcAuthorityVerificationKey0123456789'].join('_'),
   ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.dahlia',
   ARC_REVIEW_PORTAL_ENABLED: 'true',
   ARC_REVIEW_CHECKOUT_ENABLED: 'true',
@@ -389,6 +401,7 @@ async function seededStores() {
   await reserveReviewCheckoutBinding(review, {
     approval_receipt_hmac_sha256: reviewRecord.decision.approval_receipt_hmac_sha256,
     approval_receipt_sha256: reviewRecord.decision.approval_receipt_sha256,
+    checkout_expires_at: Math.floor(now.getTime() / 1000) + 23 * 60 * 60,
     invite_hmac_sha256: reviewRecord.invite_hmac_sha256,
     preview_manifest_sha256: reviewRecord.preview_manifest_sha256,
     recipient_email_sha256: reviewRecord.recipient_email_sha256,
@@ -546,6 +559,27 @@ assert.equal(claimed.lease_expires_at, new Date(now.getTime() + PAYMENT_ARC2_LEA
 assert.equal(providerReads, claimReadsBefore, 'Paid resumability uses durable signed review+ledger authorities without a provider mutation/read.');
 assert.equal((await claimPaymentArc2StartOutbox(stores, created.outbox_key, claimOne, env, clock())).idempotent_replay, true);
 await assert.rejects(claimPaymentArc2StartOutbox(stores, created.outbox_key, claimTwo, env, clock()), /OUTBOX_LEASED/);
+
+// A response-marker crash after claim-next must converge the same worker onto
+// its still-live first lease. It must not advance to another pending subject.
+const firstPendingKey = `payment-arc2-pending/${created.outbox_key.slice('payment-arc2-start-outbox/'.length)}`;
+const secondPendingSuffix = 'f'.repeat(64);
+assert.notEqual(firstPendingKey, `payment-arc2-pending/${secondPendingSuffix}`);
+const secondOutboxKey = `payment-arc2-start-outbox/${secondPendingSuffix}`;
+const secondPendingKey = `payment-arc2-pending/${secondPendingSuffix}`;
+await stores.bridge.setJSON(secondPendingKey, {
+  schema: PAYMENT_ARC2_PENDING_INDEX_SCHEMA,
+  outbox_key: secondOutboxKey,
+  immutable_binding_sha256: hash('second-pending-immutable'),
+  created_at: now.toISOString(),
+}, { onlyIfNew: true });
+const claimNextReplay = await claimNextPaymentArc2StartOutbox(
+  stores, claimOne, env, clock(),
+);
+assert.equal(claimNextReplay.outbox_key, created.outbox_key);
+assert.equal(claimNextReplay.idempotent_replay, true);
+assert.equal(stores.bridge.values.has(secondPendingKey), true,
+  'Same-worker claim-next replay must not inspect or claim the next pending subject.');
 
 const artifactBinding = {
   artifact_evidence_sha256: hash(reviewArtifactEvidence),

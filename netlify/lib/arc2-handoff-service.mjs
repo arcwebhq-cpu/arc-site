@@ -1,6 +1,10 @@
 import { createHmac } from 'node:crypto';
 import {
   ARC2_PRECLAIM_HEADERS_FILE,
+  CLAIM_STATE_EVIDENCE_SCOPE,
+  CLAIM_STATE_EVIDENCE_VERSION,
+  CLAIM_STATE_SIGNATURE_PREFIX,
+  CLAIM_JWT_TTL_SECONDS,
   CLAIM_TOKEN_TTL_SECONDS,
   FINAL_DELIVERY_PROVIDER_EVENT_ID_PREFIX,
   FINAL_DELIVERY_PROVIDER_MESSAGE_ID_PREFIX,
@@ -61,6 +65,12 @@ import {
 } from './stripe-checkout-core.mjs';
 import { readReviewEmailRecipientControl } from './review-email-recipient-control-core.mjs';
 import { assertReviewCheckoutFulfillmentAllowed } from './review-checkout-revocation-core.mjs';
+import { assertArc2EmailNegativeStateAllows } from './arc2-negative-email-state-core.mjs';
+import {
+  assertClaimSandboxBootstrapBound,
+  claimSandboxBootstrapConfiguration,
+  reserveClaimSandboxBootstrap,
+} from './claim-sandbox-bootstrap-core.mjs';
 
 const LEAD_ROUTE_RECEIPT_VERSION = 'arc2-lead-route-inbox-receipt-v1';
 const LEAD_ROUTE_RECEIPT_SCOPE = 'authoritative-lead-route-inbox-receipt';
@@ -70,6 +80,7 @@ const PRODUCER_LEAD_ROUTE_SCOPE = 'arc-controlled-netlify-staging';
 const PRODUCER_LEAD_ROUTE_PREFIX = 'arc-lead-route-evidence-signature-v1\n';
 const CLAIM_BEARER_DERIVATION_PREFIX = 'arc2-claim-bearer-derivation-v1\n';
 const CLAIM_BEARER_STORAGE_PREFIX = 'arc2-claim-bearer-at-rest-v1\n';
+const CLAIM_INVITATION_RENEWAL_OPERATION_PREFIX = 'arc2-claim-invitation-renewal-operation-v1\n';
 const INVITATION_READY_OUTBOX_VERSION = 'arc2-claim-invitation-ready-outbox-v2';
 const INVITATION_CURRENT_VERSION = 'arc2-claim-invitation-current-v1';
 const RECEIPT_FRESHNESS_MS = 10 * 60_000;
@@ -607,6 +618,15 @@ async function startHandoffByKind(input, env, adapters = {}, paymentKind = 'paym
   }
   const key = handoffKey(normalized.payment.value, env.ARC_HANDOFF_STATE_SECRET);
   const handoffId = handoffIdFromKey(key);
+  const bootstrapAt = adapters.activationClock?.() || new Date();
+  const bootstrapConfiguration = claimSandboxBootstrapConfiguration(env, bootstrapAt);
+  if (bootstrapConfiguration.bootstrap_active && !reviewSession) {
+    throw new Error('ARC_CLAIM_SANDBOX_BOOTSTRAP_REVIEW_SESSION_REQUIRED');
+  }
+  // This reservation precedes every handoff/store/provider mutation. A
+  // TEST_BOOTSTRAP may seed one paid review-session handoff and exact retries
+  // of that same handoff only; all normal manifests simply recheck authority.
+  await reserveClaimSandboxBootstrap(adapters.store, handoffId, env, bootstrapAt);
   let entry = await readEntry(adapters.store, key);
   const checkoutIndexKey = checkoutSessionIndexKey(normalized.payment.value, env);
   const checkoutIndexValue = checkoutSessionIndexValue(handoffId, normalized);
@@ -957,7 +977,42 @@ function deriveClaimBearer(record, env) {
   return createHmac('sha256', env.ARC_CLAIM_TOKEN_SECRET).update(`${CLAIM_BEARER_DERIVATION_PREFIX}${material}`).digest('base64url');
 }
 
-async function rotateExpiredInvitation(entry, key, env, adapters, observedAt) {
+function renewalOperationHmac(handoffId, env, adapters) {
+  const operationId = adapters.renewalOperationId;
+  if (operationId === undefined || operationId === null) return null;
+  if (typeof operationId !== 'string' || operationId.length < 16 || operationId.length > 512 ||
+      !/^[A-Za-z0-9._~-]+$/.test(operationId)) {
+    throw new TypeError('ARC2 claim invitation renewal operation identity is invalid.');
+  }
+  return hmacHex(env.ARC_HANDOFF_STATE_SECRET,
+    `${CLAIM_INVITATION_RENEWAL_OPERATION_PREFIX}${handoffId}\n${operationId}`);
+}
+
+function renewalBindingPatch(record, operationHmac, env) {
+  if (operationHmac === null) return {
+    claim_invitation_renewal_operation_hmac_sha256: null,
+    claim_invitation_renewal_previous_expires_at: null,
+    claim_invitation_renewal_previous_job_key: null,
+    claim_invitation_renewal_source_generation: null,
+  };
+  const previousJobKey = invitationReadyOutbox(record, env).key.slice(
+    'invitation-ready-outbox/'.length);
+  return {
+    claim_invitation_renewal_operation_hmac_sha256: operationHmac,
+    claim_invitation_renewal_previous_expires_at: record.claim_token_expires_at,
+    claim_invitation_renewal_previous_job_key: previousJobKey,
+    claim_invitation_renewal_source_generation: record.claim_invitation_generation,
+  };
+}
+
+function renewalOperationReplays(record, operationHmac, now) {
+  return operationHmac !== null && record.state === 'INVITATION_READY' &&
+    Date.parse(record.claim_token_expires_at) > now.getTime() &&
+    record.claim_invitation_renewal_source_generation + 1 === record.claim_invitation_generation &&
+    safeEqual(record.claim_invitation_renewal_operation_hmac_sha256 || '', operationHmac);
+}
+
+async function rotateExpiredInvitation(entry, key, env, adapters, observedAt, operationHmac = null) {
   if (entry.record.state !== 'INVITATION_READY') return entry;
   if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) return entry;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -970,6 +1025,7 @@ async function rotateExpiredInvitation(entry, key, env, adapters, observedAt) {
       claim_invitation_generation: generation,
       claim_invitation_ready_at: readyAt.toISOString(),
       claim_token_expires_at: expiresAt.toISOString(),
+      ...renewalBindingPatch(entry.record, operationHmac, env),
     }, readyAt);
     const token = deriveClaimBearer(draft, env);
     try {
@@ -1059,7 +1115,8 @@ async function ensureInvitationDeliveryAuthority(record, env, adapters) {
   return outbox;
 }
 
-async function rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt) {
+async function rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt,
+  operationHmac = null) {
   if (entry.record.state !== 'CLAIM_WRAPPER_CONSUMED') return entry;
   if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
     throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
@@ -1083,6 +1140,7 @@ async function rotateAbandonedConsumedInvitation(entry, key, env, adapters, obse
       claim_token_used_at: null,
       claim_wrapper_consumed_at: null,
       claim_jwt_issued_at: null,
+      ...renewalBindingPatch(entry.record, operationHmac, env),
     }, readyAt);
     const token = deriveClaimBearer(draft, env);
     try {
@@ -1107,18 +1165,29 @@ async function rotateAbandonedConsumedInvitation(entry, key, env, adapters, obse
 export async function renewClaimInvitation(handoffId, env, adapters = {}) {
   const key = handoffKeyFromId(handoffId);
   const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
   const observedAt = clock();
+  const operationHmac = renewalOperationHmac(handoffId, env, adapters);
   await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: observedAt });
   if (entry.record.state === 'INVITATION_READY') {
     if (Date.parse(entry.record.claim_token_expires_at) > observedAt.getTime()) {
-      throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
+      if (!renewalOperationReplays(entry.record, operationHmac, observedAt)) {
+        throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
+      }
+    } else {
+      entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt, operationHmac);
     }
-    entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt);
   } else if (entry.record.state === 'CLAIM_WRAPPER_CONSUMED') {
-    entry = await rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt);
+    entry = await rotateAbandonedConsumedInvitation(entry, key, env, adapters, observedAt,
+      operationHmac);
   } else {
+    throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+  }
+  if (operationHmac !== null &&
+      !safeEqual(entry.record.claim_invitation_renewal_operation_hmac_sha256 || '', operationHmac)) {
     throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
   }
   const token = deriveClaimBearer(entry.record, env);
@@ -1129,9 +1198,185 @@ export async function renewClaimInvitation(handoffId, env, adapters = {}) {
   return { handoffId, record: entry.record, claimBearer: token };
 }
 
+// Customer recovery authority for an invitation that has aged out before it
+// was exchanged. The expired bearer is proof of possession, but it is never
+// returned, persisted, or accepted for an early rotation. A caller-provided
+// delivery guard must verify the encrypted recipient capsule and suppression
+// state before the generation is changed. The new immutable invitation outbox
+// then becomes a distinct Resend job while the previous bearer stops matching
+// the handoff record immediately.
+export async function renewClaimInvitationFromExpiredBearer(
+  handoffId,
+  suppliedBearer,
+  env,
+  adapters = {},
+) {
+  if (typeof suppliedBearer !== 'string' || suppliedBearer.length !== 43 ||
+      !/^[A-Za-z0-9_-]+$/.test(suppliedBearer)) {
+    throw new Error('ARC2_CLAIM_BEARER_INVALID');
+  }
+  if (typeof adapters.assertRenewalEmailAllowed !== 'function') {
+    throw new Error('ARC2_CLAIM_RENEWAL_EMAIL_GUARD_REQUIRED');
+  }
+  const key = handoffKeyFromId(handoffId);
+  const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
+  let entry = await readEntry(adapters.store, key);
+  if (!entry) return null;
+  const observedAt = clock();
+  if (!(observedAt instanceof Date) || !Number.isFinite(observedAt.getTime())) {
+    throw new TypeError('ARC2 claim renewal clock is invalid.');
+  }
+  const operationHmac = renewalOperationHmac(handoffId, env, adapters);
+  const suppliedDigest = claimBearerDigest(suppliedBearer, env);
+  if (renewalOperationReplays(entry.record, operationHmac, observedAt)) {
+    const previousJobKey = entry.record.claim_invitation_renewal_previous_job_key;
+    await adapters.assertRenewalEmailAllowed(Object.freeze({
+      handoff_id: entry.record.handoff_id,
+      job_key: previousJobKey,
+      recipient_email_sha256: entry.record.customer_email_sha256,
+      claim_invitation_generation: entry.record.claim_invitation_renewal_source_generation,
+      expires_at: entry.record.claim_invitation_renewal_previous_expires_at,
+    }));
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: observedAt });
+    const nextOutbox = await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
+    const nextJobKey = nextOutbox.key.slice('invitation-ready-outbox/'.length);
+    await assertCheckoutAndReversalAllowed(entry.record, env, adapters, {
+      maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+      now: clock(),
+    });
+    return Object.freeze({
+      handoff_id: entry.record.handoff_id,
+      claim_invitation_generation: entry.record.claim_invitation_generation,
+      previous_job_key: previousJobKey,
+      job_key: nextJobKey,
+      expires_at: entry.record.claim_token_expires_at,
+      idempotent_replay: true,
+    });
+  }
+  const remainingMs = Date.parse(entry.record.claim_token_expires_at) - observedAt.getTime();
+  if (entry.record.state !== 'INVITATION_READY' ||
+      !safeEqual(suppliedDigest, entry.record.claim_token_hmac_sha256 || '') ||
+      !safeEqual(deriveClaimBearer(entry.record, env), suppliedBearer)) {
+    throw new Error('ARC2_CLAIM_BEARER_INVALID');
+  }
+  if (remainingMs >= 1000) throw new Error('ARC2_CLAIM_RENEWAL_NOT_EXPIRED');
+
+  const previousGeneration = entry.record.claim_invitation_generation;
+  const previousOutbox = invitationReadyOutbox(entry.record, env);
+  const previousJobKey = previousOutbox.key.slice('invitation-ready-outbox/'.length);
+  const guardAuthority = Object.freeze({
+    handoff_id: entry.record.handoff_id,
+    job_key: previousJobKey,
+    recipient_email_sha256: entry.record.customer_email_sha256,
+    claim_invitation_generation: previousGeneration,
+    expires_at: entry.record.claim_token_expires_at,
+  });
+  await adapters.assertRenewalEmailAllowed(guardAuthority);
+
+  // The delivery/suppression read can race another request. Re-read the exact
+  // bearer authority before any provider check or state mutation.
+  entry = await readEntry(adapters.store, key);
+  if (!entry || entry.record.state !== 'INVITATION_READY' ||
+      entry.record.claim_invitation_generation !== previousGeneration ||
+      !safeEqual(entry.record.claim_token_hmac_sha256 || '', suppliedDigest) ||
+      Date.parse(entry.record.claim_token_expires_at) - observedAt.getTime() >= 1000) {
+    throw new Error('ARC2_CLAIM_BEARER_INVALID');
+  }
+
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: observedAt });
+  entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt, operationHmac);
+  if (entry.record.claim_invitation_generation !== previousGeneration + 1) {
+    throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+  }
+  if (operationHmac !== null &&
+      !safeEqual(entry.record.claim_invitation_renewal_operation_hmac_sha256 || '', operationHmac)) {
+    throw new Error('ARC2_CLAIM_RENEWAL_STATE_CONFLICT');
+  }
+  const newBearer = deriveClaimBearer(entry.record, env);
+  if (safeEqual(newBearer, suppliedBearer) ||
+      !safeEqual(claimBearerDigest(newBearer, env), entry.record.claim_token_hmac_sha256)) {
+    throw new Error('ARC2_CLAIM_BEARER_BINDING_FAILED');
+  }
+  const nextOutbox = await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
+  const nextJobKey = nextOutbox.key.slice('invitation-ready-outbox/'.length);
+  if (!/^[a-f0-9]{64}$/.test(nextJobKey) || safeEqual(previousJobKey, nextJobKey)) {
+    throw new Error('ARC2_CLAIM_RENEWAL_OUTBOX_CONFLICT');
+  }
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, {
+    maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+    now: clock(),
+  });
+  return Object.freeze({
+    handoff_id: entry.record.handoff_id,
+    claim_invitation_generation: entry.record.claim_invitation_generation,
+    previous_job_key: previousJobKey,
+    job_key: nextJobKey,
+    expires_at: entry.record.claim_token_expires_at,
+    idempotent_replay: false,
+  });
+}
+
+// Private send authority for the white-glove ARC claim-wrapper email. The
+// wrapper URL is derived only after a fresh paid/reversal readback and is never
+// written to an index or handoff record. Expired generations are rotated under
+// CAS before the bearer is derived, so the immutable invitation outbox digest
+// remains the unique email job key for that generation.
+export async function getClaimInvitationEmailAuthority(handoffId, env, adapters = {}) {
+  const key = handoffKeyFromId(handoffId);
+  const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
+  let entry = await readEntry(adapters.store, key);
+  if (!entry) return null;
+  if (entry.record.state !== 'INVITATION_READY') {
+    throw new Error('ARC2_CLAIM_INVITATION_EMAIL_STATE_CONFLICT');
+  }
+  const observedAt = clock();
+  const freshGuard = {
+    maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+    now: observedAt,
+  };
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, freshGuard);
+  entry = await rotateExpiredInvitation(entry, key, env, adapters, observedAt);
+  if (entry.record.state !== 'INVITATION_READY') {
+    throw new Error('ARC2_CLAIM_INVITATION_EMAIL_STATE_CONFLICT');
+  }
+  const claimBearer = deriveClaimBearer(entry.record, env);
+  if (!safeEqual(claimBearerDigest(claimBearer, env), entry.record.claim_token_hmac_sha256)) {
+    throw new Error('ARC2_CLAIM_BEARER_BINDING_FAILED');
+  }
+  const outbox = await ensureInvitationDeliveryAuthority(entry.record, env, adapters);
+  await assertCheckoutAndReversalAllowed(entry.record, env, adapters, {
+    maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
+    now: clock(),
+  });
+  const origin = new URL(env.ARC_PUBLIC_ORIGIN);
+  if (origin.protocol !== 'https:' || origin.username || origin.password || origin.port ||
+      origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new Error('ARC2_CLAIM_INVITATION_EMAIL_ORIGIN_INVALID');
+  }
+  const outboxDigest = outbox.key.slice('invitation-ready-outbox/'.length);
+  if (!/^[a-f0-9]{64}$/.test(outboxDigest)) {
+    throw new Error('ARC2_CLAIM_INVITATION_EMAIL_OUTBOX_INVALID');
+  }
+  return Object.freeze({
+    handoff_id: entry.record.handoff_id,
+    job_key: outboxDigest,
+    recipient_email_sha256: entry.record.customer_email_sha256,
+    claim_invitation_generation: entry.record.claim_invitation_generation,
+    claim_token_hmac_sha256: entry.record.claim_token_hmac_sha256,
+    claim_url: `${origin.origin}/claim/#arc2.${entry.record.handoff_id}.${claimBearer}`,
+    expires_at: entry.record.claim_token_expires_at,
+  });
+}
+
 export async function markClaimInvitationReady(handoffId, evidence, signature, env, adapters = {}) {
   const key = handoffKeyFromId(handoffId);
   const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
   if (entry.record.lead_route_mode === 'not_required') {
@@ -1175,8 +1420,12 @@ export async function exchangeClaimBearer(handoffId, suppliedBearer, env, adapte
   if (typeof suppliedBearer !== 'string' || suppliedBearer.length !== 43 || !/^[A-Za-z0-9_-]+$/.test(suppliedBearer)) throw new Error('ARC2_CLAIM_BEARER_INVALID');
   const key = handoffKeyFromId(handoffId);
   const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
+  await assertArc2EmailNegativeStateAllows(adapters.store, handoffId,
+    'claim_invitation', env);
   await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: clock() });
   const suppliedDigest = claimBearerDigest(suppliedBearer, env);
   if (entry.record.state === 'INVITATION_READY') {
@@ -1204,7 +1453,11 @@ export async function exchangeClaimBearer(handoffId, suppliedBearer, env, adapte
   if (entry.record.state !== 'CLAIM_WRAPPER_CONSUMED' || Date.parse(entry.record.claim_token_expires_at) - replayedAt.getTime() < 1000 ||
       !safeEqual(entry.record.claim_token_consumed_hmac_sha256 || '', suppliedDigest)) throw new Error('ARC2_CLAIM_BEARER_INVALID');
   const issuedAt = Math.floor(replayedAt.getTime() / 1000);
-  if (issuedAt > entry.record.claim_jwt_issued_at) {
+  const currentJwtExpiresAt = Math.min(
+    Math.floor(Date.parse(entry.record.claim_token_expires_at) / 1000),
+    entry.record.claim_jwt_issued_at + CLAIM_JWT_TTL_SECONDS,
+  );
+  if (currentJwtExpiresAt <= issuedAt) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         entry = await replaceEntry(adapters.store, key, entry, reviseRecord(entry.record, { claim_jwt_issued_at: issuedAt }, replayedAt));
@@ -1322,6 +1575,8 @@ export async function processClaimWebhook(input, env, adapters = {}) {
   const hint = normalizeClaimWebhook(input);
   const index = await readIndex(adapters.store, siteIndexKey(hint.siteId));
   if (!index || index.netlify_site_id !== hint.siteId) throw new Error('ARC2_UNKNOWN_CLAIM_SITE');
+  await assertClaimSandboxBootstrapBound(adapters.store, index.handoff_id, env,
+    adapters.activationClock?.() || new Date());
   const key = handoffKeyFromId(index.handoff_id);
   const entry = await readEntry(adapters.store, key);
   if (!entry || entry.record.netlify_site_id !== hint.siteId || entry.record.netlify_session_id !== index.netlify_session_id ||
@@ -1329,6 +1584,8 @@ export async function processClaimWebhook(input, env, adapters = {}) {
   if (!['CLAIM_WRAPPER_CONSUMED', 'CLAIM_CALLBACK_RECEIVED', 'CLAIMED_VERIFIED', 'FINAL_DEPLOY_READY', 'DELIVERED'].includes(entry.record.state)) {
     throw new Error('ARC2_CLAIM_STATE_CONFLICT');
   }
+  await assertArc2EmailNegativeStateAllows(adapters.store, entry.record.handoff_id,
+    'claim_invitation', env);
   if (entry.record.state !== 'DELIVERED') {
     await assertCheckoutAndReversalAllowed(entry.record, env, adapters, { now: adapters.clock?.() || new Date() });
   }
@@ -1535,8 +1792,14 @@ function finalDeliveryMatchesRecord(record, receipt) {
 export async function acknowledgeFinalDelivery(handoffId, evidence, signature, env, adapters = {}) {
   const key = handoffKeyFromId(handoffId);
   const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
   let entry = await readEntry(adapters.store, key);
   if (!entry) return null;
+  await assertArc2EmailNegativeStateAllows(adapters.store, handoffId,
+    'claim_invitation', env);
+  await assertArc2EmailNegativeStateAllows(adapters.store, handoffId,
+    'final_delivery', env);
   if (!['FINAL_DEPLOY_READY', 'DELIVERED'].includes(entry.record.state)) throw new Error('ARC2_FINAL_DELIVERY_STATE_CONFLICT');
   const receipt = normalizeFinalDeliveryReceipt(evidence, signature, entry.record, env, clock(), { enforceFreshness: false });
   if (entry.record.state === 'DELIVERED' && !finalDeliveryMatchesRecord(entry.record, receipt)) {
@@ -1608,6 +1871,8 @@ export async function acknowledgeFinalDelivery(handoffId, evidence, signature, e
 
 export async function getHandoffStatus(handoffId, env, adapters = {}, options = {}) {
   const clock = adapters.clock || (() => new Date());
+  await assertClaimSandboxBootstrapBound(adapters.store, handoffId, env,
+    adapters.activationClock?.() || new Date());
   const entry = await readEntry(adapters.store, handoffKeyFromId(handoffId));
   if (!entry) return null;
   const record = validateExpectedBindings(entry.record);
@@ -1631,6 +1896,55 @@ export async function getHandoffStatus(handoffId, env, adapters = {}, options = 
     Object.assign(status, createClaimStateEvidence(record, env, authorizedAt));
   }
   return status;
+}
+
+// Private send authority for the final-delivery worker. This deliberately
+// delegates to getHandoffStatus(includePrivate:true), which performs the fresh
+// Stripe reversal checks around the exact final Netlify readback. Only the
+// transient return value contains the production URL.
+export async function getFinalDeliveryEmailAuthority(handoffId, env, adapters = {}) {
+  const status = await getHandoffStatus(handoffId, env, adapters, { includePrivate: true });
+  if (!status) return null;
+  if (status.status !== 'FINAL_DEPLOY_READY' || typeof status.claim_state_evidence_private !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(String(status.claim_state_evidence_hmac_sha256 || ''))) {
+    throw new Error('ARC2_FINAL_DELIVERY_EMAIL_STATE_CONFLICT');
+  }
+  let evidence;
+  try { evidence = JSON.parse(status.claim_state_evidence_private); }
+  catch { throw new Error('ARC2_FINAL_DELIVERY_EMAIL_AUTHORITY_INVALID'); }
+  const fields = [
+    'authorization_nonce_sha256', 'bundle_fingerprint', 'claim_callback_received_at',
+    'claim_invitation_ready_at', 'claimed_verified_at', 'customer_email_sha256',
+    'final_deploy_ready_at', 'handoff_artifact_evidence_sha256', 'issued_at',
+    'netlify_deploy_id_sha256', 'netlify_destination_account_id_sha256',
+    'netlify_session_id', 'netlify_site_id_sha256', 'outbox_claim_key_hmac_sha256',
+    'outbox_claim_status', 'payment_evidence_sha256', 'preview_folder',
+    'production_url', 'provider_observed_at', 'scope', 'status', 'version',
+  ];
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence) ||
+      Object.getPrototypeOf(evidence) !== Object.prototype ||
+      JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify([...fields].sort()) ||
+      canonicalJson(evidence) !== status.claim_state_evidence_private ||
+      evidence.version !== CLAIM_STATE_EVIDENCE_VERSION || evidence.scope !== CLAIM_STATE_EVIDENCE_SCOPE ||
+      evidence.status !== 'FINAL_DEPLOY_READY' || evidence.outbox_claim_status !== 'CLAIMED' ||
+      evidence.production_url !== status.production_url ||
+      !safeEqual(status.claim_state_evidence_hmac_sha256,
+        hmacHex(env.ARC_CLAIM_STATE_EVIDENCE_SECRET,
+          `${CLAIM_STATE_SIGNATURE_PREFIX}${status.claim_state_evidence_private}`))) {
+    throw new Error('ARC2_FINAL_DELIVERY_EMAIL_AUTHORITY_INVALID');
+  }
+  return Object.freeze({
+    handoff_id: handoffId,
+    job_key: evidence.outbox_claim_key_hmac_sha256,
+    recipient_email_sha256: evidence.customer_email_sha256,
+    production_url: evidence.production_url,
+    production_url_sha256: sha256Hex(evidence.production_url),
+    netlify_site_id_sha256: evidence.netlify_site_id_sha256,
+    netlify_deploy_id_sha256: evidence.netlify_deploy_id_sha256,
+    final_deploy_ready_at: evidence.final_deploy_ready_at,
+    authorized_at: evidence.issued_at,
+    claim_state_evidence_sha256: sha256Hex(status.claim_state_evidence_private),
+  });
 }
 
 export const leadRouteReceiptContract = Object.freeze({

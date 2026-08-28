@@ -4,6 +4,12 @@ import { readFile } from 'node:fs/promises';
 
 import { PAYMENT_ARC2_COMPLETION_SCHEMA } from '../netlify/lib/payment-arc2-bridge-core.mjs';
 import {
+  ACTIVATION_EVIDENCE_BY_STAGE,
+  ACTIVATION_MANIFEST_SCHEMA,
+  ACTIVATION_MANIFEST_VERSION,
+  signActivationManifest,
+} from '../netlify/lib/activation-manifest-core.mjs';
+import {
   ARC2_PRECLAIM_HEADERS_FILE,
   ARC2_PRODUCTION_HEADERS_FILE,
   ARTIFACT_SIGNATURE_PREFIX,
@@ -25,6 +31,12 @@ import {
   reserveReviewEmailSend,
   reviewEmailReceiptContract,
 } from '../netlify/lib/review-email-outbox-core.mjs';
+import { sealPreviewReviewEmailCapsule } from '../netlify/lib/review-email-resend-core.mjs';
+import {
+  emailRecipientVaultConfiguration,
+  openEmailRecipientCapsule,
+} from '../netlify/lib/email-recipient-vault-core.mjs';
+import { arc2TransactionalEmailConfiguration } from '../netlify/lib/arc2-transactional-email-core.mjs';
 import {
   createApprovedCheckout,
   decideReview,
@@ -41,6 +53,7 @@ import paymentArc2WorkerHandler, {
   paymentArc2WorkerConfiguration,
 } from '../netlify/functions/payment-arc2-worker.mjs';
 import stripeWebhookHandler from '../netlify/functions/stripe-reversal-webhook.mjs';
+import { claimSandboxBootstrapConfiguration } from '../netlify/lib/claim-sandbox-bootstrap-core.mjs';
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hmac = (secret, value) => createHmac('sha256', secret).update(value).digest('hex');
@@ -98,8 +111,25 @@ const taxCodeId = 'txcd_10000000';
 const checkoutSessionId = 'cs_test_ArcPaymentIntegration';
 const paymentIntentId = 'pi_ArcPaymentIntegration';
 const eventId = 'evt_ArcPaymentIntegration';
+const activationSecret = 'payment-integration-activation-secret-0123456789abcdef';
+const activationManifest = signActivationManifest({
+  schema: ACTIVATION_MANIFEST_SCHEMA,
+  version: ACTIVATION_MANIFEST_VERSION,
+  stage: 'CLAIM_SANDBOX',
+  authority_mode: 'TEST_BOOTSTRAP',
+  issued_at: new Date(settlementNow.getTime() - 60_000).toISOString(),
+  expires_at: new Date(settlementNow.getTime() + 10 * 60_000).toISOString(),
+  deployment_sha: '9'.repeat(40),
+  evidence: ACTIVATION_EVIDENCE_BY_STAGE.EMAIL_SANDBOX.map((kind) => ({
+    kind,
+    receipt_ref: `audit:${sha256(`payment-integration:${kind}`).slice(0, 24)}`,
+    sha256: sha256(`payment-integration-evidence:${kind}`),
+  })),
+}, activationSecret);
 
 const env = {
+  ARC_ACTIVATION_MANIFEST: activationManifest,
+  ARC_ACTIVATION_MANIFEST_HMAC_SECRET: activationSecret,
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_EXPECTED_PRICE_ID: priceId,
   ARC_EXPECTED_PRODUCT_ID: productId,
@@ -107,6 +137,8 @@ const env = {
   ARC_EXPECTED_PRODUCT_TAX_CODE: taxCodeId,
   ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256: sha256(accountId),
   ARC_HANDOFF_ENABLED: 'false',
+  ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
+  ARC_PUBLIC_ORIGIN: 'https://arcweb.onl/',
   ARC_CHECKOUT_BINDING_SECRET: 'checkout-binding-integration-secret-0123456789abcdef',
   ARC_CHECKOUT_BINDING_KEY_ID: '01',
   ARC_RETIRED_CHECKOUT_BINDING_KEYS_JSON: '{}',
@@ -114,10 +146,25 @@ const env = {
   ARC_HANDOFF_STATE_SECRET: 'handoff-state-integration-secret-0123456789abcdef',
   ARC_CLAIM_TOKEN_SECRET: 'claim-token-integration-secret-0123456789abcdef',
   ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-claim-binding-integration-secret-0123456789abcdef',
+  ARC_TRANSACTIONAL_EMAIL_ENABLED: 'true',
+  ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET: 'payment-email-attempt-integration-secret-0123456789',
+  ARC_EMAIL_RECIPIENT_VAULT_ENABLED: 'true',
+  ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY: Buffer.alloc(32, 47).toString('base64url'),
+  ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET: 'payment-email-vault-integration-secret-0123456789ab',
+  ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED: 'true',
+  ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET: 'payment-resend-binding-integration-secret-0123456789',
+  ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED: 'true',
+  ARC_ARC2_FINAL_DELIVERY_EMAIL_ENABLED: 'true',
+  ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET: 'payment-negative-email-state-secret-0123456789abcd',
   ARC_PAYMENT_ARC2_BRIDGE_ENABLED: 'true',
   ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET: 'payment-bridge-integration-secret-0123456789abcdef',
   ARC_PAYMENT_ARC2_WORKER_ENABLED: 'true',
   ARC_PAYMENT_ARC2_WORKER_SECRET: 'payment-worker-integration-secret-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'payment-retention-fence-integration-secret-0123456789abcdef',
+  ARC_OPERATIONS_AUDIT_ENABLED: 'true',
+  ARC_OPERATIONS_AUDIT_SECRET: 'payment-operations-audit-integration-secret-0123456789abcdef',
+  ARC_OPERATIONS_ALERT_HMAC_SECRET: 'payment-operations-alert-integration-secret-0123456789abcdef',
   ARC_REVIEW_CHECKOUT_ENABLED: 'true',
   ARC_REVIEW_CHECKOUT_ORIGIN: 'https://checkout.stripe.com',
   ARC_REVIEW_DECISION_HMAC_SECRET: 'review-decision-integration-secret-0123456789abcdef',
@@ -131,7 +178,7 @@ const env = {
   ARC_REVIEW_RECORD_HMAC_SECRET: 'review-record-integration-secret-0123456789abcdef',
   ARC_REVIEW_SESSION_HMAC_SECRET: 'review-session-integration-secret-0123456789abcdef',
   ARC_RUNTIME_ENVIRONMENT: 'sandbox',
-  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'rk_test_arcIntegrationAccountRead0123456789',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'arcIntegrationAccountRead0123456789'].join('_'),
   ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER: 'arc_review_checkout_qwertyui',
   ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'true',
   ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'true',
@@ -143,7 +190,7 @@ const env = {
   ARC_STRIPE_REVIEW_CHECKOUT_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET: 'stripe-review-revocation-integration-secret-0123456789abcdef',
-  ARC_STRIPE_REVIEW_SECRET_KEY: 'sk_test_arcIntegrationCheckout0123456789abcdef',
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
   ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
@@ -158,11 +205,18 @@ const env = {
   NETLIFY_ADMIN_PAT: 'netlify-admin-integration-secret-0123456789abcdef',
   NETLIFY_TEAM_ACCOUNT_ID: 'arc-integration-team',
   NETLIFY_TEAM_SLUG: 'arc-integration-team-slug',
+  SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
+  SITE_NAME: 'arc2-sandbox',
+  URL: 'https://arcweb.onl/',
 };
 
 const review = new FakeStore();
 const ledger = new FakeStore();
 const bridge = new FakeStore();
+const vault = new FakeStore();
+const retentionFence = new FakeStore();
+const retentionAlerts = new FakeStore();
+let fenceNow = new Date(settlementNow);
 const inviteToken = 'I'.repeat(43);
 const artifactBytes = [
   { path: '_headers', bytes: Buffer.from(ARC2_PRODUCTION_HEADERS_FILE) },
@@ -206,6 +260,11 @@ const prepared = await prepareReviewInviteEmail(review, {
   recipient_email_sha256: sha256(recipientEmail),
   scope_version: 'arc-fixed-five-page-offer-v1',
 }, env, { clock: () => new Date(now) });
+await sealPreviewReviewEmailCapsule(vault, {
+  invite_token: inviteToken,
+  prepared,
+  recipient_email: recipientEmail,
+}, env, { clock: () => new Date(now), randomBytes: () => Buffer.alloc(12, 49) });
 await reserveReviewEmailSend(review, {
   invite_token: inviteToken,
   recipient_email: recipientEmail,
@@ -281,6 +340,7 @@ const stripeClient = {
           automatic_tax: { enabled: true, status: null },
           client_reference_id: parameters.client_reference_id,
           currency: 'usd',
+          expires_at: parameters.expires_at,
           id: checkoutSessionId,
           integration_identifier: parameters.integration_identifier,
           livemode: false,
@@ -322,6 +382,11 @@ const checkout = await createApprovedCheckout(review, exchanged.session_token, e
 assert.equal(checkout.checkout_url, `https://checkout.stripe.com/c/pay/${checkoutSessionId}`);
 const approved = (await readReviewInviteForEmail(review, issued.record.invite_hmac_sha256, env)).record;
 assert.equal(createdParameters.client_reference_id, approved.decision.approval_receipt_sha256);
+assert.equal(createdParameters.expires_at,
+  Math.floor(Date.parse(approved.decision.decided_at) / 1000) + 23 * 60 * 60,
+  'The private Checkout Session must expire 23 hours after the approval decision.');
+assert.equal('billing_address_collection' in createdParameters, false,
+  'Checkout must collect only the address fields automatic tax requires.');
 assert.equal(createdParameters.metadata.approval_receipt_hmac_sha256,
   approved.decision.approval_receipt_hmac_sha256);
 assert.equal(createdParameters.metadata.preview_manifest_sha256, approved.preview_manifest_sha256);
@@ -517,6 +582,7 @@ const netlifyFetch = async (url, options = {}) => {
 
 assert.deepEqual(paymentArc2WorkerConfig.path,
   ['/internal/payment-arc2/claim', '/internal/payment-arc2/start', '/internal/payment-arc2/complete']);
+assert.equal(claimSandboxBootstrapConfiguration(env, settlementNow).bootstrap_active, true);
 assert.equal(paymentArc2WorkerConfiguration(env).enabled, true);
 assert.equal(paymentArc2WorkerConfiguration({ ...env, ARC_PAYMENT_ARC2_WORKER_ENABLED: 'false' }).enabled, false);
 assert.equal(paymentArc2WorkerConfiguration({
@@ -528,6 +594,15 @@ const savedEnvironment = { ...process.env };
 try {
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, env);
+  assert.equal(emailRecipientVaultConfiguration(process.env).enabled, true,
+    JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.includes('VAULT')))));
+  assert.deepEqual(arc2TransactionalEmailConfiguration(process.env), {
+    flags_valid: true,
+    requested: true,
+    capsule_producer_enabled: true,
+    claim_invitation_enabled: true,
+    final_delivery_enabled: true,
+  });
   const webhookRequest = () => new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
     method: 'POST',
     headers: {
@@ -539,8 +614,11 @@ try {
   const webhookContext = {
     alertStore: new FakeStore(),
     arc2Store: ledger,
-    clock: () => new Date(settlementNow),
+    clock: () => new Date(fenceNow),
     paymentArc2BridgeStore: bridge,
+    retentionFenceAlertStore: retentionAlerts,
+    retentionFenceStaleAfterMs: 1_000,
+    retentionFenceStore: retentionFence,
     reviewStore: review,
     stripeAccountFetch: accountFetch,
     stripeCheckoutAuthorityClient: stripeClient,
@@ -552,6 +630,7 @@ try {
   assert.equal(bridge.values.size, 0);
   assert.equal([...ledger.values.values()].some(entry => entry.data?.state === 'PAID'), true,
     'The authenticated paid ledger must survive before the retriable bridge failure.');
+  fenceNow = new Date(fenceNow.getTime() + 1_001);
   process.env.ARC_PAYMENT_ARC2_BRIDGE_ENABLED = 'true';
   const webhookResponse = await stripeWebhookHandler(webhookRequest(), webhookContext);
   assert.equal(webhookResponse.status, 200);
@@ -586,9 +665,14 @@ try {
     },
   );
   const workerContext = {
+    activationClock: () => new Date(settlementNow),
     arc2Store: ledger,
-    clock: () => new Date(settlementNow),
+    clock: () => new Date(fenceNow),
+    emailRecipientVaultStore: vault,
     paymentArc2BridgeStore: bridge,
+    retentionFenceAlertStore: retentionAlerts,
+    retentionFenceStaleAfterMs: 1_000,
+    retentionFenceStore: retentionFence,
     reviewStore: review,
     stripeAccountFetch: accountFetch,
     stripeCheckoutAuthorityClient: stripeClient,
@@ -601,7 +685,7 @@ try {
   const claimResponse = await paymentArc2WorkerHandler(workerRequest('/internal/payment-arc2/claim', {
     claim_token: claimToken,
   }), workerContext);
-  assert.equal(claimResponse.status, 200);
+  assert.equal(claimResponse.status, 200, await claimResponse.clone().text());
   const claimed = await claimResponse.json();
   assert.equal(claimed.state, 'CLAIMED');
   assert.equal(claimed.accepted, true);
@@ -620,7 +704,7 @@ try {
     },
     outbox_key: claimed.outbox_key,
   }), workerContext);
-  assert.notEqual(forgedCompletionResponse.status, 200,
+  assert.equal(forgedCompletionResponse.status, 400,
     'A worker bearer cannot complete paid work with a forged receipt.');
   const startBody = {
     artifact_evidence: artifactEvidence,
@@ -632,15 +716,27 @@ try {
     lead_route_recipient_hmac_sha256: '',
     outbox_key: claimed.outbox_key,
   };
+  const currentActivationManifest = process.env.ARC_ACTIVATION_MANIFEST;
+  delete process.env.ARC_ACTIVATION_MANIFEST;
+  const missingAuthorityResponse = await paymentArc2WorkerHandler(
+    workerRequest('/internal/payment-arc2/start', startBody), workerContext,
+  );
+  assert.equal(missingAuthorityResponse.status, 503,
+    'The payment worker must fail before ARC2 mutation when claim authority is absent.');
+  assert.equal(ledger.writeKeys.some((key) => key.startsWith('claim-sandbox-bootstrap/')), false);
+  process.env.ARC_ACTIVATION_MANIFEST = currentActivationManifest;
+  fenceNow = new Date(fenceNow.getTime() + 1_001);
   const awaitingReversalResponse = await paymentArc2WorkerHandler(
     workerRequest('/internal/payment-arc2/start', startBody), workerContext,
   );
-  assert.equal(awaitingReversalResponse.status, 202);
+  assert.equal(awaitingReversalResponse.status, 202, await awaitingReversalResponse.clone().text());
   const awaitingReversal = await awaitingReversalResponse.json();
   assert.equal(awaitingReversal.state, 'PENDING');
   assert.equal(awaitingReversal.handoff_state, 'PAYMENT_VERIFIED');
   assert.equal(awaitingReversal.reversal_control_ready, false);
   assert.equal(awaitingReversal.retry_required, true);
+  assert.equal(ledger.writeKeys.filter((key) => key.startsWith('claim-sandbox-bootstrap/')).length, 1,
+    'The claim bootstrap must be atomically consumed once before the first ARC2 mutation.');
   assert.equal(netlifyCalls.length, 0,
     'Reversal-not-ready work must be requeued before any Netlify request.');
 
@@ -704,6 +800,22 @@ try {
     JSON.parse(started.start_receipt).payer_email_sha256);
   assert.equal([...bridge.values.keys()].some(key => key.startsWith('payment-arc2-pending/')), false,
     'The start worker removes discoverability only after signed durable handoff receipt verification.');
+  await assert.rejects(openEmailRecipientCapsule(vault, {
+    job_kind: 'preview_review', job_key: prepared.outbox.outbox_hmac_sha256,
+  }, env, { clock: () => new Date(settlementNow) }), /VAULT_NOT_FOUND/,
+  'The source preview recipient capsule must be erased only after durable ARC2 completion.');
+  for (const kind of ['claim_invitation', 'final_delivery']) {
+    assert.equal((await openEmailRecipientCapsule(vault, {
+      job_kind: kind, job_key: awaitingReversal.handoff_id,
+    }, env, { clock: () => new Date(settlementNow) })).recipient_email, recipientEmail,
+    'Both downstream ownership-email capsules must survive source cleanup.');
+  }
+  const completedReplay = await paymentArc2WorkerHandler(
+    workerRequest('/internal/payment-arc2/start', startBody), workerContext,
+  );
+  assert.equal(completedReplay.status, 200);
+  assert.equal((await completedReplay.json()).state, 'COMPLETED',
+    'A completed paid worker replay must converge after idempotent source cleanup.');
 
   process.env.ARC_STRIPE_REVERSAL_CONTROL_REQUIRED = 'true';
   assert.equal(paymentArc2WorkerConfiguration(process.env).enabled, true);

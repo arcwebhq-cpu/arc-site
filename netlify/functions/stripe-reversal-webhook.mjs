@@ -15,10 +15,11 @@ import {
   stripeCheckoutConfiguration,
 } from '../lib/stripe-checkout-core.mjs';
 import { retrieveStripeReviewCheckoutAuthority } from '../lib/stripe-review-checkout-adapter.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const ALERT_STORE = 'arc-operations-alerts';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   const reversalConfiguration = stripeReversalConfiguration(process.env);
   const checkoutConfiguration = stripeCheckoutConfiguration(process.env);
   const paymentArc2Configuration = paymentArc2BridgeConfiguration(process.env);
@@ -125,6 +126,15 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'webhook_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'stripe-unified-webhook',
+  paths: ['/internal/stripe/reversal-webhook'],
+  maxRequestBytes: 1_048_576,
+  active: ({ env }) => stripeReversalConfiguration(env).webhookOperational ||
+    stripeCheckoutConfiguration(env).webhookOperational,
+  handler,
+});
 
 export const config = {
   path: '/internal/stripe/reversal-webhook',

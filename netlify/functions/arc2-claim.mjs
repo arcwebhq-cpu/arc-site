@@ -2,8 +2,9 @@ import { getStore } from '@netlify/blobs';
 import { HANDOFF_STORE, configuredEnvironment, jsonResponse } from '../lib/arc2-handoff-core.mjs';
 import { exchangeClaimBearer } from '../lib/arc2-handoff-service.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   const authorization = request.headers.get('authorization') || '';
@@ -26,5 +27,12 @@ export default async (request, context = {}) => {
     return jsonResponse(401, { error: 'claim_bearer_invalid_or_expired' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-claim',
+  paths: ['/api/arc2/claim'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = { path: '/api/arc2/claim', method: 'POST', rateLimit: { windowLimit: 10, windowSize: 60, aggregateBy: ['ip', 'domain'] } };

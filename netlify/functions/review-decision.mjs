@@ -20,8 +20,9 @@ import {
   reviewJsonResponse,
   reviewSessionCookie,
 } from '../lib/review-http-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!reviewPortalConfiguration(process.env).enabled) return reviewJsonResponse(503, { error: 'review_disabled' });
   if (request.method !== 'POST') return reviewJsonResponse(405, { error: 'method_not_allowed' });
   if (!requestOriginAllowed(request, true)) return reviewJsonResponse(403, { error: 'forbidden' });
@@ -68,6 +69,13 @@ export default async (request, context = {}) => {
     return reviewJsonResponse(status, { error: code });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'review-decision',
+  paths: ['/api/review/decision'],
+  active: ({ env }) => reviewPortalConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/api/review/decision', method: 'POST',
