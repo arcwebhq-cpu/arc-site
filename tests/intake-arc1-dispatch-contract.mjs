@@ -1,14 +1,24 @@
 import assert from 'node:assert/strict';
 import { BUDGET_CONFIRMATION, TERMS_CONFIRMATION, normalizeIntakeForm } from '../netlify/lib/intake-submission-core.mjs';
 import { dispatchIntakeToArc1Background, recoverPendingArc1Dispatches, resolveSameDeployDispatcher } from '../netlify/lib/intake-arc1-dispatch-core.mjs';
-import backgroundHandler, { config as backgroundConfig } from '../netlify/functions/intake-arc1-background.mjs';
-import recoveryHandler, { config as recoveryConfig } from '../netlify/functions/intake-arc1-recovery.mjs';
+import { consumeIntakeEmailVerificationToken, reserveIntakeEmailVerification } from '../netlify/lib/intake-email-verification-core.mjs';
+import {
+  config as backgroundConfig,
+  createIntakeArc1BackgroundHandler,
+} from '../netlify/functions/intake-arc1-background.mjs';
+import {
+  config as recoveryConfig,
+  createIntakeArc1RecoveryHandler,
+} from '../netlify/functions/intake-arc1-recovery.mjs';
 import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
+const backgroundHandler = createIntakeArc1BackgroundHandler();
+const recoveryHandler = createIntakeArc1RecoveryHandler();
+
 class FakeStore {
-  constructor() { this.values = new Map(); this.sequence = 0; }
+  constructor() { this.values = new Map(); this.sequence = 0; this.autoVerify = true; }
   async getWithMetadata(key) { const value = this.values.get(key); return value ? { data: structuredClone(value.data), etag: value.etag } : null; }
-  async setJSON(key, data, options = {}) { const current = this.values.get(key); if (options.onlyIfNew && current) return { modified: false }; if (options.onlyIfMatch && current?.etag !== options.onlyIfMatch) return { modified: false }; const etag = `e-${++this.sequence}`; this.values.set(key, { data: structuredClone(data), etag }); return { modified: true, etag }; }
+  async setJSON(key, data, options = {}) { const current = this.values.get(key); if (options.onlyIfNew && current) return { modified: false }; if (options.onlyIfMatch && current?.etag !== options.onlyIfMatch) return { modified: false }; const etag = `e-${++this.sequence}`; this.values.set(key, { data: structuredClone(data), etag }); if (this.autoVerify && !current && key.startsWith('submissions/') && data?.schema === 'arc-intake-function-submission-v1') { const verification = await reserveIntakeEmailVerification(data, env, this, { clock: () => now }); await consumeIntakeEmailVerificationToken(new URL(verification.verification_url).hash.slice(1), env, this, { clock: () => new Date(now.getTime() + 1) }); } return { modified: true, etag }; }
   list({ prefix, paginate }) {
     const page = { blobs: [...this.values.keys()].filter(key => key.startsWith(prefix)).map(key => ({ key })) };
     if (!paginate) return Promise.resolve(page);
@@ -46,6 +56,11 @@ const env = {
   ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'true',
   ARC_INTAKE_ARC1_DISPATCH_SECRET: 'dispatch-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefghijkl',
+  ARC_INTAKE_EMAIL_VERIFICATION_ENABLED: 'true',
+  ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET: 'verification-state-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET: 'verification-token-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET: 'verification-recipient-secret-unique-012345',
+  ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET: 'verification-release-secret-unique-01234567',
   URL: 'https://arcweb.onl',
 };
 const request = new Request('https://arcweb.onl/api/intake/submit', { method: 'POST' });
@@ -57,6 +72,22 @@ assert.throws(() => resolveSameDeployDispatcher(new Request('https://evil.exampl
 assert.throws(() => resolveSameDeployDispatcher(request, { ...env, ARC_INTAKE_ARC1_RUN_SECRET: env.ARC_INTAKE_ARC1_DISPATCH_SECRET }), /distinct/);
 const disabled = await dispatchIntakeToArc1Background(submissionId, request, { ...env, ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'false' }, { get store() { throw new Error('must not touch'); }, fetch: async () => { throw new Error('must not invoke'); } });
 assert.equal(disabled.state, 'DISPATCH_DISABLED');
+const unverifiedStore = new FakeStore();
+unverifiedStore.autoVerify = false;
+await unverifiedStore.setJSON(normalized.key, normalized.record, { onlyIfNew: true });
+let unverifiedCalls = 0;
+assert.deepEqual(await dispatchIntakeToArc1Background(submissionId, request, env, {
+  store: unverifiedStore, clock: () => now,
+  fetch: async () => { unverifiedCalls += 1; throw new Error('unverified intake entered network'); },
+}), { state: 'AWAITING_EMAIL_VERIFICATION' });
+assert.equal(unverifiedCalls, 0, 'ARC1 dispatch must perform zero network I/O before mailbox ownership is proven.');
+const unverifiedChallenge = await reserveIntakeEmailVerification(normalized.record, env, unverifiedStore, { clock: () => now });
+await consumeIntakeEmailVerificationToken(new URL(unverifiedChallenge.verification_url).hash.slice(1), env,
+  unverifiedStore, { clock: () => now });
+assert.equal((await dispatchIntakeToArc1Background(submissionId, request, env, {
+  store: unverifiedStore, clock: () => now, fetch: async (url) => { unverifiedCalls += 1; return { status: 202, url }; },
+})).state, 'ACCEPTED');
+assert.equal(unverifiedCalls, 1, 'Exactly one verified dispatch may enter network.');
 const store = new FakeStore(); await store.setJSON(normalized.key, normalized.record, { onlyIfNew: true }); let calls = 0;
 const accepted = await dispatchIntakeToArc1Background(submissionId, request, env, { store, clock: () => new Date(now), fetch: async (url, options) => { calls += 1; assert.equal(url, 'https://arcweb.onl/.netlify/functions/intake-arc1-background'); assert.equal(options.method, 'POST'); assert.equal(options.redirect, 'error'); assert.equal(options.headers.Authorization, `Bearer ${env.ARC_INTAKE_ARC1_DISPATCH_SECRET}`); assert.deepEqual(JSON.parse(options.body), { schema: 'arc-intake-arc1-delivery-request-v1', submission_id: submissionId }); assert.doesNotMatch(`${url}\n${JSON.stringify(options.headers)}\n${options.body}`, /private@example|Private Roofing|Everett/); return { status: 202, url }; } });
 assert.equal(accepted.state, 'ACCEPTED'); assert.equal(store.values.get(normalized.key).data.arc1_dispatch.status, 'ACCEPTED'); assert.equal(store.values.get(normalized.key).data.arc1_dispatch.attempt_count, 1);

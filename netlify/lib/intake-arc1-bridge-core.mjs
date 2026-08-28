@@ -1,5 +1,8 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
+import {
+  activationManifestEvidenceSha256Environment,
+  assertPublicIntakeAuthority,
+} from './activation-manifest-core.mjs';
 import {
   ASSET_PERMISSION_CONFIRMATION,
   BUDGET_CONFIRMATION,
@@ -21,6 +24,7 @@ import {
   resolvePrivateAssetEnvironment,
 } from './intake-private-asset-core.mjs';
 import { validateImageAsset } from './image-asset-validation.mjs';
+import { consumeVerifiedIntakeForArc1 } from './intake-email-verification-core.mjs';
 
 export const INTAKE_ARC1_BRIDGE_ENABLED_ENV = 'ARC_INTAKE_ARC1_BRIDGE_ENABLED';
 export const INTAKE_ARC1_ADAPTER_PROOF_ENV = 'ARC_INTAKE_ARC1_ADAPTER_ATTESTATION';
@@ -34,12 +38,6 @@ export const INTAKE_ARC1_MAX_ATTEMPTS = 5;
 export const INTAKE_ARC1_LEASE_MS = 2 * 60_000;
 export const INTAKE_ARC1_EVIDENCE_TTL_MS = 24 * 60 * 60_000;
 export const INTAKE_ARC1_MAX_ACK_BYTES = 32 * 1024;
-// The private upload, preview publication, and self-contained ARC2 handoff
-// contracts are implemented, but public readiness remains impossible until
-// external producer/consumer wiring is proven, paired-repository CI is pinned,
-// and public Git retention/purge is verified. Update this literal only with
-// those external proofs.
-export const INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED = false;
 export const INTAKE_ARC1_CONTRACT_VERSION = 'arc-intake-to-arc1-contract-v2';
 export const INTAKE_ARC1_CONTRACT_TEXT = [
   INTAKE_ARC1_CONTRACT_VERSION,
@@ -256,10 +254,17 @@ export function createAdapterAttestation(value, secretValue) {
   });
 }
 
-export function intakeArc1AdapterAttested(raw, secretValue, now = new Date(), expectedEndpoint, expectedAssetEndpoint, expectedSiteId) {
+function validatedArc1AdapterAttestation(
+  raw,
+  secretValue,
+  now = new Date(),
+  expectedEndpoint,
+  expectedAssetEndpoint,
+  expectedSiteId,
+) {
   try {
     const wrapper = JSON.parse(raw);
-    if (!exactKeys(wrapper, ['attestation', 'hmac_sha256']) || !exactKeys(wrapper.attestation, ADAPTER_PROOF_FIELDS)) return false;
+    if (!exactKeys(wrapper, ['attestation', 'hmac_sha256']) || !exactKeys(wrapper.attestation, ADAPTER_PROOF_FIELDS)) return null;
     const value = wrapper.attestation;
     const canonical = canonicalJson(value);
     if (canonicalJson(wrapper) !== raw || value.schema !== INTAKE_ARC1_ADAPTER_PROOF_SCHEMA || value.version !== 1 ||
@@ -271,13 +276,45 @@ export function intakeArc1AdapterAttested(raw, secretValue, now = new Date(), ex
         !expectedEndpoint || !safeEqual(value.endpoint_sha256, sha256(canonicalBridgeEndpoint(expectedEndpoint))) ||
         !expectedAssetEndpoint || !safeEqual(value.asset_retrieval_endpoint_sha256, sha256(expectedAssetEndpoint)) ||
         !expectedSiteId || !safeEqual(value.site_id_sha256, sha256(String(expectedSiteId).toLowerCase())) ||
-        !SHA256_PATTERN.test(wrapper.hmac_sha256)) return false;
+        !SHA256_PATTERN.test(wrapper.hmac_sha256)) return null;
     const verified = Date.parse(iso(value.verified_at, 'verified_at'));
     const expires = Date.parse(iso(value.expires_at, 'expires_at'));
     const nowMs = new Date(now).getTime();
-    if (!Number.isFinite(nowMs) || verified > nowMs + 60_000 || expires <= nowMs || expires > verified + 24 * 60 * 60_000) return false;
-    return safeEqual(wrapper.hmac_sha256, hmac(secret(secretValue, 'adapter proof secret'), `arc-intake-arc1-adapter-attestation-v1\n${canonical}`));
-  } catch { return false; }
+    if (!Number.isFinite(nowMs) || verified > nowMs + 60_000 || expires <= nowMs || expires > verified + 24 * 60 * 60_000) return null;
+    if (!safeEqual(wrapper.hmac_sha256, hmac(secret(secretValue, 'adapter proof secret'),
+      `arc-intake-arc1-adapter-attestation-v1\n${canonical}`))) return null;
+    return Object.freeze({ ...value });
+  } catch { return null; }
+}
+
+export function intakeArc1AdapterAttested(raw, secretValue, now = new Date(), expectedEndpoint, expectedAssetEndpoint, expectedSiteId) {
+  return validatedArc1AdapterAttestation(
+    raw, secretValue, now, expectedEndpoint, expectedAssetEndpoint, expectedSiteId,
+  ) !== null;
+}
+
+// Public asset readiness is bound twice: the adapter's own HMAC-signed
+// producer/consumer attestation and the external provider-E2E receipt embedded
+// in the deployment-bound activation manifest must name the same digest. With
+// either proof absent, stale, mismatched, or unsigned, the gate remains OFF.
+export function intakeArc1PublicAssetShapesImplemented(env = process.env, now = new Date()) {
+  let assetEndpoint;
+  try { assetEndpoint = resolvePrivateAssetEnvironment(env).endpoint; } catch { return false; }
+  const adapter = validatedArc1AdapterAttestation(
+    env[INTAKE_ARC1_ADAPTER_PROOF_ENV],
+    env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET,
+    now,
+    env.ARC_INTAKE_ARC1_ENDPOINT,
+    assetEndpoint,
+    env.SITE_ID,
+  );
+  if (!adapter) return false;
+  const providerEvidenceSha256 = activationManifestEvidenceSha256Environment(env, {
+    kind: 'public_intake_provider_e2e',
+    minimumStage: 'PUBLIC_INTAKE',
+    now,
+  });
+  return safeEqual(adapter.asset_producer_consumer_tests_sha256, providerEvidenceSha256);
 }
 
 export function resolveArc1BridgeEnvironment(env) {
@@ -457,6 +494,11 @@ export async function deliverIntakeToArc1(submissionId, env, adapters = {}) {
   if (current.status === 'PENDING' && Date.parse(current.next_attempt_at) > now.getTime()) return { state: 'RETRY_PENDING', retryAt: current.next_attempt_at };
   if (current.evidence_expires_at && Date.parse(current.evidence_expires_at) <= now.getTime()) return failDelivery(store, key, entry, 'EVIDENCE_EXPIRED', now);
   if (current.attempt_count >= INTAKE_ARC1_MAX_ATTEMPTS) return failDelivery(store, key, entry, 'MAX_ATTEMPTS', now);
+
+  // This is the final local boundary before ARC1 evidence, durable delivery
+  // state, or network. A signed mailbox verification release is mandatory even
+  // if another dispatcher bypasses the foreground intake route.
+  await consumeVerifiedIntakeForArc1(entry.record, env, store, { clock });
 
   const evidenceIssuedAt = current.evidence_issued_at || now.toISOString();
   const evidenceExpiresAt = current.evidence_expires_at || new Date(now.getTime() + INTAKE_ARC1_EVIDENCE_TTL_MS).toISOString();

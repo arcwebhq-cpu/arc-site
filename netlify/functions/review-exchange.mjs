@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 import { REVIEW_STORE, exchangeReviewInvite, reviewPortalConfiguration } from '../lib/review-flow-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 import {
   readReviewJson,
   requestOriginAllowed,
@@ -9,7 +10,7 @@ import {
   sessionSetCookie,
 } from '../lib/review-http-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!reviewPortalConfiguration(process.env).enabled) return reviewJsonResponse(503, { error: 'review_disabled' });
   if (request.method !== 'POST') return reviewJsonResponse(405, { error: 'method_not_allowed' });
   if (!requestOriginAllowed(request, true)) return reviewJsonResponse(403, { error: 'forbidden' });
@@ -29,6 +30,13 @@ export default async (request, context = {}) => {
     return reviewJsonResponse(status, { error: code });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'review-exchange',
+  paths: ['/api/review/exchange'],
+  active: ({ env }) => reviewPortalConfiguration(env).enabled,
+  handler,
+});
 
 export const config = {
   path: '/api/review/exchange', method: 'POST',

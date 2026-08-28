@@ -300,6 +300,36 @@ async function ensureAlert(store, definition) {
   return false;
 }
 
+// Shared, PII-free alert enqueue for authenticated internal state machines.
+// The delivery worker remains independently gated; this function only writes
+// the existing signed/deduplicated operations queue record.
+export async function enqueueOperationsAlertCondition(store, input, env = process.env, adapters = {}) {
+  if (!operationsAuditConfiguration(env).enabled) {
+    return Object.freeze({ enabled: false, created: false });
+  }
+  const fields = ['category', 'detail_code', 'handoff_id', 'severity', 'source_timestamp', 'subject'];
+  if (!exactKeys(input, fields) || !/^[a-z0-9][a-z0-9-]{1,63}$/.test(input.category) ||
+      !['high', 'critical'].includes(input.severity) ||
+      !/^[a-z0-9][a-z0-9-]{1,127}$/.test(input.detail_code) ||
+      !HEX_64.test(String(input.handoff_id || '')) ||
+      typeof input.subject !== 'string' || input.subject.length < 8 ||
+      Buffer.byteLength(input.subject, 'utf8') > 512 || /[\u0000-\u001f\u007f]/.test(input.subject) ||
+      iso(input.source_timestamp) === null) {
+    throw new TypeError('Operations alert enqueue input is invalid.');
+  }
+  const now = new Date((adapters.clock || (() => new Date()))());
+  if (!Number.isFinite(now.getTime())) throw new TypeError('Operations alert clock is invalid.');
+  const definition = alertDefinition({
+    category: input.category,
+    severity: input.severity,
+    detailCode: input.detail_code,
+    handoffId: input.handoff_id,
+    subject: input.subject,
+    sourceTimestamp: input.source_timestamp,
+  }, env, now);
+  return Object.freeze({ enabled: true, created: await ensureAlert(store, definition) });
+}
+
 function pushCondition(conditions, value) {
   conditions.push(value);
 }

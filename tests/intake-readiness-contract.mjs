@@ -9,6 +9,7 @@ import {
 } from '../netlify/lib/activation-manifest-core.mjs';
 import handler, { config, createIntakeReadinessHandler } from '../netlify/functions/intake-readiness.mjs';
 import submitHandler, { config as submitConfig, createIntakeSubmitHandler } from '../netlify/functions/intake-submit.mjs';
+import { intakeAbuseProtectionConfiguration } from '../netlify/lib/intake-abuse-protection-core.mjs';
 import {
   INTAKE_ARC1_ADAPTER_PROOF_ENV,
   INTAKE_ARC1_ADAPTER_PROOF_SCHEMA,
@@ -17,6 +18,7 @@ import {
   INTAKE_ARC1_CONTRACT_SHA256,
   createAdapterAttestation,
   intakeArc1AdapterAttested,
+  intakeArc1PublicAssetShapesImplemented,
 } from '../netlify/lib/intake-arc1-bridge-core.mjs';
 import {
   INTAKE_BUILD_MARKER_SCHEMA,
@@ -182,7 +184,10 @@ const enabledBuildMarker = Object.freeze({
 });
 let simulatedFutureRuntimeReady = false;
 const enabledReadinessHandler = createIntakeReadinessHandler(enabledBuildMarker, () => simulatedFutureRuntimeReady);
-const enabledSubmitHandler = createIntakeSubmitHandler(enabledBuildMarker, () => simulatedFutureRuntimeReady);
+const enabledSubmitHandler = createIntakeSubmitHandler(enabledBuildMarker, () => simulatedFutureRuntimeReady, {
+  protectIntakeForm: async () => ({ admitted: true }),
+  getIntakeAbuseStore: () => new FakeStore(),
+});
 assert.equal(intakeEnabledFromBuildMarker(enabledBuildMarker), true);
 for (const invalidMarker of [
   null,
@@ -252,8 +257,8 @@ for (const field of INTAKE_FILE_FIELDS) {
 assert.equal([...tooLargeTotalForm.values()].filter((value) => typeof value !== 'string').reduce((sum, file) => sum + file.size, 0), INTAKE_MAX_TOTAL_FILE_BYTES + 1);
 await assert.rejects(normalizeIntakeForm(tooLargeTotalForm), /files are too large/i);
 
-const submitRequest = (form = validForm(), origin = 'https://arcweb.onl') => new Request(`${origin}/api/intake/submit`, {
-  method: 'POST', headers: { origin }, body: form,
+const submitRequest = (form = validForm(), origin = 'https://arcweb.onl', headers = {}) => new Request(`${origin}/api/intake/submit`, {
+  method: 'POST', headers: { origin, ...headers }, body: form,
 });
 
 const completeAttestation = Object.freeze({
@@ -278,7 +283,9 @@ const activationManifest = signActivationManifest({
   evidence: ACTIVATION_EVIDENCE_BY_STAGE[activationStage].map((kind) => ({
     kind,
     receipt_ref: `audit:${createHash('sha256').update(`receipt:${kind}`).digest('hex').slice(0, 24)}`,
-    sha256: createHash('sha256').update(`evidence:${kind}`).digest('hex'),
+    sha256: kind === 'public_intake_provider_e2e'
+      ? 'a'.repeat(64)
+      : createHash('sha256').update(`evidence:${kind}`).digest('hex'),
   })),
 }, activationSecret);
 const adapterEndpoint = 'https://arcweb.onl/internal/intake/arc1/adapter';
@@ -322,6 +329,23 @@ const bridgeRuntimeEnv = {
   ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED: 'true',
   ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED: 'true',
   ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED: 'true',
+  ARC_INTAKE_ARC1_RECOVERY_AUTOMATION_ENABLED: 'true',
+  ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED: 'true',
+  ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED: 'true',
+  ARC_INTAKE_EMAIL_VERIFICATION_ENABLED: 'true',
+  ARC_INTAKE_ABUSE_PROTECTION_ENABLED: 'true',
+  ARC_INTAKE_ABUSE_HMAC_SECRET: 'abuse-hmac-secret-unique-0123456789-abcdef',
+  ARC_TURNSTILE_SECRET_KEY: 'turnstile-secret-unique-0123456789-abcd',
+  ARC_TURNSTILE_EXPECTED_HOSTNAME: 'arcweb.onl',
+  ARC_TURNSTILE_EXPECTED_ACTION: 'arc_intake_submit',
+  ARC_TURNSTILE_MAX_AGE_SECONDS: '300',
+  ARC_INTAKE_ABUSE_RECIPIENT_LIMIT: '2',
+  ARC_INTAKE_ABUSE_RECIPIENT_WINDOW_SECONDS: '86400',
+  ARC_INTAKE_ABUSE_DOMAIN_LIMIT: '10',
+  ARC_INTAKE_ABUSE_DOMAIN_WINDOW_SECONDS: '3600',
+  ARC_INTAKE_ABUSE_GLOBAL_LIMIT: '100',
+  ARC_INTAKE_ABUSE_GLOBAL_WINDOW_SECONDS: '3600',
+  ARC_EMAIL_RECIPIENT_VAULT_ENABLED: 'true',
   ARC_INTAKE_ARC1_ENDPOINT: adapterEndpoint,
   ARC_INTAKE_ARC1_DOWNSTREAM_ENDPOINT: 'https://hooks.zapier.com/hooks/catch/123456/abcde_12345/',
   ARC_INTAKE_ARC1_RUN_SECRET: 'run-secret-unique-0123456789-abcdefgh',
@@ -336,6 +360,15 @@ const bridgeRuntimeEnv = {
   ARC_INTAKE_ARC1_PACKET_SECRET: 'packet-secret-unique-0123456789-abcdefgh',
   ARC_INTAKE_ARC1_CONSUMER_BEARER: 'consumer-bearer-unique-0123456789-abcdef',
   ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET: 'consumer-receipt-secret-unique-0123456789',
+  ARC_INTAKE_CONFIRMATION_OUTBOX_SECRET: 'confirmation-outbox-secret-unique-0123456789',
+  ARC_INTAKE_CONFIRMATION_CONSUMER_BEARER: 'confirmation-consumer-bearer-unique-01234567',
+  ARC_INTAKE_CONFIRMATION_RECEIPT_SECRET: 'confirmation-receipt-secret-unique-012345678',
+  ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET: 'verification-state-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET: 'verification-token-secret-unique-0123456789',
+  ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET: 'verification-recipient-secret-unique-012345',
+  ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET: 'verification-release-secret-unique-01234567',
+  ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET: 'recipient-vault-hmac-secret-unique-0123456789',
+  ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY: Buffer.alloc(32, 17).toString('base64url'),
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_IDEMPOTENCY_SECRET: 'intake-idempotency-secret-unique-0123456789',
   SITE_ID: adapterSiteId,
@@ -402,19 +435,38 @@ try {
   });
   assert.equal(manifestBlockedSubmit.status, 503);
   process.env.ARC_ACTIVATION_MANIFEST = savedActivationManifest;
-  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
-    'Private retrieval alone cannot open readiness before bound preview publication wiring is proven.');
+  assert.equal(intakeArc1PublicAssetShapesImplemented(process.env, adapterProofNow), true,
+    'The signed adapter test digest must match the signed external provider-E2E receipt.');
+  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env, adapterProofNow), true,
+    'Public asset readiness may open only after both signed proof layers match.');
+  process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV] = createAdapterAttestation({
+    ...adapterProofValue,
+    asset_producer_consumer_tests_sha256: 'b'.repeat(64),
+  }, adapterProofSecret);
+  assert.equal(intakeArc1PublicAssetShapesImplemented(process.env, adapterProofNow), false,
+    'A signed adapter proof cannot substitute a different provider-E2E receipt.');
+  assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env, adapterProofNow), false);
+  process.env[INTAKE_ARC1_ADAPTER_PROOF_ENV] = encodedAdapterProof;
   simulatedFutureRuntimeReady = true;
   for (const field of ['ARC_INTAKE_ARC1_ADAPTER_ENABLED', 'ARC_INTAKE_ARC1_BRIDGE_ENABLED',
     'ARC_INTAKE_ARC1_DISPATCH_ENABLED', 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED',
-    'ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED']) {
+    'ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED', 'ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED',
+    'ARC_INTAKE_ARC1_RECOVERY_AUTOMATION_ENABLED', 'ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED',
+    'ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED', 'ARC_INTAKE_EMAIL_VERIFICATION_ENABLED',
+    'ARC_INTAKE_ABUSE_PROTECTION_ENABLED',
+    'ARC_EMAIL_RECIPIENT_VAULT_ENABLED']) {
     const previous = process.env[field];
     delete process.env[field];
     assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false, `${field} must block readiness.`);
     process.env[field] = previous;
   }
   for (const field of ['ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
-    'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET']) {
+    'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET', 'ARC_INTAKE_CONFIRMATION_OUTBOX_SECRET',
+    'ARC_INTAKE_CONFIRMATION_CONSUMER_BEARER', 'ARC_INTAKE_CONFIRMATION_RECEIPT_SECRET',
+    'ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET', 'ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET',
+    'ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET', 'ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET',
+    'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET', 'ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY',
+    'ARC_INTAKE_ABUSE_HMAC_SECRET', 'ARC_TURNSTILE_SECRET_KEY']) {
     const previous = process.env[field];
     delete process.env[field];
     assert.equal(intakeArc1RuntimeReady(readinessRequest, process.env), false,
@@ -525,6 +577,9 @@ try {
   }
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
+  assert.equal(intakeActivationReady(process.env), true);
+  assert.equal(intakeIdempotencyConfigured(process.env), true);
+  assert.equal(intakeAbuseProtectionConfiguration(process.env).enabled, true);
   const metadataFile = validForm();
   metadataFile.append('asset_permission', 'Confirmed rights and no visible watermark v1');
   metadataFile.append('logo_file', new Blob([pngWithChunk('tEXt')], { type: 'image/png' }), 'metadata.png');
@@ -556,8 +611,12 @@ try {
   });
   assert.equal(missingIdempotencyControl.status, 503);
   process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = savedIdempotencySecret;
+  const confirmationStore = new FakeStore();
+  const vaultStore = new FakeStore();
   const accepted = await enabledSubmitHandler(submitRequest(allNamedControlForm()), {
     intakeStore: store,
+    confirmationStore,
+    vaultStore,
     clock: () => new Date('2026-08-13T08:00:00.000Z'),
     uuid: () => '11111111-1111-4111-8111-111111111111',
   });
@@ -581,43 +640,98 @@ try {
   assert.match(stored.submission_data_sha256, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(stored).includes('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false,
     'The raw browser idempotency nonce must never enter durable customer records.');
-  assert.equal(store.calls, 1);
+  assert.equal(store.calls, 3, 'Submission plus HMAC-only verification state and token index must be durable.');
+  assert.equal([...confirmationStore.values.keys()].filter((key) => key.startsWith('outbox/')).length, 1,
+    'No accepted intake may return before its deterministic confirmation outbox is durable.');
+  assert.equal([...confirmationStore.values.keys()].filter((key) => key.startsWith('pending/')).length, 1,
+    'A confirmation outbox must be recovery-visible before intake acceptance.');
+
+  const browserForm = allNamedControlForm();
+  browserForm.set('submission_request_id', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  const browserStore = new FakeStore();
+  const browserConfirmationStore = new FakeStore();
+  const browserVaultStore = new FakeStore();
+  const browserAccepted = await enabledSubmitHandler(submitRequest(browserForm, 'https://arcweb.onl', {
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'same-origin',
+  }), {
+    intakeStore: browserStore,
+    confirmationStore: browserConfirmationStore,
+    vaultStore: browserVaultStore,
+    clock: () => new Date('2026-08-13T08:02:00.000Z'),
+  });
+  assert.equal(browserAccepted.status, 303,
+    'A same-origin browser navigation may redirect only after durable acceptance.');
+  assert.equal(browserAccepted.headers.get('location'), '/thank-you/');
+  assert.equal(browserStore.values.size, 3);
+  assert.equal([...browserConfirmationStore.values.keys()].some((key) => key.startsWith('outbox/')), true,
+    'The browser redirect must not precede the durable confirmation outbox.');
+
+  const acceptOnlyRetry = allNamedControlForm();
+  acceptOnlyRetry.set('submission_request_id', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  const acceptOnly = await enabledSubmitHandler(submitRequest(acceptOnlyRetry, 'https://arcweb.onl', {
+    accept: 'text/html',
+  }), {
+    intakeStore: browserStore, confirmationStore: browserConfirmationStore, vaultStore: browserVaultStore,
+    clock: () => new Date('2026-08-13T08:03:00.000Z'),
+  });
+  assert.equal(acceptOnly.status, 200,
+    'Accept alone must not turn an API request into a browser navigation redirect.');
+  assert.match(acceptOnly.headers.get('content-type') || '', /^application\/json\b/i);
+  assert.equal((await acceptOnly.json()).accepted, true);
 
   const exactRetry = await enabledSubmitHandler(submitRequest(allNamedControlForm()), {
     intakeStore: store,
+    confirmationStore,
+    vaultStore,
     clock: () => new Date('2026-08-13T08:05:00.000Z'),
     uuid: () => '22222222-2222-4222-8222-222222222222',
   });
   assert.equal(exactRetry.status, 200, 'A lost-response retry must recover the original durable acceptance.');
   assert.deepEqual(await exactRetry.json(), acceptedBody);
-  assert.equal(store.values.size, 1, 'An exact retry must not create a duplicate lead.');
+  assert.equal([...store.values.keys()].filter((key) => key.startsWith('submissions/')).length, 1,
+    'An exact retry must not create a duplicate lead.');
 
   const changedRetryForm = allNamedControlForm();
   changedRetryForm.set('business', 'Changed after ambiguous response');
-  const changedRetry = await enabledSubmitHandler(submitRequest(changedRetryForm), { intakeStore: store });
+  const changedRetry = await enabledSubmitHandler(submitRequest(changedRetryForm), {
+    intakeStore: store, confirmationStore, vaultStore,
+  });
   assert.equal(changedRetry.status, 409);
   assert.deepEqual(await changedRetry.json(), { error: 'intake_conflict' });
-  assert.equal(store.values.size, 1, 'A reused nonce with changed answers must fail closed.');
-  assert.equal(store.calls, 3);
+  assert.equal([...store.values.keys()].filter((key) => key.startsWith('submissions/')).length, 1,
+    'A reused nonce with changed answers must fail closed.');
+  assert.equal(store.calls, 5);
 
   const ambiguousForm = allNamedControlForm();
   ambiguousForm.set('submission_request_id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
   const ambiguousStore = new AmbiguousWriteStore();
+  const ambiguousConfirmationStore = new FakeStore();
+  const ambiguousVaultStore = new FakeStore();
   const ambiguousAccepted = await enabledSubmitHandler(submitRequest(ambiguousForm), {
     intakeStore: ambiguousStore,
+    confirmationStore: ambiguousConfirmationStore,
+    vaultStore: ambiguousVaultStore,
     clock: () => new Date('2026-08-13T08:10:00.000Z'),
   });
   assert.equal(ambiguousAccepted.status, 200,
     'A strong read after an ambiguous create response must recover the durable acceptance.');
-  assert.equal(ambiguousStore.values.size, 1);
+  assert.equal(ambiguousStore.values.size, 3);
+  assert.equal([...ambiguousConfirmationStore.values.keys()].some((key) => key.startsWith('outbox/')), true);
 
   process.env[INTAKE_READINESS_ENV] = JSON.stringify({ ...completeAttestation, route_verified: false });
   const revoked = await enabledSubmitHandler(submitRequest(), { intakeStore: store });
   assert.equal(revoked.status, 503);
-  assert.equal(store.calls, 3, 'Revocation must block before any further storage write.');
+  assert.equal(store.calls, 5, 'Revocation must block before any further storage write.');
 
   process.env[INTAKE_READINESS_ENV] = encodedCompleteAttestation;
   assert.equal((await enabledSubmitHandler(submitRequest(validForm(), 'https://example.com'), { intakeStore: store })).status, 403);
+  assert.equal((await enabledSubmitHandler(new Request('https://arcweb.onl/api/intake/submit', {
+    method: 'POST', headers: { origin: 'https://arcsites.netlify.app' }, body: validForm(),
+  }), { intakeStore: store })).status, 403,
+  'The Origin header must exactly match the allowlisted request URL origin.');
   assert.equal((await enabledSubmitHandler(new Request('https://arcweb.onl/api/intake/submit', { method: 'GET' }), { intakeStore: store })).status, 405);
   const oversized = await enabledSubmitHandler({
     method: 'POST',
@@ -657,7 +771,7 @@ try {
   const unknown = validForm();
   unknown.append('client_claims_ready', 'true');
   assert.equal((await enabledSubmitHandler(submitRequest(unknown), { intakeStore: store })).status, 400);
-  assert.equal(store.calls, 3);
+  assert.equal(store.calls, 5);
   assert.equal(submitConfig.path, '/api/intake/submit');
   assert.equal(submitConfig.method, 'POST');
   assert.equal(submitConfig.rateLimit.windowLimit, 5);

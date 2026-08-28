@@ -10,6 +10,8 @@ import { createIntakeArc1BackgroundHandler } from '../netlify/functions/intake-a
 import { createIntakeArc1BridgeHandler } from '../netlify/functions/intake-arc1-bridge.mjs';
 import { createIntakeArc1RecoveryHandler } from '../netlify/functions/intake-arc1-recovery.mjs';
 import { createIntakePrivateAssetHandler } from '../netlify/functions/intake-private-asset.mjs';
+import { createIntakeConfirmationClaimHandler } from '../netlify/functions/intake-confirmation-claim.mjs';
+import { createIntakeConfirmationCompletionHandler } from '../netlify/functions/intake-confirmation-complete.mjs';
 import {
   acceptArc1AdapterEnvelope,
   claimArc1AdapterConsumer,
@@ -25,7 +27,13 @@ import {
   dispatchIntakeToArc1Background,
   recoverPendingArc1Dispatches,
 } from '../netlify/lib/intake-arc1-dispatch-core.mjs';
+import { runArc1AdapterRecoveryCycle } from '../netlify/lib/intake-arc1-adapter-recovery-runner-core.mjs';
 import { retrievePrivateAsset } from '../netlify/lib/intake-private-asset-core.mjs';
+import {
+  claimIntakeConfirmationOutbox,
+  completeIntakeConfirmationOutbox,
+  reserveIntakeConfirmationOutbox,
+} from '../netlify/lib/intake-confirmation-outbox-core.mjs';
 import { testActivationAuthority } from './helpers/activation-authority.mjs';
 
 const now = new Date();
@@ -39,6 +47,8 @@ const enabledStack = {
   ARC_INTAKE_ASSET_RETRIEVAL_ENABLED: 'true',
   ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED: 'true',
   ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED: 'true',
+  ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED: 'true',
+  ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED: 'true',
   ARC_INTAKE_ARC1_RUN_SECRET: 'authority-test-run-secret-0123456789abcdef',
   ARC_INTAKE_ARC1_DISPATCH_SECRET: 'authority-test-dispatch-secret-0123456789',
   ARC_INTAKE_ARC1_DESTINATION_BEARER: 'authority-test-destination-bearer-0123456789',
@@ -64,6 +74,8 @@ const handlerFactories = [
   createIntakeArc1BridgeHandler,
   createIntakeArc1RecoveryHandler,
   createIntakePrivateAssetHandler,
+  createIntakeConfirmationClaimHandler,
+  createIntakeConfirmationCompletionHandler,
 ];
 const authorityEnvNames = [...new Set([
   ...Object.keys(enabledStack),
@@ -136,6 +148,10 @@ const coreCalls = [
     { source: noSideEffectStore, adapter: noSideEffectStore }, { fetch: noNetwork }),
   () => migrateLegacyArc1AdapterRecords(request(), unauthorizedEnv, noSideEffectStore),
   () => retrievePrivateAsset({}, unauthorizedEnv, { store: noSideEffectStore }),
+  () => reserveIntakeConfirmationOutbox({}, unauthorizedEnv, noSideEffectStore),
+  () => claimIntakeConfirmationOutbox('{}', request(), unauthorizedEnv, noSideEffectStore),
+  () => completeIntakeConfirmationOutbox('{}', request(), unauthorizedEnv, noSideEffectStore),
+  () => runArc1AdapterRecoveryCycle(unauthorizedEnv, { source: noSideEffectStore, adapter: noSideEffectStore }),
 ];
 for (const call of coreCalls) await assert.rejects(call, /ARC_PUBLIC_INTAKE_AUTHORITY_REQUIRED/);
 assert.equal(coreSideEffects, 0, 'Missing authority must stop every core boundary before Blob or network access.');

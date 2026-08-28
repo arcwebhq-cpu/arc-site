@@ -5,6 +5,10 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'dist');
+const turnstileBuildConfigured = process.env.ARC_BUILD_TURNSTILE_ENABLED === 'true' &&
+  /^[A-Za-z0-9_-]{20,80}$/.test(String(process.env.ARC_TURNSTILE_SITE_KEY || '')) &&
+  process.env.ARC_TURNSTILE_EXPECTED_ACTION === 'arc_intake_submit';
+const intakeBuildEnabled = process.env.ARC_BUILD_INTAKE_ENABLED === 'true' && turnstileBuildConfigured;
 const expectedRoots = ['assets', 'claim', 'favicon.svg', 'index.html', 'payment-success', 'privacy', 'refunds', 'review', 'robots.txt', 'service-scope', 'sitemap.xml', 'support', 'terms', 'thank-you'];
 assert.deepEqual((await readdir(dist)).sort(), expectedRoots.sort());
 
@@ -36,12 +40,33 @@ const home = await readFile(path.join(dist, 'index.html'), 'utf8');
 const support = await readFile(path.join(dist, 'support/index.html'), 'utf8');
 const intakeBuildMarker = await readFile(path.join(root, 'netlify/lib/intake-build-marker.mjs'), 'utf8');
 const activationBuildIdentity = await readFile(path.join(root, 'netlify/lib/activation-build-identity.mjs'), 'utf8');
-assert.match(home, /<form\b[^>]*action="\/thank-you\/"[^>]*data-intake-enabled="true"[^>]*data-netlify="true"[^>]*method="POST"[^>]*name="arc-preview"[^>]*netlify-honeypot="bot-field"/i,
-  'Production must register the active native ARC preview form.');
-assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/,
-  'The native form must post the exact name consumed by ARC1.');
-assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
-  'Production intake must not depend on the unused first-party readiness path.');
+assert.doesNotMatch(home, /\bdata-netlify\b|\bnetlify-honeypot\b|name="form-name"|name="arc-preview"/i,
+  'The public build must not register a bypassing native Netlify form.');
+assert.doesNotMatch(home, /\/api\/intake\/readiness/,
+  'The browser must not treat a public readiness endpoint as activation authority.');
+if (intakeBuildEnabled) {
+  assert.match(home, /<form\b[^>]*action="\/api\/intake\/submit"[^>]*aria-disabled="false"[^>]*data-intake-enabled="true"[^>]*method="POST"/i,
+    'An enabled build must post only to the first-party intake Function.');
+  assert.doesNotMatch(home, /<form\b[^>]*\binert\b/i);
+  assert.match(home, /Free preview requests are open\./i);
+  assert.match(home, /<button class="btn black" type="submit" id="submit">Request Free Preview<\/button>/);
+  assert.match(home, /id="turnstileWidget"/);
+  assert.match(home, /https:\/\/challenges\.cloudflare\.com\/turnstile\/v0\/api\.js\?render=explicit/);
+  assert.match(home, /action:turnstileAction,cData:ensureSubmissionRequestId\(\)/,
+    'The challenge must bind its exact action and per-submission nonce.');
+} else {
+  const form = home.match(/<form\b[^>]*\bid="projectForm"[^>]*>/i)?.[0] || '';
+  assert.match(form, /aria-disabled="true"/);
+  assert.match(form, /data-intake-enabled="false"/);
+  assert.match(form, /\binert\b/);
+  assert.doesNotMatch(form, /\baction=|\bmethod=/i,
+    'A closed build must strip both the intake endpoint and POST method.');
+  assert.doesNotMatch(home, /\/api\/intake\/submit/i);
+  assert.match(home, /Free preview requests are paused\./i);
+  assert.match(home, /<button class="btn black" type="submit" id="submit" disabled>Request Free Preview<\/button>/);
+  assert.doesNotMatch(home, /id="turnstileWidget"|challenges\.cloudflare\.com\/turnstile/,
+    'A closed or unconfigured build must not load the challenge provider.');
+}
 const intakeCtas = [...home.matchAll(/<a\b[^>]*\bdata-intake-cta\b[^>]*>[\s\S]*?<\/a>/g)].map((match) => match[0]);
 assert.equal(intakeCtas.length, 2, 'The homepage must expose exactly two intake actions.');
 for (const cta of intakeCtas) {
@@ -54,13 +79,11 @@ assert.doesNotMatch(home, /Email ARC/i, 'The homepage must not advertise an emai
 const intakeStatus = home.match(/<div\b[^>]*\bid="intakeStatus"[^>]*>[\s\S]*?<\/div>/)?.[0] || '';
 assert.match(intakeStatus, /\brole="status"/);
 assert.match(intakeStatus, /\baria-live="polite"/);
-assert.match(intakeStatus, /Free preview requests are open\./i,
-  'The production page must plainly disclose that preview requests are open.');
-assert.match(home, /<form\b[^>]*\baria-disabled="false"[^>]*\bdata-intake-enabled="true"/i,
-  'The production form must remain active and semantically enabled.');
-assert.match(home, /See Your New Website Before You Pay\./i,
+assert.match(intakeStatus, intakeBuildEnabled ? /Free preview requests are open\./i : /Free preview requests are paused\./i,
+  'The production page must plainly disclose its compiled intake state.');
+assert.match(home, /See Your Website Before You Pay\./i,
   'The homepage must lead with the preview-before-payment promise.');
-assert.match(home, /Get a custom five-page preview free\. Approve it, then pay\./i,
+assert.match(home, /We build it first\. Pay only if you approve\./i,
   'The homepage must explain the free-preview and approval-first flow.');
 for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta', 'privacy-note', 'process-note', 'review-confirm']) {
   assert.doesNotMatch(home, new RegExp(`class="[^"]*\\b${removedClass}\\b`), `${removedClass} clutter must not render on the homepage.`);
@@ -68,8 +91,8 @@ for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta
 assert.doesNotMatch(home, /Secure Stripe checkout after preview approval\./,
   'The footer must not repeat sales-flow fine print.');
 assert.match(intakeBuildMarker, /schema: 'arc-intake-build-marker-v1'/);
-assert.match(intakeBuildMarker, /intake_enabled: false/,
-  'The unused advanced Function bundle must remain fail-closed by default.');
+assert.match(intakeBuildMarker, new RegExp(`intake_enabled: ${intakeBuildEnabled}`),
+  'The bundled Function marker must match the compiled public form state.');
 assert.match(activationBuildIdentity, /"deployment_sha": null/,
   'A local/default build without COMMIT_REF must leave activation authority fail-closed.');
 assert.match(home, /data-analytics-build-enabled="false"/,

@@ -13,21 +13,36 @@
   ],
   "profiles": {
     "sandbox": {
-      "minimum_stage": "CLAIM_SANDBOX",
+      "minimum_stage": "EMAIL_SANDBOX",
       "stripe_key_mode": "test",
       "blocked_controls": [],
       "flags": {
+        "ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED": "false",
+        "ARC_ARC2_CLAIM_LINK_RENEWAL_ENABLED": "false",
+        "ARC_ARC2_FINAL_DELIVERY_EMAIL_ENABLED": "false",
         "ARC_ADULT_OPERATOR_VERIFIED": "false",
         "ARC_ALLOW_TEST_MODE_EVENTS": "true",
         "ARC_BUSINESS_LICENSE_VERIFIED": "false",
+        "ARC_EMAIL_RECIPIENT_VAULT_ENABLED": "true",
+        "ARC_FIRST_PARTY_RETENTION_ENABLED": "false",
         "ARC_HANDOFF_ENABLED": "false",
+        "ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED": "true",
+        "ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED": "true",
+        "ARC_INTAKE_EMAIL_VERIFICATION_ENABLED": "false",
+        "ARC_OPERATIONS_AUDIT_ENABLED": "false",
+        "ARC_OPERATIONS_ALERT_DELIVERY_ENABLED": "false",
         "ARC_PAYMENT_ARC2_BRIDGE_ENABLED": "true",
         "ARC_PAYMENT_ARC2_WORKER_ENABLED": "true",
+        "ARC_RESEND_SEND_ENABLED": "true",
+        "ARC_RESEND_WEBHOOK_ENABLED": "true",
         "ARC_REVIEW_CHECKOUT_ENABLED": "true",
         "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED": "true",
         "ARC_REVIEW_EMAIL_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED": "true",
         "ARC_REVIEW_PORTAL_ENABLED": "true",
         "ARC_REVIEW_REVISION_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_ACTIVATION_RUNTIME_READBACK_ENABLED": "false",
         "ARC_RUNTIME_ENVIRONMENT": "sandbox",
         "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED": "true",
         "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED": "false",
@@ -39,6 +54,9 @@
         "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED": "true",
         "ARC_STRIPE_REVIEW_REVOCATION_ENABLED": "true",
         "ARC_TAX_REGISTRATION_VERIFIED": "false",
+        "ARC_TRANSACTIONAL_EMAIL_ENABLED": "true",
+        "ARC_TRANSACTIONAL_EMAIL_RETENTION_ENABLED": "false",
+        "ARC_TRANSACTIONAL_EMAIL_WORKER_ENABLED": "true",
         "ARC_TRANSACTIONAL_EMAIL_VERIFIED": "false"
       }
     },
@@ -46,17 +64,32 @@
       "minimum_stage": "LIVE_CHECKOUT",
       "stripe_key_mode": "live",
       "flags": {
+        "ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED": "true",
+        "ARC_ARC2_CLAIM_LINK_RENEWAL_ENABLED": "true",
+        "ARC_ARC2_FINAL_DELIVERY_EMAIL_ENABLED": "true",
         "ARC_ADULT_OPERATOR_VERIFIED": "true",
         "ARC_ALLOW_TEST_MODE_EVENTS": "false",
         "ARC_BUSINESS_LICENSE_VERIFIED": "true",
+        "ARC_EMAIL_RECIPIENT_VAULT_ENABLED": "true",
+        "ARC_FIRST_PARTY_RETENTION_ENABLED": "true",
         "ARC_HANDOFF_ENABLED": "true",
+        "ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED": "true",
+        "ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED": "true",
+        "ARC_INTAKE_EMAIL_VERIFICATION_ENABLED": "true",
+        "ARC_OPERATIONS_AUDIT_ENABLED": "true",
+        "ARC_OPERATIONS_ALERT_DELIVERY_ENABLED": "false",
         "ARC_PAYMENT_ARC2_BRIDGE_ENABLED": "true",
         "ARC_PAYMENT_ARC2_WORKER_ENABLED": "true",
+        "ARC_RESEND_SEND_ENABLED": "true",
+        "ARC_RESEND_WEBHOOK_ENABLED": "true",
         "ARC_REVIEW_CHECKOUT_ENABLED": "true",
         "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED": "true",
         "ARC_REVIEW_EMAIL_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED": "true",
+        "ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED": "true",
         "ARC_REVIEW_PORTAL_ENABLED": "true",
         "ARC_REVIEW_REVISION_OUTBOX_ENABLED": "true",
+        "ARC_REVIEW_ACTIVATION_RUNTIME_READBACK_ENABLED": "true",
         "ARC_RUNTIME_ENVIRONMENT": "production",
         "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED": "true",
         "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED": "true",
@@ -68,23 +101,50 @@
         "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED": "true",
         "ARC_STRIPE_REVIEW_REVOCATION_ENABLED": "true",
         "ARC_TAX_REGISTRATION_VERIFIED": "true",
+        "ARC_TRANSACTIONAL_EMAIL_ENABLED": "true",
+        "ARC_TRANSACTIONAL_EMAIL_RETENTION_ENABLED": "true",
+        "ARC_TRANSACTIONAL_EMAIL_WORKER_ENABLED": "true",
         "ARC_TRANSACTIONAL_EMAIL_VERIFIED": "true"
       },
-      "blocked_controls": []
+      "blocked_controls": [
+        "RETENTION_PROVIDER_CASCADE_EVIDENCE",
+        "INTAKE_ABUSE_PROTECTION_EVIDENCE",
+        "ARC2_RECIPIENT_LIFECYCLE_EVIDENCE",
+        "ARC2_NEGATIVE_STATE_EVIDENCE",
+        "NETLIFY_HANDOFF_CREDENTIAL_EVIDENCE",
+        "OPERATIONS_ALERT_PROVIDER_EVIDENCE",
+        "STRIPE_WEBHOOK_UNIFIED_DESTINATION_EVIDENCE",
+        "LIVE_PROVIDER_E2E_EVIDENCE"
+      ]
     }
   },
   "activation_flags": [
+    "ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED",
+    "ARC_ARC2_CLAIM_LINK_RENEWAL_ENABLED",
+    "ARC_ARC2_FINAL_DELIVERY_EMAIL_ENABLED",
     "ARC_ADULT_OPERATOR_VERIFIED",
     "ARC_ALLOW_TEST_MODE_EVENTS",
     "ARC_BUSINESS_LICENSE_VERIFIED",
+    "ARC_EMAIL_RECIPIENT_VAULT_ENABLED",
+    "ARC_FIRST_PARTY_RETENTION_ENABLED",
     "ARC_HANDOFF_ENABLED",
+    "ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED",
+    "ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED",
+    "ARC_INTAKE_EMAIL_VERIFICATION_ENABLED",
+    "ARC_OPERATIONS_AUDIT_ENABLED",
+    "ARC_OPERATIONS_ALERT_DELIVERY_ENABLED",
     "ARC_PAYMENT_ARC2_BRIDGE_ENABLED",
     "ARC_PAYMENT_ARC2_WORKER_ENABLED",
+    "ARC_RESEND_SEND_ENABLED",
+    "ARC_RESEND_WEBHOOK_ENABLED",
     "ARC_REVIEW_CHECKOUT_ENABLED",
     "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED",
     "ARC_REVIEW_EMAIL_OUTBOX_ENABLED",
+    "ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED",
+    "ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED",
     "ARC_REVIEW_PORTAL_ENABLED",
     "ARC_REVIEW_REVISION_OUTBOX_ENABLED",
+    "ARC_REVIEW_ACTIVATION_RUNTIME_READBACK_ENABLED",
     "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED",
     "ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED",
     "ARC_STRIPE_LIVE_MODE_ENABLED",
@@ -95,6 +155,9 @@
     "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED",
     "ARC_STRIPE_REVIEW_REVOCATION_ENABLED",
     "ARC_TAX_REGISTRATION_VERIFIED",
+    "ARC_TRANSACTIONAL_EMAIL_ENABLED",
+    "ARC_TRANSACTIONAL_EMAIL_RETENTION_ENABLED",
+    "ARC_TRANSACTIONAL_EMAIL_WORKER_ENABLED",
     "ARC_TRANSACTIONAL_EMAIL_VERIFIED"
   ],
   "secrets": [
@@ -212,12 +275,197 @@
       "name": "ARC_PAYMENT_ARC2_WORKER_SECRET",
       "authority": "netlify_runtime",
       "consumers": ["netlify_functions", "zapier_payment_arc2_worker"]
+    },
+    {
+      "name": "ARC_FINAL_DELIVERY_RECEIPT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_arc2_email_worker", "netlify_final_delivery_ack"]
+    },
+    {
+      "name": "ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker", "netlify_resend_webhook"]
+    },
+    {
+      "name": "ARC_INTAKE_CONFIRMATION_OUTBOX_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_intake", "netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_INTAKE_CONFIRMATION_CONSUMER_BEARER",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_INTAKE_CONFIRMATION_RECEIPT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_intake", "netlify_arc1_dispatch", "netlify_arc1_delivery"]
+    },
+    {
+      "name": "ARC_INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_intake", "netlify_email_verification"]
+    },
+    {
+      "name": "ARC_INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_intake", "netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_arc1_delivery"]
+    },
+    {
+      "name": "ARC_OPERATIONS_AUDIT_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": [
+        "netlify_operations_audit",
+        "netlify_first_party_retention_worker",
+        "operations_audit_scheduler"
+      ],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_INTAKE_ABUSE_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_intake_abuse_control", "netlify_first_party_retention_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_HANDOFF_STATE_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_handoff", "netlify_first_party_retention_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_EMAIL_CLAIM_BINDING_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_handoff", "netlify_first_party_retention_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": [
+        "netlify_intake_submit",
+        "netlify_review_exchange",
+        "netlify_review_email_prepare",
+        "netlify_review_email_reserve",
+        "netlify_review_email_ack",
+        "netlify_review_decision",
+        "netlify_review_revision_claim",
+        "netlify_review_revision_complete",
+        "netlify_review_checkout",
+        "netlify_stripe_unified_webhook",
+        "netlify_stripe_reversal_binding",
+        "netlify_stripe_reversal_recheck",
+        "netlify_payment_arc2_worker",
+        "netlify_arc2_handoff_start",
+        "netlify_arc2_claim",
+        "netlify_arc2_claim_webhook",
+        "netlify_arc2_claim_invitation_ready",
+        "netlify_arc2_claim_invitation_renew",
+        "netlify_arc2_claim_link_renew",
+        "netlify_arc2_final_delivery_ack",
+        "netlify_resend_webhook",
+        "netlify_transactional_email_worker",
+        "netlify_operations_audit",
+        "netlify_operations_alert_reserve",
+        "netlify_operations_alert_ack",
+        "netlify_legal_hold_writer",
+        "netlify_first_party_retention_worker"
+      ]
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_first_party_retention_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_legal_hold_writer"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_operations_audit", "netlify_first_party_retention_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_DELIVERY_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_operations_alert_worker"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_DELIVERY_BEARER",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_operations_alert_worker", "operations_alert_sender"],
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_RESEND_API_KEY",
+      "authority": "resend",
+      "consumers": ["netlify_transactional_email_worker"]
+    },
+    {
+      "name": "ARC_RESEND_WEBHOOK_SECRET",
+      "authority": "resend",
+      "consumers": ["netlify_resend_webhook"]
+    },
+    {
+      "name": "ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_review_email_resend_worker"]
+    },
+    {
+      "name": "ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET",
+      "authority": "netlify_runtime",
+      "consumers": ["netlify_transactional_email_worker", "netlify_resend_webhook"]
+    }
+  ],
+  "secret_alias_groups": [
+    {
+      "canonical": "NETLIFY_ADMIN_PAT",
+      "aliases": ["NETLIFY_ACCESS_TOKEN"],
+      "policy": "exactly_one",
+      "authority": "netlify",
+      "consumers": ["netlify_handoff"]
     }
   ],
   "bindings": [
     {
       "name": "ARC_EXPECTED_NETLIFY_SITE_ID",
       "format": "uuid"
+    },
+    {
+      "name": "ARC_REVIEW_ACTIVATION_VERIFIER_URL",
+      "format": "canonical_https_url",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_REVIEW_ACTIVATION_VERIFIER_ED25519_PUBLIC_KEY",
+      "format": "ed25519_spki_base64",
+      "modes": ["production"]
     },
     {
       "name": "ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256",
@@ -268,6 +516,10 @@
       "format": "exact_public_origin"
     },
     {
+      "name": "URL",
+      "format": "exact_public_origin"
+    },
+    {
       "name": "ARC_REVIEW_PREVIEW_ORIGIN",
       "format": "exact_preview_origin"
     },
@@ -278,6 +530,48 @@
     {
       "name": "ARC_REVIEW_EMAIL_PROVIDER",
       "format": "provider_slug"
+    },
+    {
+      "name": "ARC_RESEND_FROM",
+      "format": "email_sender"
+    },
+    {
+      "name": "ARC_RESEND_PROVIDER_ACCOUNT_ID",
+      "format": "provider_account_id"
+    },
+    {
+      "name": "ARC_TRANSACTIONAL_EMAIL_RETENTION_DAYS",
+      "format": "retention_days"
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_UNPAID_DAYS",
+      "format": "first_party_unpaid_days",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_PAID_DAYS",
+      "format": "first_party_paid_days",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_FIRST_PARTY_RETENTION_RECEIPT",
+      "format": "first_party_retention_receipt",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_RECIPIENT_EMAIL",
+      "format": "email_recipient",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_EMAIL_PROVIDER",
+      "format": "provider_slug",
+      "modes": ["production"]
+    },
+    {
+      "name": "ARC_OPERATIONS_ALERT_SENDER",
+      "format": "email_sender",
+      "modes": ["production"]
     },
     {
       "name": "ARC_REVIEW_EMAIL_PROVIDER_ACCOUNT_ID_SHA256",
@@ -332,7 +626,44 @@
       { "method": "POST", "path": "/internal/payment-arc2/claim", "claim_next_fields": ["claim_token"] },
       { "method": "POST", "path": "/internal/payment-arc2/start" },
       { "method": "POST", "path": "/internal/payment-arc2/complete" }
+    ],
+    "stripe_webhook": [
+      { "method": "POST", "path": "/internal/stripe/reversal-webhook" }
+    ],
+    "operations_alert": [
+      { "method": "POST", "path": "/internal/operations/audit" },
+      { "method": "POST", "path": "/api/internal/operations-alert/reserve" },
+      { "method": "POST", "path": "/api/internal/operations-alert/ack" }
+    ],
+    "retention_control": [
+      { "method": "POST", "path": "/api/internal/retention/legal-hold" }
     ]
+  },
+  "stripe_webhook": {
+    "endpoint_path": "/internal/stripe/reversal-webhook",
+    "api_version": "2026-07-29.dahlia",
+    "signing_secret_environment_name": "ARC_STRIPE_WEBHOOK_SIGNING_SECRET",
+    "destination_policy": "one-per-mode",
+    "events": [
+      "checkout.session.completed",
+      "checkout.session.async_payment_succeeded",
+      "checkout.session.async_payment_failed",
+      "checkout.session.expired",
+      "refund.created",
+      "refund.updated",
+      "refund.failed",
+      "charge.refunded",
+      "charge.dispute.created",
+      "charge.dispute.updated",
+      "charge.dispute.closed",
+      "charge.dispute.funds_withdrawn",
+      "charge.dispute.funds_reinstated"
+    ]
+  },
+  "operations_alert": {
+    "provider_event_type": "email.delivered",
+    "failure_alert_verified": false,
+    "native_delivery_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "readback": {
     "env_name": "ARC_REVIEW_ACTIVATION_READBACK_JSON",
@@ -347,6 +678,7 @@
       "stripe.checkout_session_expire_capability_readback_sha256",
       "stripe.checkout_session_retrieve_capability_readback_sha256",
       "stripe.webhook_destination_readback_sha256",
+      "stripe.webhook_event_set_readback_sha256",
       "email.native_webhook_readback_sha256",
       "email.native_suppression_readback_sha256",
       "email.sandbox_delivery_receipt_sha256",

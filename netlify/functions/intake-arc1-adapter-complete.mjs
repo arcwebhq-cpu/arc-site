@@ -7,9 +7,11 @@ import {
   INTAKE_ARC1_ADAPTER_MAX_CONTROL_BYTES,
   INTAKE_ARC1_ADAPTER_STORE,
   INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV,
+  arc1AdapterProtocolEnabled,
   authorizeArc1AdapterConsumer,
   completeArc1AdapterConsumer,
 } from '../lib/intake-arc1-adapter-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const headers = Object.freeze({
   'Cache-Control': 'no-store',
@@ -68,7 +70,14 @@ export function createIntakeArc1AdapterCompletionHandler() {
   };
 }
 
-export default createIntakeArc1AdapterCompletionHandler();
+const handler = createIntakeArc1AdapterCompletionHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-adapter-complete',
+  paths: ['/internal/intake/arc1/adapter/complete'],
+  active: ({ env }) => publicIntakeAuthorityReady(env) && arc1AdapterProtocolEnabled(env),
+  handler,
+});
 // Netlify extracts route configuration at build time, so keep these values literal.
 export const config = {
   path: '/internal/intake/arc1/adapter/complete', method: 'POST',

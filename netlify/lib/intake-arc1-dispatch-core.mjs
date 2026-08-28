@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { normalizeStoredIntakeSubmissionForBridge, validateIntakeSubmissionForBridge } from './intake-arc1-bridge-core.mjs';
+import { intakeEmailVerificationDispatchReady } from './intake-email-verification-core.mjs';
 
 export const INTAKE_ARC1_DISPATCH_ENABLED_ENV = 'ARC_INTAKE_ARC1_DISPATCH_ENABLED';
 export const INTAKE_ARC1_DISPATCH_TIMEOUT_MS = 5_000;
@@ -160,6 +161,9 @@ export async function dispatchIntakeToArc1Background(submissionId, request, env,
   const key = `submissions/${submissionId}`;
   let entry = await readRecord(store, key);
   if (!entry) throw new Error('ARC1_DISPATCH_SOURCE_MISSING');
+  if (!await intakeEmailVerificationDispatchReady(entry.record, env, store, { clock })) {
+    return { state: 'AWAITING_EMAIL_VERIFICATION' };
+  }
   const force = adapters.force === true;
   if (entry.record.arc1_dispatch.status === 'DEAD_LETTER') return { state: 'DEAD_LETTER', idempotentReplay: true };
   if (entry.record.arc1_dispatch.status === 'ACCEPTED' && !force) return { state: 'ACCEPTED', idempotentReplay: true };

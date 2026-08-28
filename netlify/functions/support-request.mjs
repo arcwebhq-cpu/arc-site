@@ -8,6 +8,7 @@ import {
   SUPPORT_REQUEST_STORE,
   SUPPORT_RESPONSE_SCHEMA,
 } from '../lib/support-request-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const ALLOWED_ORIGINS = new Set(['https://arcweb.onl', 'https://arcsites.netlify.app']);
 
@@ -37,6 +38,13 @@ export function createSupportRequestHandler() {
     if (!requestAllowed(request)) return response(403, { error: 'forbidden' });
     if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
       return response(415, { error: 'json_required' });
+    }
+    const declared = request.headers.get('content-length');
+    if (declared !== null && (!/^\d{1,8}$/.test(declared) || Number(declared) > SUPPORT_MAX_REQUEST_BYTES)) {
+      return response(Number(declared) > SUPPORT_MAX_REQUEST_BYTES ? 413 : 400, {
+        error: Number(declared) > SUPPORT_MAX_REQUEST_BYTES
+          ? 'support_request_too_large' : 'invalid_support_request',
+      });
     }
 
     try {
@@ -73,7 +81,23 @@ export function createSupportRequestHandler() {
   };
 }
 
-export default createSupportRequestHandler();
+function requestMayMutate(request) {
+  if (!requestAllowed(request) ||
+      (request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+    return false;
+  }
+  const declared = request.headers.get('content-length');
+  return declared === null || /^\d{1,8}$/.test(declared) && Number(declared) <= SUPPORT_MAX_REQUEST_BYTES;
+}
+
+const handler = createSupportRequestHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'support-request',
+  paths: ['/api/support/request'],
+  active: ({ request }) => requestMayMutate(request),
+  handler,
+});
 
 export const config = {
   path: '/api/support/request', method: 'POST',

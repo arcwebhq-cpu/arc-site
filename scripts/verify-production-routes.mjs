@@ -6,6 +6,7 @@ import { fetchAndVerifyWithRetries } from './lib/verify-production-route-retry.m
 
 const expectedDeploySha = (process.env.ARC_EXPECTED_DEPLOY_SHA || '').trim();
 assert.match(expectedDeploySha, /^[a-f0-9]{40}$/, 'ARC_EXPECTED_DEPLOY_SHA must be the exact main commit SHA.');
+const intakeBuildEnabled = process.env.ARC_BUILD_INTAKE_ENABLED === 'true';
 
 const origin = 'https://arcweb.onl';
 const metadataUrl = 'https://api.netlify.com/api/v1/sites/arcsites.netlify.app';
@@ -106,12 +107,21 @@ await Promise.all([
         assert.equal(sha256(remoteBytes), sha256(localBytes), `${path} must match the tested build byte-for-byte.`);
         if (path === '/') {
           const home = remoteBytes.toString('utf8');
-          assert.match(home, /<form\b[^>]*action="\/thank-you\/"[^>]*data-intake-enabled="true"[^>]*data-netlify="true"[^>]*method="POST"[^>]*name="arc-preview"[^>]*netlify-honeypot="bot-field"/i,
-            'Production must expose the active native ARC preview form.');
-          assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/,
-            'Production must publish the exact form name consumed by ARC1.');
-          assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
-            'Production intake must not depend on the unused first-party readiness path.');
+          assert.doesNotMatch(home, /\bdata-netlify\b|\bnetlify-honeypot\b|name="form-name"|name="arc-preview"/i,
+            'Production must not register a bypassing native Netlify form.');
+          if (intakeBuildEnabled) {
+            assert.match(home, /<form\b[^>]*action="\/api\/intake\/submit"[^>]*aria-disabled="false"[^>]*data-intake-enabled="true"[^>]*method="POST"/i,
+              'An enabled production build must post only to the first-party intake Function.');
+            assert.match(home, /Free preview requests are open\./i);
+          } else {
+            const form = home.match(/<form\b[^>]*\bid="projectForm"[^>]*>/i)?.[0] || '';
+            assert.match(form, /aria-disabled="true"/);
+            assert.match(form, /data-intake-enabled="false"/);
+            assert.match(form, /\binert\b/);
+            assert.doesNotMatch(form, /\baction=|\bmethod=/i);
+            assert.doesNotMatch(home, /\/api\/intake\/submit/i);
+            assert.match(home, /Free preview requests are paused\./i);
+          }
         }
       },
     });

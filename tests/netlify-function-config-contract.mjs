@@ -107,6 +107,7 @@ function literalValues(value, file, property) {
 }
 
 let routedFunctions = 0;
+let scheduledFunctions = 0;
 for (const file of (await readdir(functionDirectory)).filter(name => name.endsWith('.mjs')).sort()) {
   const source = await readFile(new URL(file, functionDirectory), 'utf8');
   const rawConfig = configObject(source, file);
@@ -116,10 +117,17 @@ for (const file of (await readdir(functionDirectory)).filter(name => name.endsWi
   const pathValue = propertyValue(config, 'path');
   const methodValue = propertyValue(config, 'method');
   const backgroundValue = propertyValue(config, 'background');
+  const scheduleValue = propertyValue(config, 'schedule');
   if (!pathValue) {
-    assert.equal(backgroundValue, 'true',
-      `${file} must declare an inline custom path unless it is an explicit background-only Function.`);
+    const backgroundOnly = backgroundValue === 'true' && scheduleValue === null;
+    const scheduledOnly = backgroundValue === null && scheduleValue !== null;
+    assert.equal(backgroundOnly || scheduledOnly, true,
+      `${file} must declare an inline custom path unless it is an explicit background-only or scheduled Function.`);
     assert.equal(methodValue, null, `${file} must not declare a method without an inline custom path.`);
+    if (scheduledOnly) {
+      literalValues(scheduleValue, file, 'schedule');
+      scheduledFunctions += 1;
+    }
     continue;
   }
 
@@ -134,5 +142,6 @@ for (const file of (await readdir(functionDirectory)).filter(name => name.endsWi
   }
 }
 
-assert.equal(routedFunctions, 36, 'The reviewed ARC custom-route count changed; inspect every added or removed Function.');
-console.log(`ARC Netlify Function config contract passed for ${routedFunctions} custom-routed functions.`);
+assert.equal(routedFunctions, 45, 'The reviewed ARC custom-route count changed; inspect every added or removed Function.');
+assert.equal(scheduledFunctions, 4, 'The reviewed ARC scheduled-Function count changed; inspect every added or removed schedule.');
+console.log(`ARC Netlify Function config contract passed for ${routedFunctions} custom routes and ${scheduledFunctions} schedule.`);

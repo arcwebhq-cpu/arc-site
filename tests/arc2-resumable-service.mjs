@@ -7,6 +7,7 @@ import {
   leadRouteReceiptContract,
   markClaimInvitationReady,
   renewClaimInvitation,
+  renewClaimInvitationFromExpiredBearer,
 } from '../netlify/lib/arc2-handoff-service.mjs';
 
 class FakeStore {
@@ -29,6 +30,7 @@ const now = new Date('2026-08-12T20:00:00.000Z');
 const handoffId = 'a'.repeat(64);
 const env = {
   ARC_CLAIM_TOKEN_SECRET: 'claim-token-secret-unique-0123456789abcdef',
+  ARC_HANDOFF_STATE_SECRET: 'handoff-state-secret-unique-0123456789abcdef',
   ARC_LEAD_ROUTE_EVIDENCE_SECRET: 'route-evidence-secret-unique-0123456789abcdef',
   ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-binding-secret-unique-0123456789abcdef',
   NETLIFY_OAUTH_CLIENT_ID: 'oauth-client-123',
@@ -265,6 +267,83 @@ assert.equal(legacyExchanged.record.netlify_site_name, `arc-${'c'.repeat(24)}`,
 const renewalStore = new FakeStore();
 renewalStore.values = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
 renewalStore.sequence = store.sequence;
+const customerRenewalStore = new FakeStore();
+customerRenewalStore.values = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
+customerRenewalStore.sequence = store.sequence;
+let customerRenewalGuardCalls = 0;
+let customerRenewalAuthority;
+const customerRenewalOperationId = 'arc2-customer-renew-attempt-0001';
+const customerRenewed = await renewClaimInvitationFromExpiredBearer(
+  handoffId,
+  issued.claimBearer,
+  env,
+  {
+    store: customerRenewalStore,
+    clock: () => new Date(now.getTime() + 30 * 60_000),
+    assertRenewalEmailAllowed: async (authority) => {
+      customerRenewalGuardCalls += 1;
+      customerRenewalAuthority = authority;
+    },
+    renewalOperationId: customerRenewalOperationId,
+  },
+);
+assert.equal(customerRenewalGuardCalls, 1, 'Customer recovery must run its recipient/suppression guard once.');
+assert.equal(customerRenewalAuthority.claim_invitation_generation, issued.record.claim_invitation_generation);
+assert.equal(customerRenewed.claim_invitation_generation, issued.record.claim_invitation_generation + 1);
+assert.notEqual(customerRenewed.job_key, customerRenewed.previous_job_key,
+  'Customer recovery must create a distinct email job and Resend attempt authority.');
+const customerRenewalReplay = await renewClaimInvitationFromExpiredBearer(
+  handoffId,
+  issued.claimBearer,
+  env,
+  {
+    store: customerRenewalStore,
+    clock: () => new Date(now.getTime() + 30 * 60_000 + 1),
+    assertRenewalEmailAllowed: async (authority) => {
+      customerRenewalGuardCalls += 1;
+      assert.deepEqual(authority, customerRenewalAuthority);
+    },
+    renewalOperationId: customerRenewalOperationId,
+  },
+);
+assert.equal(customerRenewalReplay.idempotent_replay, true);
+assert.deepEqual({ ...customerRenewalReplay, idempotent_replay: false }, customerRenewed,
+  'An exact old-bearer retry after response loss must reproduce the accepted renewal authority.');
+assert.equal(customerRenewalGuardCalls, 2,
+  'An exact replay must recheck recipient and suppression authority without rotating again.');
+await assert.rejects(exchangeClaimBearer(handoffId, issued.claimBearer, env, {
+  store: customerRenewalStore,
+  clock: () => new Date(now.getTime() + 30 * 60_000 + 1),
+}), /BEARER_INVALID/, 'Customer recovery must reject the superseded bearer immediately.');
+await assert.rejects(renewClaimInvitationFromExpiredBearer(
+  handoffId,
+  issued.claimBearer,
+  env,
+  {
+    store: customerRenewalStore,
+    clock: () => new Date(now.getTime() + 30 * 60_000 + 1),
+    assertRenewalEmailAllowed: async () => { customerRenewalGuardCalls += 1; },
+  },
+), /BEARER_INVALID/, 'One expired bearer must not rotate more than one generation.');
+assert.equal(customerRenewalGuardCalls, 2, 'A superseded bearer must fail before another email guard or send.');
+
+const suppressedRenewalStore = new FakeStore();
+suppressedRenewalStore.values = new Map([...store.values.entries()].map(([key, value]) => [key, structuredClone(value)]));
+suppressedRenewalStore.sequence = store.sequence;
+const suppressedSnapshot = JSON.stringify([...suppressedRenewalStore.values.entries()]);
+await assert.rejects(renewClaimInvitationFromExpiredBearer(
+  handoffId,
+  issued.claimBearer,
+  env,
+  {
+    store: suppressedRenewalStore,
+    clock: () => new Date(now.getTime() + 30 * 60_000),
+    assertRenewalEmailAllowed: async () => { throw new Error('ARC2_CLAIM_RENEWAL_RECIPIENT_SUPPRESSED'); },
+  },
+), /RECIPIENT_SUPPRESSED/);
+assert.equal(JSON.stringify([...suppressedRenewalStore.values.entries()]), suppressedSnapshot,
+  'Suppression must block customer recovery before bearer or outbox state changes.');
+
 const renewed = await markClaimInvitationReady(handoffId, evidence, signature, env, {
   store: renewalStore, clock: () => new Date(now.getTime() + 30 * 60_000),
 });
@@ -306,14 +385,38 @@ const abandonedStore = new FakeStore();
 abandonedStore.values = new Map([...consumedSnapshot.entries()].map(([key, value]) => [key, structuredClone(value)]));
 abandonedStore.sequence = store.sequence;
 const renewalTime = new Date(Date.parse(issued.record.claim_token_expires_at) + 1);
+const renewalOperationId = 'arc2-invitation-renew-attempt-0001';
 const [abandonedRenewed, abandonedRaced] = await Promise.all([
-  renewClaimInvitation(handoffId, env, { store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse }),
-  renewClaimInvitation(handoffId, env, { store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse }),
+  renewClaimInvitation(handoffId, env, {
+    store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse,
+    renewalOperationId,
+  }),
+  renewClaimInvitation(handoffId, env, {
+    store: abandonedStore, clock: () => renewalTime, fetch: sourceOwnedSiteResponse,
+    renewalOperationId,
+  }),
 ]);
 assert.equal(abandonedRenewed.claimBearer, abandonedRaced.claimBearer,
   'Concurrent abandoned-wrapper renewal must converge on one current generation.');
 assert.equal(abandonedRenewed.record.state, 'INVITATION_READY');
 assert.equal(abandonedRenewed.record.claim_invitation_generation, issued.record.claim_invitation_generation + 1);
+const lostRenewalResponseReplay = await renewClaimInvitation(handoffId, env, {
+  store: abandonedStore,
+  clock: () => new Date(renewalTime.getTime() + 1),
+  fetch: async () => { throw new Error('Exact renewal replay must not advance to provider state.'); },
+  renewalOperationId,
+});
+assert.equal(lostRenewalResponseReplay.claimBearer, abandonedRenewed.claimBearer,
+  'A post-marker response loss must reproduce the same private invitation bearer.');
+assert.equal(lostRenewalResponseReplay.record.claim_invitation_generation,
+  abandonedRenewed.record.claim_invitation_generation);
+assert.equal(JSON.stringify([...abandonedStore.values.values()]).includes(renewalOperationId), false,
+  'Only the renewal operation HMAC may be retained.');
+await assert.rejects(renewClaimInvitation(handoffId, env, {
+  store: abandonedStore,
+  clock: () => new Date(renewalTime.getTime() + 1),
+  renewalOperationId: 'arc2-invitation-renew-attempt-0002',
+}), /NOT_EXPIRED/, 'A different operation cannot replay another renewal credential.');
 await assert.rejects(exchangeClaimBearer(handoffId, issued.claimBearer, env, {
   store: abandonedStore, clock: () => new Date(renewalTime.getTime() + 1),
 }), /BEARER_INVALID/, 'Abandoned-wrapper renewal must invalidate the prior bearer and JWT authority.');

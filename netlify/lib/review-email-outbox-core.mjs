@@ -632,7 +632,7 @@ function signRenewal(record, env) {
   };
 }
 
-function validateRenewal(record, env) {
+export function validateReviewEmailRenewal(record, env = process.env) {
   exactKeys(record, RENEWAL_FIELDS, 'Review email renewal');
   if (record.schema !== REVIEW_EMAIL_RENEWAL_SCHEMA || record.version !== 1 ||
       !Number.isSafeInteger(record.record_revision) || record.record_revision < 1 ||
@@ -679,7 +679,7 @@ async function readRenewalEntry(store, replacedInviteHmacSha256, env) {
   const id = renewalHmac(replacedInviteHmacSha256, env);
   const entry = await store.getWithMetadata(reviewEmailRenewalKey(id),
     { type: 'json', consistency: 'strong' });
-  return entry ? { record: validateRenewal(entry.data, env), etag: entry.etag } : null;
+  return entry ? { record: validateReviewEmailRenewal(entry.data, env), etag: entry.etag } : null;
 }
 
 export async function readReviewEmailRenewal(store, replacedInviteHmacSha256, env = process.env) {

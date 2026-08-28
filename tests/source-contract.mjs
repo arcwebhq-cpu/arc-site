@@ -6,6 +6,7 @@ const [
   home,
   thankYou,
   paymentSuccess,
+  claim,
   privacy,
   terms,
   refunds,
@@ -19,6 +20,7 @@ const [
   readFile(new URL('index.html', root), 'utf8'),
   readFile(new URL('thank-you/index.html', root), 'utf8'),
   readFile(new URL('payment-success/index.html', root), 'utf8'),
+  readFile(new URL('claim/index.html', root), 'utf8'),
   readFile(new URL('privacy/index.html', root), 'utf8'),
   readFile(new URL('terms/index.html', root), 'utf8'),
   readFile(new URL('refunds/index.html', root), 'utf8'),
@@ -30,12 +32,13 @@ const [
   readFile(new URL('scripts/build-site.mjs', root), 'utf8'),
 ]);
 const packageJson = JSON.parse(packageText);
+const claimScript = await readFile(new URL('claim/claim.js', root), 'utf8');
 
 // Public metadata and navigation.
 assert.match(home, /<html lang="en">/);
 assert.match(home, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
 assert.match(home, /<title>ARC — Free Website Preview<\/title>/);
-assert.match(home, /<meta name="description" content="Get a free five-page website preview by email\. Pay only if you approve it\.">/);
+assert.match(home, /<meta name="description" content="See your website before you pay\. Get a free five-page preview by email\.">/);
 assert.match(home, /<link rel="canonical" href="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:url" content="https:\/\/arcweb\.onl\/">/);
 assert.match(home, /<meta property="og:image" content="https:\/\/arcweb\.onl\/assets\/arc-social-card\.png">/);
@@ -56,10 +59,10 @@ for (const path of ['/support/', '/service-scope/', '/terms/', '/privacy/', '/re
 
 // The homepage has one plain customer journey: free preview, email delivery,
 // approval, payment, launch, and ownership.
-assert.match(home, /<h1>See Your New Website Before You Pay\.<\/h1>/);
-assert.match(home, /Get a custom five-page preview free\. Approve it, then pay\./);
+assert.match(home, /<h1>See Your Website Before You Pay\.<\/h1>/);
+assert.match(home, /We build it first\. Pay only if you approve\./);
 assert.match(home, /<h2>Get your free preview\.<\/h2>/);
-assert.match(home, /We(?:’|')ll email your five-page preview\. Pay only if you approve\./);
+assert.match(home, /Tell us about your business\. Confirm your email, then get the preview\./);
 assert.match(home, /<div class="step"><b>1<\/b><h3>Free Preview<\/h3><\/div>/);
 assert.match(home, /<div class="step"><b>2<\/b><h3>Approve &amp; Pay<\/h3><\/div>/);
 assert.match(home, /<div class="step"><b>3<\/b><h3>Launch &amp; Own<\/h3><\/div>/);
@@ -85,8 +88,8 @@ assert.match(home, /One clear lead path\.[\s\S]*?A form, booking link, order lin
 assert.match(home, /Ready to launch\.[\s\S]*?Responsive build, basic accessibility, metadata, and launch setup\./);
 assert.match(home, /See it first\.[\s\S]*?Review all five preview pages before deciding to buy\./);
 assert.match(home, /You own it\.[\s\S]*?Ownership after payment, plus 30 days of launch bug support\./);
-assert.match(home, /\$5,000 USD once\. Pay only if you approve\. Your ownership handoff starts automatically after payment\./);
-assert.match(home, /Extra pages, domain, hosting, paid tools, ecommerce, and ongoing service cost extra\./);
+assert.match(home, /\$5,000 USD \+ applicable tax, only if you approve\. Handoff starts after payment\./);
+assert.match(home, /Extra pages, domain, hosting, ecommerce, and paid tools cost more\./);
 assert.doesNotMatch(home, /bank or card issuer|currency conversion|destination address/i,
   'Detailed purchase caveats belong on policy pages, not the sales homepage.');
 assert.doesNotMatch(home, /\$500\s*\/\s*(?:mo|month)|monthly maintenance/i);
@@ -96,23 +99,24 @@ for (const removedClass of ['showcase-stamp', 'tags', 'form-promise', 'form-meta
     `Homepage clutter class ${removedClass} must stay removed.`);
 }
 
-// The production form is a native Netlify form so the existing ARC1 provider
-// trigger receives form-name=arc-preview without a separate readiness gate.
+// The source is the enabled first-party template. The build either preserves
+// this endpoint or compiles the same page to a visibly paused, inert state.
 assert.match(home, /<div class="intake-status open" id="intakeStatus" role="status" aria-live="polite" tabindex="-1">Free preview requests are open\.<\/div>/);
-assert.match(home, /<form\b[^>]*\baction="\/thank-you\/"[^>]*\baria-disabled="false"[^>]*\bdata-intake-enabled="true"[^>]*\bdata-netlify="true"[^>]*\bmethod="POST"[^>]*\bname="arc-preview"[^>]*\bnetlify-honeypot="bot-field"[^>]*>/i);
-assert.match(home, /<input type="hidden" name="form-name" value="arc-preview">/);
+assert.match(home, /<form\b[^>]*\baction="\/api\/intake\/submit"[^>]*\baria-disabled="false"[^>]*\bdata-intake-enabled="true"[^>]*\bmethod="POST"[^>]*>/i);
+assert.doesNotMatch(home, /\bdata-netlify\b|\bnetlify-honeypot\b|name="form-name"|name="arc-preview"/i);
 assert.match(home, /<button class="btn ghost" type="button" id="prev">/);
 assert.match(home, /<button class="btn black" type="button" id="next">/);
 assert.match(home, /<button class="btn black" type="submit" id="submit">Request Free Preview<\/button>/);
 assert.match(home, /form\.addEventListener\('submit',event=>\{/);
-assert.doesNotMatch(home, /\/api\/intake\/(?:readiness|submit)/,
-  'Native intake must not depend on the unused first-party readiness path.');
+assert.doesNotMatch(home, /\/api\/intake\/readiness/,
+  'The browser must not treat public readiness UI as activation authority.');
 assert.doesNotMatch(home, /HTMLFormElement\.prototype\.submit/);
 
-// The build preserves the native form while the unused advanced Function bundle
-// retains its separate build marker and fail-closed controls.
-assert.doesNotMatch(buildScript, /Production intake could not be compiled fail-closed/);
-assert.doesNotMatch(buildScript, /action="\/api\/intake\/submit"/);
+// One build-scoped decision controls both the public form and the Function
+// marker. A closed build strips the POST endpoint and renders a paused state.
+assert.match(buildScript, /Production intake could not be compiled fail-closed/);
+assert.match(buildScript, /action="\/api\/intake\/submit"/);
+assert.match(buildScript, /Free preview requests are paused\./);
 assert.match(buildScript, /intake_enabled: \$\{intakeBuildEnabled\}/);
 assert.match(buildScript, /'support'/, 'The support route must be included in the public build allowlist.');
 
@@ -126,8 +130,8 @@ assert.match(home, /field\.setAttribute\('aria-invalid','true'\)/);
 assert.match(home, /if\(first\)\{openAncestorDetails\(first\);first\.scrollIntoView/);
 assert.match(home, /const freshConfirmationFields=new Set\(\['asset_permission','budget_confirmed','terms_accepted'\]\)/);
 assert.match(home, /I can legally use these files, and they have no watermarks\./);
-assert.match(home, /finished five-page website costs \$5,000 once, payable only if I approve the preview\./);
-assert.match(home, /I(?:’|')m authorized and accept[\s\S]{0,280}I(?:’|')m not charged today\./);
+assert.match(home, /Five pages\. \$5,000 \+ applicable tax, only if I approve\./);
+assert.match(home, /I(?:’|')m authorized and accept[\s\S]{0,280}No charge today\./);
 for (const policyPath of ['/terms/', '/privacy/', '/refunds/', '/service-scope/']) {
   assert.match(home, new RegExp(`href="${policyPath.replaceAll('/', '\\/')}"`));
 }
@@ -146,6 +150,9 @@ assert.match(home, /saved\.expiresAt<=now/);
 assert.match(thankYou, /removeItem\('arc-preview-draft-v8'\)/);
 assert.match(privacy, /not restored after seven days/i);
 assert.match(privacy, /cannot delete browser storage while the site is closed/i);
+assert.match(privacy, /Resend for automated customer transactional email/i);
+assert.match(privacy, /Gmail and Apollo\.io[\s\S]{0,180}outbound sales outreach rather than customer transactional messages/i,
+  'The privacy disclosure must separate transactional email from outreach mailboxes.');
 assert.doesNotMatch(home, /landingPath\.value=.*location\.search/);
 for (const hiddenName of ['submission_timestamp', 'submission_id', 'lead_route_status', 'terms_accepted_at']) {
   assert.doesNotMatch(home, new RegExp(`name="${hiddenName}"`));
@@ -162,23 +169,35 @@ assert.match(home, /document\.documentElement\.classList\.add\('reveal-ready'\)/
 assert.doesNotMatch(home, /function resetReveal\(|classList\.remove\('show'\)/);
 
 // Public post-request and policy pages must agree with the homepage offer.
-assert.match(thankYou, /complete, unlisted five-page ARC preview/i);
-assert.match(thankYou, /Pay only if you approve the complete website\./i);
-assert.match(paymentSuccess, /verification in progress/i);
-assert.match(paymentSuccess, /You may close this page/i);
+assert.match(thankYou, /Check your email to start your preview\./i);
+assert.match(thankYou, /Confirm it to start your build/i);
+assert.match(thankYou, /Pay only if you approve the website\./i);
+assert.match(paymentSuccess, /verifying your payment with Stripe/i);
+assert.match(paymentSuccess, /You can close this page/i);
+assert.match(paymentSuccess, /secure ownership link is emailed automatically/i);
+assert.doesNotMatch(paymentSuccess, /address (?:entered|used) at checkout/i,
+  'The preview-review recipient, not the Stripe payer address, is the ownership-handoff authority.');
 assert.doesNotMatch(paymentSuccess, /Payment received|Payment confirmed|moving to production/i,
   'The public success page must not claim unverified payment or production state.');
 assert.match(paymentSuccess, /noindex,nofollow,noarchive/i);
 assert.match(paymentSuccess, /<meta name="referrer" content="no-referrer">/);
+assert.match(claim, /Turn on JavaScript in a supported browser/i);
+assert.doesNotMatch(claim, /Contact ARC|mailto:/i,
+  'The ownership handoff must not require a manual email fallback.');
+assert.match(claimScript, /Open the newest ARC ownership email and try again\./);
+assert.doesNotMatch(claimScript, /Contact ARC|mailto:/i,
+  'The automated claim failure state must not require a manual ARC contact.');
 
-for (const document of [home, terms, refunds, scope, paymentSuccess]) assert.match(document, /\$5,000/);
-assert.doesNotMatch([home, terms, refunds, scope, paymentSuccess].join('\n'),
-  /applicable sales tax|destination-based sales tax|\+ tax/i,
-  'Customer-facing pages must present the flat $5,000 price used by live checkout.');
+for (const document of [home, terms, refunds, scope]) assert.match(document, /\$5,000/);
+assert.match(home, /\$5,000 USD \+ applicable tax, only if you approve/i);
+assert.match(home, /Five pages\. \$5,000 \+ applicable tax, only if I approve\./i);
+assert.match(terms, /\$5,000 USD subtotal plus applicable tax, paid once/i);
 assert.match(terms, /free preview request applies only to that request and does not authorize a charge/i);
 assert.match(terms, /A preview request is free and does not require a purchase/i);
-assert.match(terms, /costs \$5,000 USD, paid once after approval of the complete preview/i);
+assert.match(terms, /costs a \$5,000 USD subtotal plus applicable tax, paid once after approval of the complete preview/i);
 assert.match(terms, /There is no subscription or automatic renewal/i);
+assert.match(terms, /verified address that received and approved the preview an ownership handoff/i);
+assert.doesNotMatch(terms, /purchaser(?:’|')s checkout address/i);
 assert.match(terms, /does not guarantee traffic, search ranking, leads, revenue/i);
 assert.match(refunds, /If you do not approve it, do not purchase it/i);
 assert.match(refunds, /No refund request is needed because no payment was made/i);

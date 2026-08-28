@@ -6,6 +6,7 @@ import {
   expirationTimestamp,
   normalizeAnalyticsEvent,
 } from '../lib/analytics-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const ALLOWED_HOSTS = new Set(['arcweb.onl', 'arcsites.netlify.app']);
 const MAX_BODY_BYTES = 2048;
@@ -42,39 +43,70 @@ function response(status) {
   });
 }
 
-export default async (request) => {
-  if (!analyticsCollectionReady(process.env)) return response(503);
-  if (request.method !== 'POST') return response(405);
-  const requestUrl = new URL(request.url);
-  if (!ALLOWED_HOSTS.has(requestUrl.hostname)) return response(403);
+function requestMayMutate(request) {
+  let requestUrl;
+  try { requestUrl = new URL(request.url); } catch { return false; }
+  if (!ALLOWED_HOSTS.has(requestUrl.hostname)) return false;
   const origin = request.headers.get('origin');
-  if (origin && origin !== requestUrl.origin) return response(403);
-  if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') return response(415);
+  if (origin && origin !== requestUrl.origin) return false;
+  if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+    return false;
+  }
+  return !(Number(request.headers.get('content-length') || 0) > MAX_BODY_BYTES);
+}
 
-  const declaredLength = Number(request.headers.get('content-length') || 0);
-  if (declaredLength > MAX_BODY_BYTES) return response(413);
+export function createAnalyticsEventHandler() {
+  return async (request, context = {}) => {
+    if (process.env.ARC_ANALYTICS_COLLECTION_ENABLED !== 'true' ||
+        process.env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED !== 'true') return response(503);
+    const now = context.clock?.() || new Date();
+    if (!analyticsCollectionReady(process.env, now)) return response(503);
+    if (request.method !== 'POST') return response(405);
+    const requestUrl = new URL(request.url);
+    if (!ALLOWED_HOSTS.has(requestUrl.hostname)) return response(403);
+    const origin = request.headers.get('origin');
+    if (origin && origin !== requestUrl.origin) return response(403);
+    if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+      return response(415);
+    }
 
-  let body;
-  try { body = await boundedBodyText(request); } catch (error) {
-    return response(error instanceof RangeError ? 413 : 400);
-  }
-  let event;
-  try {
-    event = normalizeAnalyticsEvent(JSON.parse(body), new Date());
-  } catch {
-    return response(400);
-  }
-  try {
-    const store = getStore({ name: ANALYTICS_STORE, consistency: 'strong' });
-    await store.setJSON(eventKey(event), event, {
-      onlyIfNew: true,
-      metadata: { expires_at: expirationTimestamp(event.received_at) },
-    });
-    return response(202);
-  } catch {
-    return response(503);
-  }
-};
+    const declaredLength = Number(request.headers.get('content-length') || 0);
+    if (declaredLength > MAX_BODY_BYTES) return response(413);
+
+    let body;
+    try { body = await boundedBodyText(request); } catch (error) {
+      return response(error instanceof RangeError ? 413 : 400);
+    }
+    let event;
+    try {
+      event = normalizeAnalyticsEvent(JSON.parse(body), now);
+    } catch {
+      return response(400);
+    }
+    try {
+      const store = context.analyticsStore || getStore({ name: ANALYTICS_STORE, consistency: 'strong' });
+      await store.setJSON(eventKey(event), event, {
+        onlyIfNew: true,
+        metadata: { expires_at: expirationTimestamp(event.received_at) },
+      });
+      return response(202);
+    } catch {
+      return response(503);
+    }
+  };
+}
+
+const handler = createAnalyticsEventHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'analytics-event',
+  paths: ['/api/analytics/event'],
+  active: ({ env, request, context }) =>
+    env.ARC_ANALYTICS_COLLECTION_ENABLED === 'true' &&
+    env.ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED === 'true' &&
+    analyticsCollectionReady(env, context.clock?.() || new Date()) && requestMayMutate(request),
+  handler,
+});
 
 export const config = {
   path: '/api/analytics/event',

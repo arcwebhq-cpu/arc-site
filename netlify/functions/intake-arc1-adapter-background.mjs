@@ -7,10 +7,12 @@ import {
   INTAKE_ARC1_ADAPTER_ENABLED_ENV,
   INTAKE_ARC1_ADAPTER_STORE,
   INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV,
+  arc1AdapterProtocolEnabled,
   authorizeArc1AdapterDispatch,
   dispatchArc1AdapterRecord,
 } from '../lib/intake-arc1-adapter-core.mjs';
 import { INTAKE_STORE } from '../lib/intake-submission-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const response = (status, value) => new Response(status === 204 ? null : JSON.stringify(value), { status, headers: {
   'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff',
@@ -51,5 +53,11 @@ export function createIntakeArc1AdapterBackgroundHandler() {
   };
 }
 
-export default createIntakeArc1AdapterBackgroundHandler();
+const handler = createIntakeArc1AdapterBackgroundHandler();
+
+export default createRetentionFencedRouteHandler({
+  route: 'intake-arc1-adapter-background',
+  active: ({ env }) => publicIntakeAuthorityReady(env) && arc1AdapterProtocolEnabled(env),
+  handler,
+});
 export const config = { background: true };

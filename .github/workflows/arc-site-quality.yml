@@ -43,6 +43,9 @@ jobs:
         with:
           node-version: 22
       - run: npm run build
+        env:
+          ARC_BUILD_INTAKE_ENABLED: ${{ vars.ARC_BUILD_INTAKE_ENABLED }}
       - run: node scripts/verify-production-routes.mjs
         env:
           ARC_EXPECTED_DEPLOY_SHA: ${{ github.sha }}
+          ARC_BUILD_INTAKE_ENABLED: ${{ vars.ARC_BUILD_INTAKE_ENABLED }}

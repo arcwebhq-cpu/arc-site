@@ -1120,7 +1120,7 @@ export async function claimPaymentArc2StartOutbox(stores, key, claimToken, env =
     const now = clockDate(adapters);
     const entry = await readOutbox(bridgeStore, key, env);
     if (!entry) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_REQUIRED');
-    if (entry.record.status === 'COMPLETED') return publicResult(entry.record, key, true);
+    if (entry.record.status === 'COMPLETED') return claimResult(entry.record, key, true);
     await readBindingForOutbox(stores, entry.record, env, configuration, now);
     if (entry.record.status === 'CLAIMED' && Date.parse(entry.record.lease_expires_at) > now.getTime()) {
       if (!safeEqual(entry.record.lease_claim_hmac_sha256, tokenHmac)) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_LEASED');

@@ -9,7 +9,14 @@ import {
   sha256Hex,
 } from '../lib/arc2-handoff-core.mjs';
 import { startReviewHandoff } from '../lib/arc2-handoff-service.mjs';
+import {
+  arc2TransactionalEmailConfiguration,
+  completePaidRecipientCapsuleHandoff,
+  deletePaidPreviewRecipientCapsule,
+  openPaidPreviewRecipientCapsule,
+} from '../lib/arc2-transactional-email-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { EMAIL_RECIPIENT_VAULT_STORE } from '../lib/email-recipient-vault-core.mjs';
 import {
   PAYMENT_ARC2_OUTBOX_STORE,
   claimNextPaymentArc2StartOutbox,
@@ -21,6 +28,8 @@ import {
 } from '../lib/payment-arc2-bridge-core.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { retrieveStripeReviewCheckoutAuthority } from '../lib/stripe-review-checkout-adapter.mjs';
+import { assertClaimMutationActivationAuthority } from '../lib/claim-sandbox-bootstrap-core.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
 const CLAIM_PATH = '/internal/payment-arc2/claim';
 const COMPLETE_PATH = '/internal/payment-arc2/complete';
@@ -63,7 +72,7 @@ function exactFields(value, fields) {
     JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...fields].sort());
 }
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   const configuration = paymentArc2WorkerConfiguration(process.env);
   if (!configuration.enabled) {
     return jsonResponse(503, {
@@ -112,12 +121,26 @@ export default async (request, context = {}) => {
         ]))) {
       return jsonResponse(400, { error: 'invalid_worker_request' });
     }
+    if (path === START_PATH) {
+      assertClaimMutationActivationAuthority(
+        process.env,
+        context.activationClock?.() || new Date(),
+      );
+    }
     const stores = {
       review: context.reviewStore || getStore({ name: REVIEW_STORE, consistency: 'strong' }),
       ledger: context.arc2Store || getStore({ name: HANDOFF_STORE, consistency: 'strong' }),
       bridge: context.paymentArc2BridgeStore ||
         getStore({ name: PAYMENT_ARC2_OUTBOX_STORE, consistency: 'strong' }),
     };
+    const arc2Email = arc2TransactionalEmailConfiguration(process.env);
+    if (!arc2Email.flags_valid || (arc2Email.requested && !arc2Email.capsule_producer_enabled)) {
+      throw new Error('ARC2_TRANSACTIONAL_EMAIL_CONFIGURATION_INVALID');
+    }
+    if (arc2Email.requested) {
+      stores.vault = context.emailRecipientVaultStore ||
+        getStore({ name: EMAIL_RECIPIENT_VAULT_STORE, consistency: 'strong' });
+    }
     const adapters = { clock: context.clock };
     if (path === CLAIM_PATH) {
       const result = claimNext
@@ -137,7 +160,15 @@ export default async (request, context = {}) => {
         stores, body.outbox_key, body.claim_token, process.env, adapters,
       );
       if (claimed.state === 'COMPLETED') {
-        return jsonResponse(200, { accepted: true, ...claimed });
+        if (arc2Email.requested) {
+          if (!claimed.payload) throw new Error('ARC2_PAID_RECIPIENT_CLEANUP_BINDING_REQUIRED');
+          await deletePaidPreviewRecipientCapsule(stores.vault, stores.review, {
+            invite_hmac_sha256: claimed.payload.invite_hmac_sha256,
+            recipient_email_sha256: claimed.payload.recipient_email_sha256,
+          }, process.env);
+        }
+        const { payload: ignored, ...publicClaimed } = claimed;
+        return jsonResponse(200, { accepted: true, ...publicClaimed });
       }
       if (claimed.state !== 'CLAIMED') throw new Error('ARC_PAYMENT_ARC2_CLAIM_REQUIRED');
       if (typeof body.artifact_evidence !== 'string') throw new TypeError('Artifact evidence is invalid.');
@@ -174,6 +205,12 @@ export default async (request, context = {}) => {
         claim_token: body.claim_token,
         outbox_key: body.outbox_key,
       }, process.env, { ...adapters, retrieveCheckoutSessionAuthority });
+      const sourceRecipient = arc2Email.requested
+        ? await openPaidPreviewRecipientCapsule(stores.vault, stores.review, {
+          invite_hmac_sha256: claimed.payload.invite_hmac_sha256,
+          recipient_email_sha256: claimed.payload.recipient_email_sha256,
+        }, process.env, { clock: context.clock })
+        : null;
       const started = await startReviewHandoff({
         artifact_evidence: body.artifact_evidence,
         artifact_evidence_hmac_sha256: body.artifact_evidence_hmac_sha256,
@@ -186,6 +223,7 @@ export default async (request, context = {}) => {
         store: stores.ledger,
         reviewStore: stores.review,
         clock: context.clock,
+        activationClock: context.activationClock,
         fetch: context.netlifyFetch,
         stripeAccountFetch: context.stripeAccountFetch,
         uuid: context.uuid,
@@ -209,14 +247,30 @@ export default async (request, context = {}) => {
           ...released,
         });
       }
-      const completed = await completePaymentArc2StartOutbox(stores, body.outbox_key,
-        body.claim_token, {
+      const completion = {
           schema: 'arc2-start-processing-receipt-v2',
           accepted: true,
           immutable_binding_sha256: claimed.immutable_binding_sha256,
           arc2_start_receipt: started.startReceipt.canonical,
           arc2_start_receipt_hmac_sha256: started.startReceipt.signature,
-        }, process.env, adapters);
+      };
+      const completed = sourceRecipient
+        ? (await completePaidRecipientCapsuleHandoff(stores.vault, stores.review, {
+          handoff: {
+            handoff_id: started.handoffId,
+            created_at: started.record.created_at,
+          },
+          source: sourceRecipient,
+        }, process.env, {
+          clock: context.clock,
+          randomBytes: context.randomBytes,
+          completePaymentArc2StartOutbox: () => completePaymentArc2StartOutbox(
+            stores, body.outbox_key, body.claim_token, completion, process.env, adapters,
+          ),
+        })).completion
+        : await completePaymentArc2StartOutbox(
+          stores, body.outbox_key, body.claim_token, completion, process.env, adapters,
+        );
       return jsonResponse(200, {
         accepted: true,
         handoff_id: started.handoffId,
@@ -243,6 +297,9 @@ export default async (request, context = {}) => {
     if (error instanceof TypeError || error?.name === 'SyntaxError') {
       return jsonResponse(400, { error: 'invalid_worker_request' });
     }
+    if (/COMPLETION_MISMATCH|START_RECEIPT_(?:INVALID|MISMATCH)/.test(error?.message || '')) {
+      return jsonResponse(400, { error: 'invalid_worker_request' });
+    }
     if (/REVIEW_REQUIRED|APPROVAL_|LEDGER_|PAYMENT_NOT_AUTHORIZED|AUTHORITY_CHANGED/.test(error?.message || '')) {
       return jsonResponse(409, { error: 'payment_arc2_authority_halted' });
     }
@@ -254,6 +311,13 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'payment_arc2_worker_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'payment-arc2-worker',
+  paths: [CLAIM_PATH, START_PATH, COMPLETE_PATH],
+  active: ({ env }) => paymentArc2WorkerConfiguration(env).enabled,
+  handler,
+});
 
 // This surface deliberately stops at authenticated leasing/completion. It is
 // disabled when production reversal control is required until a provider-bound

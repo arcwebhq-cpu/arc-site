@@ -20,7 +20,7 @@ const STATES = new Set(['CREATING', 'OPEN', 'EXPIRY_PENDING', 'EXPIRED', 'CANCEL
 const BINDING_FIELDS = Object.freeze([
   'schema', 'version', 'record_revision', 'state', 'binding_hmac_sha256',
   'approval_receipt_sha256', 'approval_receipt_hmac_sha256', 'invite_hmac_sha256',
-  'preview_manifest_sha256', 'recipient_email_sha256', 'scope_version', 'session_id',
+  'preview_manifest_sha256', 'recipient_email_sha256', 'scope_version', 'checkout_expires_at', 'session_id',
   'session_livemode', 'integration_identifier', 'session_url_sha256', 'created_at', 'session_bound_at',
   'suppression_receipt_sha256', 'suppression_status', 'suppressed_at',
   'source_invite_hmac_sha256', 'source_outbox_hmac_sha256', 'expiry_idempotency_key_sha256',
@@ -34,7 +34,7 @@ const INDEX_FIELDS = Object.freeze([
 const INDEX_ENTRY_FIELDS = Object.freeze(['approval_receipt_sha256', 'binding_hmac_sha256']);
 const RESERVATION_FIELDS = Object.freeze([
   'approval_receipt_hmac_sha256', 'approval_receipt_sha256', 'invite_hmac_sha256',
-  'preview_manifest_sha256', 'recipient_email_sha256', 'scope_version',
+  'preview_manifest_sha256', 'recipient_email_sha256', 'scope_version', 'checkout_expires_at',
 ]);
 const SESSION_FIELDS = Object.freeze(['id', 'integration_identifier', 'livemode', 'url']);
 const SUPPRESSION_FIELDS = Object.freeze([
@@ -205,6 +205,11 @@ function validateBinding(record, env) {
     throw new Error('ARC_REVIEW_CHECKOUT_REVOCATION_BINDING_INVALID');
   }
   iso(record.created_at, 'Review Checkout binding creation time');
+  if (!Number.isSafeInteger(record.checkout_expires_at) ||
+      record.checkout_expires_at * 1000 <= Date.parse(record.created_at) ||
+      record.checkout_expires_at * 1000 > Date.parse(record.created_at) + 24 * 60 * 60_000) {
+    throw new TypeError('Review Checkout Session expiration is invalid.');
+  }
   if (record.session_bound_at !== null) iso(record.session_bound_at, 'Review Checkout Session binding time');
   if (record.suppressed_at !== null) iso(record.suppressed_at, 'Review Checkout suppression time');
   if (record.expiry_requested_at !== null) iso(record.expiry_requested_at, 'Review Checkout expiry request time');
@@ -341,6 +346,11 @@ export async function reserveReviewCheckoutBinding(store, rawInput, env = proces
     throw new TypeError('Review Checkout scope is invalid.');
   }
   const now = nowDate(nowValue);
+  if (!Number.isSafeInteger(rawInput.checkout_expires_at) ||
+      rawInput.checkout_expires_at * 1000 <= now.getTime() ||
+      rawInput.checkout_expires_at * 1000 > now.getTime() + 24 * 60 * 60_000) {
+    throw new TypeError('Review Checkout Session expiration is invalid.');
+  }
   const input = { ...rawInput };
   const id = bindingHmac(input.approval_receipt_sha256, env);
   const record = signBinding({

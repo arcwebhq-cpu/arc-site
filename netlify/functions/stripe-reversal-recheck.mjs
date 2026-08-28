@@ -10,8 +10,9 @@ import {
   stripeReversalConfiguration,
 } from '../lib/stripe-reversal-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!stripeReversalConfiguration(process.env).recheckOperational) return jsonResponse(503, { error: 'stripe_reversal_control_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
@@ -37,6 +38,14 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'recheck_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'stripe-reversal-recheck',
+  paths: ['/internal/stripe/reversal-recheck'],
+  maxRequestBytes: 30_000,
+  active: ({ env }) => stripeReversalConfiguration(env).recheckOperational,
+  handler,
+});
 
 export const config = {
   path: '/internal/stripe/reversal-recheck', method: 'POST',

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { createSupportRequestHandler } from '../netlify/functions/support-request.mjs';
+import supportRequestRoute, { createSupportRequestHandler } from '../netlify/functions/support-request.mjs';
 import { SUPPORT_REQUEST_SCHEMA } from '../netlify/lib/support-request-core.mjs';
 
 class MemoryStore {
@@ -62,6 +62,15 @@ const call = (body = payload, origin = 'https://arcweb.onl') => handler(new Requ
   method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
   body: JSON.stringify(body),
 }), { supportStore: store, clock: () => now });
+
+const preflightRejected = await supportRequestRoute(new Request('https://arcweb.onl/api/support/request', {
+  method: 'POST', headers: {
+    Origin: 'https://evil.example', 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site',
+  }, body: JSON.stringify(payload),
+}), {
+  get retentionFenceStore() { throw new Error('Rejected support input must not touch the fence store.'); },
+});
+assert.equal(preflightRejected.status, 403);
 
 let response = await call();
 assert.equal(response.status, 201);

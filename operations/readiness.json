@@ -41,6 +41,13 @@
     "status": "blocked",
     "allowed_mode": "test-only",
     "consent_version": "2026-08-25",
+    "v11_checkout_contract": {
+      "entrypoint": "private-approval-bound-checkout-session",
+      "distribution": "review-portal-after-exact-preview-approval",
+      "payment_link": null,
+      "reusable_payment_links_allowed": false,
+      "automatic_tax_required": true
+    },
     "required_evidence": [
       "adult-purchaser-affirmative-acceptance",
       "accepted-terms-version",
@@ -59,9 +66,9 @@
       "stripe-test-or-sandbox-context-unavailable",
       "stripe-tax-status-pending-and-head-office-missing",
       "stripe-tax-registrations-zero",
-      "live-payment-links-have-automatic-tax-off",
-      "live-reusable-payment-links-not-safely-restricted",
-      "live-website-build-link-has-no-verified-success-handoff",
+      "legacy-live-payment-links-have-automatic-tax-off-and-are-not-v11-eligible",
+      "legacy-live-reusable-payment-links-must-remain-undistributed-and-off-path",
+      "legacy-live-website-build-link-has-no-verified-success-handoff",
       "stripe-webhook-endpoints-zero",
       "active-monthly-support-offer-conflicts-with-published-one-time-scope",
       "stale-live-100-dollar-price-and-unrefunded-payment-require-adult-review",
@@ -91,7 +98,10 @@
       "tax_registration_count": 0,
       "automatic_tax_on_observed_live_links": false,
       "webhook_endpoint_count": 0,
-      "live_website_build_payment_link": {
+      "legacy_live_website_build_payment_link": {
+        "legacy_only": true,
+        "v11_eligible": false,
+        "must_remain_undistributed": true,
         "active": true,
         "currency": "USD",
         "amount_minor": 500000,
@@ -120,11 +130,13 @@
       },
       "live_checkout_activation_allowed": false
     },
-    "sandbox_evidence": [
+    "legacy_sandbox_evidence": [
       {
+        "legacy_only": true,
+        "v11_eligible": false,
         "observed_at": "2026-08-13",
         "environment": "stripe-test-mode",
-        "payment_link_id": "plink_1U3t07Gv1R7moOUqoaUjIIHI",
+        "legacy_payment_link_id": "plink_1U3t07Gv1R7moOUqoaUjIIHI",
         "payment_intent_id": "pi_3U3t38Gv1R7moOUq1qCOkiyV",
         "currency": "USD",
         "subtotal_amount_minor": 500000,
@@ -223,7 +235,12 @@
       "signed_ack_verified": false,
       "consumer_completion_verified": false
     },
-    "verified_recipient": null,
+    "verified_recipient": {
+      "mechanism": "one-time-same-origin-fragment-mailbox-challenge",
+      "implementation_state": "default-off-provider-e2e-unverified",
+      "raw_recipient_or_token_in_state": false,
+      "arc1_release_before_consumption_allowed": false
+    },
     "runtime_attestation": {
       "required_build_runtime_gate": "ARC_BUILD_INTAKE_ENABLED=true",
       "required_same_deploy_build_marker": "arc-intake-build-marker-v1 intake_enabled=true",
@@ -256,6 +273,9 @@
       "build-runtime-gate-blocks-before-body-parse-and-storage",
       "revoked-attestation-blocks-before-storage",
       "arc1-adapter-consumes-function-record-exactly-once",
+      "mailbox-challenge-consumed-once-before-any-arc1-dispatch-or-delivery",
+      "verification-fragment-absent-from-http-request-url-and-server-logs",
+      "encrypted-confirmation-capsule-provider-e2e-verified",
       "server-issued-submission-id-and-received-at-bound",
       "zapier-trigger-received-once-after-adapter",
       "intended-recipient-confirms-message",
@@ -319,12 +339,35 @@
     ],
     "implemented_but_default_off": [
       "ninety-day-first-party-analytics-pruning",
-      "adult-approved-unpaid-intake-cleanup"
+      "adult-approved-unpaid-intake-cleanup",
+      "transactional-email-vault-and-attempt-paginated-retention-sweep",
+      "abuse-review-checkout-handoff-paginated-retention-cascade",
+      "always-on-signed-global-generation-fence-for-covered-mutators"
     ],
+    "generation_fence": {
+      "store": "arc-retention-control",
+      "secret_environment_name": "ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET",
+      "enable_flag_exists": false,
+      "code_default_fail_closed": true,
+      "sandbox_and_production_preflight_required": true,
+      "deployed_intent_or_receipt_verified": false,
+      "stale_recovery_alert_verified": false,
+      "provider_cascade_proof_verified": false
+    },
     "unverified_stores": [
       "netlify-blobs-intake-records-and-assets",
+      "netlify-blobs-intake-confirmation-outbox-hmac-state",
+      "netlify-blobs-intake-email-verification-hmac-state-and-indexes",
+      "netlify-blobs-intake-abuse-state",
+      "netlify-blobs-review-checkout-revision-state",
+      "netlify-blobs-paid-handoff-state",
+      "netlify-blobs-arc-retention-control-fence-intents-receipts-anomalies-alerts",
+      "netlify-blobs-email-recipient-vault-ciphertext",
+      "netlify-blobs-transactional-email-attempts-and-provider-events",
+      "netlify-blobs-operations-alert-delivery",
+      "resend-transactional-messages-events-and-suppression",
       "zapier-tables",
-      "gmail",
+      "gmail-and-apollo-outreach",
       "github-previews-and-deliveries",
       "stripe-and-backups"
     ],

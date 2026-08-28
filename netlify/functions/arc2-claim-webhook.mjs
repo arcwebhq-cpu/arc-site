@@ -3,8 +3,9 @@ import { HANDOFF_STORE, configuredEnvironment, emptyResponse, jsonResponse, pars
 import { processClaimWebhook } from '../lib/arc2-handoff-service.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if ((request.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') return jsonResponse(415, { error: 'json_required' });
@@ -29,5 +30,12 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'claim_reverification_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-claim-webhook',
+  paths: ['/api/arc2/claim-webhook'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = { path: '/api/arc2/claim-webhook', method: 'POST', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };

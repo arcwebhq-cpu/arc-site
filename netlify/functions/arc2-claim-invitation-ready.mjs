@@ -3,8 +3,9 @@ import { HANDOFF_STORE, authenticateBearer, configuredEnvironment, jsonResponse,
 import { markClaimInvitationReady } from '../lib/arc2-handoff-service.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { readBoundedRequestText, RequestBodyTooLargeError } from '../lib/bounded-request-body.mjs';
+import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
 
-export default async (request, context = {}) => {
+const handler = async (request, context = {}) => {
   if (!configuredEnvironment(process.env).enabled) return jsonResponse(503, { error: 'handoff_disabled' });
   if (request.method !== 'POST') return jsonResponse(405, { error: 'method_not_allowed' });
   if (!authenticateBearer(request, process.env.ARC_HANDOFF_TRIGGER_SECRET)) return jsonResponse(401, { error: 'unauthorized' });
@@ -38,5 +39,12 @@ export default async (request, context = {}) => {
     return jsonResponse(503, { error: 'claim_invitation_ready_unavailable' });
   }
 };
+
+export default createRetentionFencedRouteHandler({
+  route: 'arc2-claim-invitation-ready',
+  paths: ['/internal/arc2/claim-invitation-ready'],
+  active: ({ env }) => configuredEnvironment(env).enabled,
+  handler,
+});
 
 export const config = { path: '/internal/arc2/claim-invitation-ready', method: 'POST', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };

@@ -92,6 +92,8 @@ const env = {
   ARC_OPERATIONS_AUDIT_SECRET: 'operations-audit-secret-unique-0123456789abcdef',
   ARC_OPERATIONS_ALERT_HMAC_SECRET: 'operations-alert-hmac-secret-unique-0123456789abcdef',
   ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-claim-binding-secret-unique-0123456789abcdef',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'first-party-retention-fence-secret-unique-0123456789abcdef',
   ARC_HANDOFF_STATE_SECRET: 'handoff-state-secret-unique-0123456789abcdef',
   NETLIFY_TEAM_ACCOUNT_ID: 'team-account-123',
 };
@@ -784,6 +786,7 @@ try {
   }), {
     alertStore: malformedAlerts, arc2Store: malformedHandoffStore,
     retentionStore: malformedRetentionStore, intakeStore: malformedIntakeStore,
+    retentionFenceStore: new FakeStore(),
     clock: () => new Date(now),
   });
   assert.equal(response.status, 200);

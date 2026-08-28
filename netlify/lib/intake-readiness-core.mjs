@@ -1,7 +1,7 @@
 import {
   INTAKE_ARC1_ADAPTER_PROOF_ENV,
-  INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED,
   intakeArc1AdapterAttested,
+  intakeArc1PublicAssetShapesImplemented,
 } from './intake-arc1-bridge-core.mjs';
 import {
   INTAKE_ARC1_ADAPTER_ENABLED_ENV,
@@ -9,9 +9,33 @@ import {
   resolveArc1AdapterEnvironment,
 } from './intake-arc1-adapter-core.mjs';
 import { resolveSameDeployDispatcher } from './intake-arc1-dispatch-core.mjs';
+import { arc1RecoveryAutomationEnabled } from './intake-arc1-adapter-recovery-runner-core.mjs';
 import { INTAKE_PRIVATE_ASSET_ENABLED_ENV, resolvePrivateAssetEnvironment } from './intake-private-asset-core.mjs';
 import { INTAKE_IDEMPOTENCY_SECRET_ENV, intakeIdempotencyConfigured } from './intake-submission-core.mjs';
 import { publicIntakeAuthorityReady } from './activation-manifest-core.mjs';
+import {
+  INTAKE_ABUSE_HMAC_SECRET_ENV,
+  TURNSTILE_SECRET_KEY_ENV,
+  intakeAbuseProtectionConfiguration,
+} from './intake-abuse-protection-core.mjs';
+import {
+  INTAKE_CONFIRMATION_CONSUMER_BEARER_ENV,
+  INTAKE_CONFIRMATION_OUTBOX_SECRET_ENV,
+  INTAKE_CONFIRMATION_RECEIPT_SECRET_ENV,
+  intakeConfirmationRuntimeConfigured,
+} from './intake-confirmation-outbox-core.mjs';
+import {
+  INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET_ENV,
+  INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET_ENV,
+  INTAKE_EMAIL_VERIFICATION_STATE_SECRET_ENV,
+  INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET_ENV,
+  intakeEmailVerificationConfiguration,
+} from './intake-email-verification-core.mjs';
+import {
+  EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY_ENV,
+  EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV,
+  emailRecipientVaultConfiguration,
+} from './email-recipient-vault-core.mjs';
 
 export const INTAKE_READINESS_ENV = 'ARC_INTAKE_READINESS_ATTESTATION';
 export const INTAKE_READINESS_SCHEMA = 'arc-intake-readiness-attestation-v1';
@@ -98,7 +122,12 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
       env.ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED !== 'true' ||
       env.ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED !== 'true' ||
       env[INTAKE_PRIVATE_ASSET_ENABLED_ENV] !== 'true' ||
-      !INTAKE_ARC1_ALL_PUBLIC_ASSET_SHAPES_IMPLEMENTED || !intakeArc1AdapterProofFromEnvironment(env, now)) return false;
+      !arc1RecoveryAutomationEnabled(env) ||
+      !intakeConfirmationRuntimeConfigured(env) ||
+      !intakeEmailVerificationConfiguration(env).enabled ||
+      !intakeAbuseProtectionConfiguration(env).enabled ||
+      !emailRecipientVaultConfiguration(env).enabled ||
+      !intakeArc1PublicAssetShapesImplemented(env, now) || !intakeArc1AdapterProofFromEnvironment(env, now)) return false;
   try {
     resolveSameDeployDispatcher(request, env);
     resolveArc1AdapterEnvironment(env);
@@ -112,7 +141,18 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
       'ARC1_ASSET_RECEIPT_SECRET', 'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER',
       'ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
       'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET',
+      INTAKE_CONFIRMATION_OUTBOX_SECRET_ENV,
+      INTAKE_CONFIRMATION_CONSUMER_BEARER_ENV,
+      INTAKE_CONFIRMATION_RECEIPT_SECRET_ENV,
+      INTAKE_EMAIL_VERIFICATION_STATE_SECRET_ENV,
+      INTAKE_EMAIL_VERIFICATION_TOKEN_SECRET_ENV,
+      INTAKE_EMAIL_VERIFICATION_RECIPIENT_SECRET_ENV,
+      INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET_ENV,
+      EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV,
+      EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY_ENV,
       INTAKE_IDEMPOTENCY_SECRET_ENV,
+      INTAKE_ABUSE_HMAC_SECRET_ENV,
+      TURNSTILE_SECRET_KEY_ENV,
     ];
     const secrets = required.map((name) => env[name]);
     if (!intakeIdempotencyConfigured(env) ||

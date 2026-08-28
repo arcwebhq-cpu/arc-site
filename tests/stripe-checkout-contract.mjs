@@ -70,6 +70,8 @@ const env = {
   ARC_RUNTIME_ENVIRONMENT: 'sandbox',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_HANDOFF_ENABLED: 'false',
+  ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET:
+    'checkout-retention-fence-secret-unique-0123456789abcdef',
 };
 
 const stripeEventFixtures = new Map();
@@ -556,6 +558,7 @@ try {
   Object.assign(process.env, env);
   const endpointStore = new FakeStore();
   const endpointAlerts = new FakeStore();
+  const endpointFence = new FakeStore();
   const endpointRaw = eventRaw({ id: 'evt_arcCheckoutEndpointContract' });
   stripeEventFixtures.set(JSON.parse(endpointRaw).id, JSON.parse(endpointRaw));
   const response = await webhookHandler(new Request('https://arcweb.onl/internal/stripe/reversal-webhook', {
@@ -563,7 +566,8 @@ try {
     headers: { 'content-type': 'application/json', 'stripe-signature': signature(endpointRaw) },
     body: endpointRaw,
   }), {
-    arc2Store: endpointStore, alertStore: endpointAlerts, clock: () => new Date(now), stripeAccountFetch: accountFetch,
+    arc2Store: endpointStore, alertStore: endpointAlerts, clock: () => new Date(now),
+    retentionFenceStore: endpointFence, stripeAccountFetch: accountFetch,
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {

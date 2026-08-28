@@ -18,6 +18,24 @@ export const RETENTION_RECEIPT_SCHEMA = 'arc-retention-delete-receipt-v1';
 export const RETENTION_COMPLETION_SCHEMA = 'arc-retention-run-completion-v1';
 export const RETENTION_POLICY_VERSION = '2026-08-13';
 export const UNPAID_PREVIEW_RETENTION_DAYS = 730;
+export const RETENTION_STORE_INVENTORY = Object.freeze([
+  Object.freeze({ store: 'arc-intake-submissions', record_family: 'submission-and-email-verification',
+    cascade: 'delete-source-with-expired-verification-state-and-token-index', safely_deletable: true }),
+  Object.freeze({ store: 'arc-intake-confirmation-outbox', record_family: 'confirmation-outbox-and-pending-index',
+    cascade: 'delete-only-with-expired-unpaid-source-and-terminal-or-unclaimed-outbox', safely_deletable: true }),
+  Object.freeze({ store: 'arc-email-recipient-vault', record_family: 'encrypted-recipient-capsules',
+    cascade: 'cursor-sweep-expired-capsules', safely_deletable: true }),
+  Object.freeze({ store: 'arc-transactional-email-attempts', record_family: 'attempt-message-event-and-quarantine',
+    cascade: 'cursor-sweep-terminal-attempt-with-reverse-and-event-indexes', safely_deletable: true }),
+  Object.freeze({ store: 'arc-intake-abuse-control', record_family: 'challenge-quota-suppression-and-circuit-breaker',
+    cascade: 'bounded-authenticated-expiry-sweep-with-legal-hold', safely_deletable: true }),
+  Object.freeze({ store: 'arc-preview-reviews', record_family: 'review-invite-checkout-and-revision',
+    cascade: 'bounded-terminal-lineage-cascade-with-checkout-and-legal-hold', safely_deletable: true }),
+  Object.freeze({ store: 'stripe', record_family: 'checkout-payment-tax-dispute-and-refund',
+    cascade: 'provider-legal-policy-and-hold-review-required', safely_deletable: false }),
+  Object.freeze({ store: 'arc2-handoffs', record_family: 'paid-handoff-claim-delivery-and-reversal',
+    cascade: 'paid-release-bound-terminal-cascade-with-legal-hold', safely_deletable: true }),
+]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HEX_64 = /^[a-f0-9]{64}$/;
@@ -245,6 +263,50 @@ function runReservation(manifest) {
   };
 }
 
+function priorDryRunAuthorizesApply(value, manifest) {
+  return value && value.schema === RETENTION_COMPLETION_SCHEMA && value.mode === 'dry-run' &&
+    value.run_id === manifest.value.dry_run_id &&
+    value.manifest_sha256 === manifest.value.dry_run_manifest_sha256 &&
+    value.target_set_sha256 === manifest.targetSetDigest &&
+    value.target_count === manifest.targets.length && value.eligible === manifest.targets.length &&
+    value.deleted === 0 && value.legal_hold === 0 && value.missing === 0 &&
+    value.not_expired === 0 && value.provider_cleanup_included === false;
+}
+
+async function prepareRetentionManifest(raw, signature, env, stores, clock) {
+  let manifest = normalizeManifest(raw, signature, env, clock(), { enforceFreshness: false });
+  const existingRun = await getEntry(stores.control, runKey(manifest.value.run_id));
+  if (!existingRun) manifest = normalizeManifest(raw, signature, env, clock(), { enforceFreshness: true });
+  const reservation = runReservation(manifest);
+  if (existingRun && !exactStored(existingRun.value, reservation)) {
+    throw new Error('ARC_RETENTION_INDEX_CONFLICT');
+  }
+  if (manifest.value.mode === 'apply') {
+    const prior = await getEntry(stores.control, completionKey(manifest.value.dry_run_id));
+    if (!priorDryRunAuthorizesApply(prior?.value, manifest)) {
+      throw new Error('ARC_RETENTION_PRIOR_DRY_RUN_REQUIRED');
+    }
+  }
+  const existingCompletion = await getEntry(stores.control, completionKey(manifest.value.run_id));
+  if (existingCompletion && existingCompletion.value.manifest_sha256 !== manifest.digest) {
+    throw new Error('ARC_RETENTION_INDEX_CONFLICT');
+  }
+  return { existingCompletion, existingRun, manifest, reservation };
+}
+
+export async function preflightRetentionManifest(raw, signature, env, stores, adapters = {}) {
+  if (!stores?.control) throw new TypeError('Retention control store is required.');
+  const clock = adapters.clock || (() => new Date());
+  const prepared = await prepareRetentionManifest(raw, signature, env, stores, clock);
+  return Object.freeze({
+    manifest_sha256: prepared.manifest.digest,
+    mode: prepared.manifest.value.mode,
+    run_id: prepared.manifest.value.run_id,
+    target_count: prepared.manifest.targets.length,
+    target_set_sha256: prepared.manifest.targetSetDigest,
+  });
+}
+
 function validateIntakeRecord(target, record, now) {
   if (!record || typeof record !== 'object' || Array.isArray(record) || record.schema !== 'arc-intake-function-submission-v1' ||
       record.submission_id !== target.submissionId || record.arc1_consumer_compatible !== false ||
@@ -372,27 +434,36 @@ function tombstoneClaim(tombstone) {
   };
 }
 
-async function deleteTombstone(store, target, expectedTombstone, afterDelete) {
-  const immediatelyBeforeDelete = await getEntry(store, target.key);
-  if (!immediatelyBeforeDelete || !exactStored(immediatelyBeforeDelete.value, expectedTombstone)) {
+async function finalizeTombstone(store, target, expectedTombstone, afterDelete) {
+  const immediatelyBeforeFinalize = await getEntry(store, target.key);
+  if (!immediatelyBeforeFinalize || !exactStored(immediatelyBeforeFinalize.value, expectedTombstone)) {
     throw new Error('ARC_RETENTION_TARGET_RECREATED');
   }
-  let deletionError = null;
-  try {
-    await store.delete(target.key);
-  } catch (error) {
-    deletionError = error;
-  }
+  // The exact-etag tombstone is the terminal deletion record. Never follow it
+  // with an unconditional physical delete: that creates a race in which a
+  // recreated source can be removed without an etag fence.
   if (afterDelete) await afterDelete(target);
-  const remaining = await getEntry(store, target.key);
-  if (remaining) {
-    if (!exactStored(remaining.value, expectedTombstone)) throw new Error('ARC_RETENTION_TARGET_RECREATED');
-    if (deletionError) throw deletionError;
-    throw new Error('ARC_RETENTION_DELETE_UNCONFIRMED');
+  const terminal = await getEntry(store, target.key);
+  if (!terminal || !exactStored(terminal.value, expectedTombstone)) {
+    throw new Error('ARC_RETENTION_TARGET_RECREATED');
   }
 }
 
-async function processTarget(target, manifest, env, stores, clock, afterDelete) {
+async function reportMissingSource(target, manifest, adapters, reasonCode) {
+  if (typeof adapters.onMissingSource === 'function') {
+    await adapters.onMissingSource(Object.freeze({
+      expected_source_record_sha256: target.record_sha256,
+      reason_code: reasonCode,
+      run_id: manifest.value.run_id,
+      source_key: target.key,
+      source_store: target.store,
+    }));
+  }
+  throw new Error(`ARC_RETENTION_TARGET_MISSING_${reasonCode}`);
+}
+
+async function processTarget(target, manifest, env, stores, clock, adapters) {
+  if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
   const receiptPath = receiptKey(target, manifest.digest, env);
   const intentPath = intentKey(target, manifest.digest, env);
   const existingReceipt = await getEntry(stores.control, receiptPath);
@@ -400,31 +471,29 @@ async function processTarget(target, manifest, env, stores, clock, afterDelete) 
   if (existingReceipt) {
     if (!existingIntent) throw new Error('ARC_RETENTION_RECEIPT_WITHOUT_INTENT');
     validateRetentionDeleteReceipt(existingReceipt.value, existingIntent.value);
-    if (await getEntry(stores.intake, target.key)) throw new Error('ARC_RETENTION_RECEIPT_TARGET_PRESENT');
+    const terminal = await getEntry(stores.intake, target.key);
+    if (!terminal) return reportMissingSource(target, manifest, adapters, 'AFTER_RECEIPT');
+    validateTombstone(terminal.value, existingIntent.value);
     return { status: 'deleted', resumed: true };
   }
-  const hold = await getEntry(stores.control, legalHoldKey(target, env));
-  if (hold) return { status: 'legal-hold', resumed: false };
   const targetEntry = await getEntry(stores.intake, target.key);
   const tombstoneClaimPath = tombstoneClaimKey(target, manifest.digest, env);
   const existingTombstoneClaim = await getEntry(stores.control, tombstoneClaimPath);
   if (!targetEntry) {
-    if (manifest.value.mode === 'apply' && existingIntent && existingTombstoneClaim) {
-      validateRetentionDeleteIntent(existingIntent.value);
-      const receipt = deleteReceipt(existingIntent.value, clock().toISOString());
-      validateRetentionDeleteReceipt(receipt, existingIntent.value);
-      await ensureImmutable(stores.control, receiptPath, receipt);
-      return { status: 'deleted', resumed: true };
-    }
-    if (manifest.value.mode === 'apply' && existingIntent) throw new Error('ARC_RETENTION_TARGET_MISSING_WITHOUT_TOMBSTONE');
-    return { status: 'missing', resumed: false };
+    const reason = existingIntent && existingTombstoneClaim ? 'AFTER_TOMBSTONE_CLAIM' :
+      existingIntent ? 'AFTER_DELETE_INTENT' : 'FROM_MANIFEST';
+    return reportMissingSource(target, manifest, adapters, reason);
   }
+  const hold = await getEntry(stores.control, legalHoldKey(target, env));
+  if (hold) return { status: 'legal-hold', resumed: false };
   if (targetEntry.value?.schema === RETENTION_TOMBSTONE_SCHEMA) {
     if (manifest.value.mode !== 'apply' || !existingIntent) throw new Error('ARC_RETENTION_TOMBSTONE_CONFLICT');
     const tombstone = validateTombstone(targetEntry.value, existingIntent.value);
     await ensureImmutable(stores.control, tombstoneClaimPath, tombstoneClaim(tombstone));
     if (await getEntry(stores.control, legalHoldKey(target, env))) return { status: 'legal-hold', resumed: true };
-    await deleteTombstone(stores.intake, target, tombstone, afterDelete);
+    if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
+    await finalizeTombstone(stores.intake, target, tombstone, adapters.afterDelete);
+    if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
     const receipt = deleteReceipt(existingIntent.value, clock().toISOString());
     validateRetentionDeleteReceipt(receipt, existingIntent.value);
     await ensureImmutable(stores.control, receiptPath, receipt);
@@ -445,13 +514,16 @@ async function processTarget(target, manifest, env, stores, clock, afterDelete) 
   // The runbook requires provider writes to be frozen during an apply run
   // because Netlify Blobs cannot transact the hold and deletion keys together.
   if (await getEntry(stores.control, legalHoldKey(target, env))) return { status: 'legal-hold', resumed: false };
+  if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
   const tombstone = recordTombstone(intent, clock().toISOString());
   const replaced = await stores.intake.setJSON(target.key, tombstone, { onlyIfMatch: targetEntry.etag });
   if (!replaced?.modified || !replaced.etag) throw new Error('ARC_RETENTION_TARGET_CHANGED');
+  if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
   const storedTombstone = await getEntry(stores.intake, target.key);
   if (!storedTombstone || !exactStored(storedTombstone.value, tombstone)) throw new Error('ARC_RETENTION_TOMBSTONE_CONFLICT');
   await ensureImmutable(stores.control, tombstoneClaimPath, tombstoneClaim(tombstone));
-  await deleteTombstone(stores.intake, target, tombstone, afterDelete);
+  await finalizeTombstone(stores.intake, target, tombstone, adapters.afterDelete);
+  if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
   const receipt = deleteReceipt(intent, clock().toISOString());
   validateRetentionDeleteReceipt(receipt, intent);
   await ensureImmutable(stores.control, receiptPath, receipt);
@@ -460,31 +532,40 @@ async function processTarget(target, manifest, env, stores, clock, afterDelete) 
 
 export async function runRetentionManifest(raw, signature, env, stores, adapters = {}) {
   const clock = adapters.clock || (() => new Date());
-  let manifest = normalizeManifest(raw, signature, env, clock(), { enforceFreshness: false });
-  const existingRun = await getEntry(stores.control, runKey(manifest.value.run_id));
-  if (!existingRun) manifest = normalizeManifest(raw, signature, env, clock(), { enforceFreshness: true });
-  if (manifest.value.mode === 'apply') {
-    const prior = await getEntry(stores.control, completionKey(manifest.value.dry_run_id));
-    const value = prior?.value;
-    if (!value || value.schema !== RETENTION_COMPLETION_SCHEMA || value.mode !== 'dry-run' ||
-        value.run_id !== manifest.value.dry_run_id || value.manifest_sha256 !== manifest.value.dry_run_manifest_sha256 ||
-        value.target_set_sha256 !== manifest.targetSetDigest || value.target_count !== manifest.targets.length ||
-        value.eligible !== manifest.targets.length || value.deleted !== 0 || value.legal_hold !== 0 || value.missing !== 0 ||
-        value.not_expired !== 0 || value.provider_cleanup_included !== false) {
-      throw new Error('ARC_RETENTION_PRIOR_DRY_RUN_REQUIRED');
-    }
-  }
-  const reservation = runReservation(manifest);
+  const prepared = await prepareRetentionManifest(raw, signature, env, stores, clock);
+  const { existingCompletion, manifest, reservation } = prepared;
   await ensureImmutable(stores.control, runKey(manifest.value.run_id), reservation);
-  const existingCompletion = await getEntry(stores.control, completionKey(manifest.value.run_id));
   if (existingCompletion) {
-    if (existingCompletion.value.manifest_sha256 !== manifest.digest) throw new Error('ARC_RETENTION_INDEX_CONFLICT');
+    if (existingCompletion.value.missing !== 0) {
+      for (const target of manifest.targets) {
+        if (!await getEntry(stores.intake, target.key) && typeof adapters.onMissingSource === 'function') {
+          await adapters.onMissingSource(Object.freeze({
+            expected_source_record_sha256: target.record_sha256,
+            reason_code: 'LEGACY_COMPLETION',
+            run_id: manifest.value.run_id,
+            source_key: target.key,
+            source_store: target.store,
+          }));
+        }
+      }
+      throw new Error('ARC_RETENTION_TARGET_MISSING_LEGACY_COMPLETION');
+    }
+    if (existingCompletion.value.mode === 'apply') {
+      for (const target of manifest.targets) {
+        if (typeof adapters.renewAuthority === 'function') await adapters.renewAuthority();
+        if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
+        const verified = await processTarget(target, manifest, env, stores, clock, adapters);
+        if (verified.status !== 'deleted') throw new Error('ARC_RETENTION_COMPLETION_READBACK_INVALID');
+      }
+    }
     return { ...existingCompletion.value, idempotent_replay: true };
   }
 
   const counts = { deleted: 0, eligible: 0, legal_hold: 0, missing: 0, not_expired: 0, resumed: 0 };
   for (const target of manifest.targets) {
-    const result = await processTarget(target, manifest, env, stores, clock, adapters.afterDelete);
+    if (typeof adapters.renewAuthority === 'function') await adapters.renewAuthority();
+    if (typeof adapters.assertAuthority === 'function') await adapters.assertAuthority();
+    const result = await processTarget(target, manifest, env, stores, clock, adapters);
     if (result.status === 'legal-hold') counts.legal_hold += 1;
     else if (result.status === 'not-expired') counts.not_expired += 1;
     else counts[result.status] += 1;
