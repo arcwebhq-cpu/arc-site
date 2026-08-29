@@ -190,7 +190,7 @@ const env = {
   ARC_STRIPE_REVIEW_CHECKOUT_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET: 'stripe-review-revocation-integration-secret-0123456789abcdef',
-  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'test', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
   ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',

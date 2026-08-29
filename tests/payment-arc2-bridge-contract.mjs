@@ -119,7 +119,7 @@ const env = {
   ARC_STRIPE_WEBHOOK_SIGNING_SECRET: 'whsec_unique_checkout_webhook_0123456789_abcdefgh',
   ARC_STRIPE_REVERSAL_HMAC_SECRET: 'reversal-hmac-secret-unique-0123456789-abcdefgh',
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'arcAuthorityVerificationKey0123456789'].join('_'),
-  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.dahlia',
+  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-08-26.dahlia',
   ARC_REVIEW_PORTAL_ENABLED: 'true',
   ARC_REVIEW_CHECKOUT_ENABLED: 'true',
   ARC_REVIEW_PREVIEW_ORIGIN: 'https://previews.arcweb.onl',

@@ -211,7 +211,7 @@ const bootstrapEnv = {
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_HANDOFF_ENABLED: 'false',
-  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'bootstrapRestrictedKey0123456789'].join('_'),
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'test', 'bootstrapRestrictedKey0123456789'].join('_'),
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'bootstrapRestrictedKey0123456789'].join('_'),
 };
 assert.equal(validateActivationManifestEnvironment(bootstrapEnv, {
@@ -226,7 +226,7 @@ const claimBootstrapEnv = {
   SITE_NAME: 'arc2-sandbox',
   URL: 'https://claim-sandbox.example.test/',
 };
-const forbiddenLiveSecretFixture = ['sk', 'live', 'bootstrapMustNeverUseLiveKey012345'].join('_');
+const forbiddenLiveSecretFixture = ['rk', 'live', 'bootstrapMustNeverUseLiveKey012345'].join('_');
 const forbiddenLiveRestrictedFixture = ['rk', 'live', 'claimBootstrapMustNeverUseLiveKey012345'].join('_');
 assert.equal(validateActivationManifestEnvironment(claimBootstrapEnv, {
   minimumStage: 'CLAIM_SANDBOX', now,

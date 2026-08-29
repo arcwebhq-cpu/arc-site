@@ -6,8 +6,18 @@ export const RESEND_API_KEY_ENV = 'ARC_RESEND_API_KEY';
 export const RESEND_WEBHOOK_SECRET_ENV = 'ARC_RESEND_WEBHOOK_SECRET';
 export const RESEND_FROM_ENV = 'ARC_RESEND_FROM';
 export const RESEND_SEND_ENDPOINT = 'https://api.resend.com/emails';
+export const RESEND_SENDING_DOMAIN = 'send.arcweb.onl';
+export const RESEND_FROM_IDENTITY = 'ARC <preview@send.arcweb.onl>';
+export const RESEND_WEBHOOK_PATH = '/api/webhooks/resend';
 export const RESEND_REQUEST_TIMEOUT_MS = 10_000;
 export const RESEND_WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
+export const RESEND_REQUIRED_WEBHOOK_EVENT_TYPES = Object.freeze([
+  'email.delivered',
+  'email.bounced',
+  'email.complained',
+  'email.failed',
+  'email.suppressed',
+]);
 export const RESEND_RECONCILED_EVENT_TYPES = Object.freeze([
   'email.sent',
   'email.delivery_delayed',
@@ -42,12 +52,14 @@ function apiKey(value) {
 }
 
 function fromAddress(value) {
-  if (typeof value !== 'string' || value.length < 3 || value.length > 254 || value !== value.trim() || CONTROL.test(value)) {
+  if (value !== RESEND_FROM_IDENTITY || CONTROL.test(value)) {
     throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
   }
   const bracketed = value.match(/^([^<>]{1,100}) <([^<>]+)>$/);
   const address = (bracketed ? bracketed[2] : value).toLowerCase();
-  if (!EMAIL.test(address)) throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
+  if (!EMAIL.test(address) || address.slice(address.lastIndexOf('@') + 1) !== RESEND_SENDING_DOMAIN) {
+    throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
+  }
   return value;
 }
 

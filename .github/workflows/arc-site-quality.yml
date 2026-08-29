@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: arcwebhq-cpu/arc-previews
-          ref: 3662cab913571c02a55e722df037be5095e74cf4
+          ref: 293befc752bc0b3e650207a00a86b33fd3393982
           path: .arc-previews-contract
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

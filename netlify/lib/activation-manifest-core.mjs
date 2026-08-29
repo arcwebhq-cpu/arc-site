@@ -159,7 +159,7 @@ function testBootstrapEnvironmentReady(env, stage) {
     env.ARC_ALLOW_TEST_MODE_EVENTS === 'true' &&
     env.ARC_HANDOFF_ENABLED === 'false' &&
     TEST_BOOTSTRAP_FORBIDDEN_FLAGS.every((name) => env[name] !== 'true') &&
-    (testReviewKey === undefined || /^sk_test_[A-Za-z0-9_]{16,240}$/.test(testReviewKey)) &&
+    (testReviewKey === undefined || /^rk_test_[A-Za-z0-9_]{16,240}$/.test(testReviewKey)) &&
     (testAccountKey === undefined || /^rk_test_[A-Za-z0-9_]{16,240}$/.test(testAccountKey)) &&
     (stage !== 'CLAIM_SANDBOX' || claimBootstrapSiteReady(env));
 }

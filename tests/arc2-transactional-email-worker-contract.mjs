@@ -52,7 +52,7 @@ const env = {
   ARC_RESEND_WEBHOOK_ENABLED: 'true',
   ARC_RESEND_API_KEY: 're_worker_test_key_0123456789abcdef',
   ARC_RESEND_WEBHOOK_SECRET: `whsec_${Buffer.alloc(32, 19).toString('base64')}`,
-  ARC_RESEND_FROM: 'ARC Web <preview@arcweb.onl>',
+  ARC_RESEND_FROM: 'ARC <preview@send.arcweb.onl>',
   ARC_RESEND_PROVIDER_ACCOUNT_ID: 'resend-account-arc-production',
   ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET: 'worker-provider-binding-secret-0123456789',
   ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED: 'true',

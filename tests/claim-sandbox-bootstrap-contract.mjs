@@ -49,7 +49,7 @@ const baseEnv = {
   SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
   SITE_NAME: 'arc2-sandbox',
   URL: 'https://claim-sandbox.example.test/',
-  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'claimBootstrapReviewKey0123456789'].join('_'),
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'test', 'claimBootstrapReviewKey0123456789'].join('_'),
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'test', 'claimBootstrapAccountKey0123456789'].join('_'),
 };
 const claimBootstrapEnv = {

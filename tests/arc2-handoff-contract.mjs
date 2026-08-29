@@ -332,7 +332,7 @@ const stableCheckoutConfiguration = {
   claim_recipient_email_sha256: sha256Hex(customerEmail), completed_sessions_limit: 1, currency: 'usd',
   customer_address_source: 'stripe_checkout_customer_details.address', name_collection_required: true,
   price_id: 'price_1ArcHandoffTest', price_tax_behavior: 'exclusive', product_id: 'prod_ArcHandoffTest', product_tax_code: 'txcd_10000000', quantity: 1,
-  stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256, stripe_api_version: '2026-07-29.dahlia', stripe_mode: 'test',
+  stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256, stripe_api_version: '2026-08-26.dahlia', stripe_mode: 'test',
   tax_contract_version: 'arc-tax-v1', tax_registrations: checkoutTaxRegistrations,
   tax_registrations_sha256: sha256Hex(canonicalJson(checkoutTaxRegistrations)), terms_document_sha256: sha256Hex('terms-document-v2'), terms_version: '2026-08-25',
 };
@@ -850,6 +850,8 @@ for (const [label, snapshotOverrides] of [
   ['approval', { approval_content_sha256: '0'.repeat(64) }],
   ['terms', { terms_version: '2026-08-12' }],
   ['stripe-api', { stripe_api_version: '2026-06-24.dahlia' }],
+  ['stripe-api-retired', { stripe_api_version: '2026-07-29.dahlia' }],
+  ['stripe-api-preview', { stripe_api_version: '2026-07-29.preview' }],
 ]) {
   const invalidPolicyBundle = signedBundleInput({
     productionHtml: '<!doctype html><main>Policy-bound home</main>\n',

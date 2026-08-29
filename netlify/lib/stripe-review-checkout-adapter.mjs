@@ -36,9 +36,10 @@ import {
 } from './review-activation-runtime-readback-core.mjs';
 import { reviewPortalConfiguration } from './review-flow-core.mjs';
 import { stripeAccountVerificationConfigured } from './stripe-account-verification.mjs';
+import { ARC_STRIPE_API_VERSION } from './stripe-api-version.mjs';
 import { stripeCheckoutConfiguration } from './stripe-checkout-core.mjs';
 
-export const STRIPE_REVIEW_CHECKOUT_API_VERSION = '2026-07-29.dahlia';
+export const STRIPE_REVIEW_CHECKOUT_API_VERSION = ARC_STRIPE_API_VERSION;
 export const STRIPE_REVIEW_CHECKOUT_SCHEMA = 'arc-review-checkout-session-v1';
 
 const CHECKOUT_IDEMPOTENCY_PREFIX = 'arc-preview-checkout-idempotency-v1\n';
@@ -52,7 +53,7 @@ const ACCOUNT_ID = /^acct_[A-Za-z0-9]{6,128}$/;
 const PRICE_ID = /^price_[A-Za-z0-9_]{6,128}$/;
 const PRODUCT_ID = /^prod_[A-Za-z0-9_]{6,128}$/;
 const TAX_CODE_ID = /^txcd_[0-9]{8}$/;
-const SECRET_KEY = /^(?:rk|sk)_(test|live)_[A-Za-z0-9_]{16,240}$/;
+const RESTRICTED_KEY = /^rk_(test|live)_[A-Za-z0-9_]{16,240}$/;
 const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9_]{6,128}$/;
 const INTEGRATION_IDENTIFIER = /^arc_review_checkout_[a-z]{8}$/;
 const DEPLOYMENT_SHA = /^[a-f0-9]{40}$/;
@@ -303,7 +304,7 @@ function exactMode(env) {
 function resolveConfiguration(env, now = new Date()) {
   const mode = exactMode(env);
   const keyMatch = typeof env.ARC_STRIPE_REVIEW_SECRET_KEY === 'string'
-    ? env.ARC_STRIPE_REVIEW_SECRET_KEY.match(SECRET_KEY) : null;
+    ? env.ARC_STRIPE_REVIEW_SECRET_KEY.match(RESTRICTED_KEY) : null;
   const keyMode = mode === 'production' ? 'live' : mode === 'sandbox' ? 'test' : null;
   const review = reviewPortalConfiguration(env);
   const ledger = stripeCheckoutConfiguration(env);

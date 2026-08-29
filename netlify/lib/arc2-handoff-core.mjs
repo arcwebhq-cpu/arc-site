@@ -10,6 +10,7 @@ import {
   validateActivationManifestEnvironment,
 } from './activation-manifest-core.mjs';
 import { imageTypeForPath, validateImageAsset } from './image-asset-validation.mjs';
+import { ARC_STRIPE_API_VERSION } from './stripe-api-version.mjs';
 
 export const HANDOFF_STORE = 'arc2-handoffs';
 export const LEGACY_HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
@@ -42,7 +43,7 @@ export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
 export const CLAIM_JWT_TTL_SECONDS = 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
 export const NETLIFY_REQUEST_TIMEOUT_MS = 10_000;
-export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = '2026-07-29.dahlia';
+export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = ARC_STRIPE_API_VERSION;
 
 export const HANDOFF_STATES = Object.freeze([
   'PAYMENT_VERIFIED',
@@ -823,7 +824,7 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
     adult: snapshot.adult_acknowledgement_key === 'adultpurchaserack',
     names: snapshot.name_collection_required === true, limit: snapshot.completed_sessions_limit === 1,
     redirect: snapshot.checkout_redirect_url === 'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
-    api: snapshot.stripe_api_version === (legacyV3 ? '2026-06-24.dahlia' : '2026-07-29.dahlia'),
+    api: snapshot.stripe_api_version === (legacyV3 ? '2026-06-24.dahlia' : ARC_STRIPE_API_VERSION),
     receipt: HEX_64_PATTERN.test(snapshot.asset_publication_receipt_sha256),
     lead_recipient: /^(?:|[a-f0-9]{64})$/.test(snapshot.lead_route_recipient_hmac_sha256),
     claim_recipient: HEX_64_PATTERN.test(snapshot.claim_recipient_email_sha256),

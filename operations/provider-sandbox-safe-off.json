@@ -1,0 +1,188 @@
+{
+  "schema": "arc-provider-sandbox-safe-off-v1",
+  "version": 1,
+  "state": "SAFE_OFF",
+  "launch_ready": false,
+  "safe_off_environment": {
+    "ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED": "false",
+    "ARC_ARC2_CLAIM_LINK_RENEWAL_ENABLED": "false",
+    "ARC_ARC2_FINAL_DELIVERY_EMAIL_ENABLED": "false",
+    "ARC_ALLOW_TEST_MODE_EVENTS": "false",
+    "ARC_ANALYTICS_COLLECTION_ENABLED": "false",
+    "ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED": "false",
+    "ARC_BUILD_ANALYTICS_ENABLED": "false",
+    "ARC_BUILD_INTAKE_ENABLED": "false",
+    "ARC_BUILD_TURNSTILE_ENABLED": "false",
+    "ARC_EMAIL_RECIPIENT_VAULT_ENABLED": "false",
+    "ARC_FIRST_PARTY_RETENTION_ENABLED": "false",
+    "ARC_HANDOFF_ENABLED": "false",
+    "ARC_INTAKE_ABUSE_PROTECTION_ENABLED": "false",
+    "ARC_INTAKE_ARC1_ADAPTER_ENABLED": "false",
+    "ARC_INTAKE_ARC1_BRIDGE_ENABLED": "false",
+    "ARC_INTAKE_ARC1_CONSUMER_CLAIM_ENABLED": "false",
+    "ARC_INTAKE_ARC1_CONSUMER_COMPLETION_ENABLED": "false",
+    "ARC_INTAKE_ARC1_DISPATCH_ENABLED": "false",
+    "ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED": "false",
+    "ARC_INTAKE_ARC1_LEGACY_MIGRATION_ENABLED": "false",
+    "ARC_INTAKE_ARC1_RECOVERY_AUTOMATION_ENABLED": "false",
+    "ARC_INTAKE_ASSET_RETRIEVAL_ENABLED": "false",
+    "ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED": "false",
+    "ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED": "false",
+    "ARC_INTAKE_EMAIL_VERIFICATION_ENABLED": "false",
+    "ARC_INTAKE_ENABLED": "false",
+    "ARC_OPERATIONS_ALERT_DELIVERY_ENABLED": "false",
+    "ARC_OPERATIONS_AUDIT_ENABLED": "false",
+    "ARC_PAYMENT_ARC2_BRIDGE_ENABLED": "false",
+    "ARC_PAYMENT_ARC2_WORKER_ENABLED": "false",
+    "ARC_RESEND_SEND_ENABLED": "false",
+    "ARC_RESEND_WEBHOOK_ENABLED": "false",
+    "ARC_REVIEW_ACTIVATION_RUNTIME_READBACK_ENABLED": "false",
+    "ARC_REVIEW_CHECKOUT_ENABLED": "false",
+    "ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED": "false",
+    "ARC_REVIEW_EMAIL_OUTBOX_ENABLED": "false",
+    "ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED": "false",
+    "ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED": "false",
+    "ARC_REVIEW_PORTAL_ENABLED": "false",
+    "ARC_REVIEW_REVISION_OUTBOX_ENABLED": "false",
+    "ARC_RETENTION_CLEANUP_ENABLED": "false",
+    "ARC_STRIPE_CHECKOUT_LEDGER_ENABLED": "false",
+    "ARC_STRIPE_LIVE_MODE_ENABLED": "false",
+    "ARC_STRIPE_REVERSAL_BINDING_ENABLED": "false",
+    "ARC_STRIPE_REVERSAL_RECHECK_ENABLED": "false",
+    "ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED": "false",
+    "ARC_STRIPE_REVIEW_CHECKOUT_ENABLED": "false",
+    "ARC_STRIPE_REVIEW_REVOCATION_ENABLED": "false",
+    "ARC_TRANSACTIONAL_EMAIL_ENABLED": "false",
+    "ARC_TRANSACTIONAL_EMAIL_RETENTION_ENABLED": "false",
+    "ARC_TRANSACTIONAL_EMAIL_WORKER_ENABLED": "false"
+  },
+  "non_secret_environment": {
+    "ARC_RUNTIME_ENVIRONMENT": "sandbox",
+    "ARC_EXPECTED_NETLIFY_SITE_ID": "8f9d462c-952f-42fc-a3a0-50a2529e8f5d",
+    "ARC_PUBLIC_ORIGIN": "https://arcweb.onl",
+    "ARC_REVIEW_PUBLIC_ORIGIN": "https://arcweb.onl",
+    "ARC_REVIEW_PREVIEW_ORIGIN": "https://arcwebhq-cpu.github.io",
+    "ARC_REVIEW_CHECKOUT_ORIGIN": "https://checkout.stripe.com",
+    "ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256": "d5930b33d3c47b0ec9dad6652a475da7a238e639e31259f558a9bfba8f4489b9",
+    "ARC_EXPECTED_PRODUCT_ID": "prod_V9v4lUUnhp1sZN",
+    "ARC_EXPECTED_PRICE_ID": "price_1U9bENGv1R7moOUqQAqMfyHY",
+    "ARC_EXPECTED_PRODUCT_NAME": "ARC Fixed Five-Page Website",
+    "ARC_EXPECTED_PRODUCT_TAX_CODE": "txcd_10701200",
+    "ARC_STRIPE_CHECKOUT_OFFER_ID": "arc-fixed-five-page-offer-v1",
+    "ARC_STRIPE_CHECKOUT_TERMS_VERSION": "2026-08-25",
+    "ARC_STRIPE_WEBHOOK_API_VERSION": "2026-08-26.dahlia",
+    "ARC_STRIPE_CHECKOUT_SUCCESS_URL": "https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}",
+    "ARC_STRIPE_CHECKOUT_CANCEL_URL": "https://arcweb.onl/review/?checkout=cancelled",
+    "ARC_REVIEW_EMAIL_PROVIDER": "resend",
+    "ARC_RESEND_FROM": "ARC <preview@send.arcweb.onl>"
+  },
+  "stripe": {
+    "mode": "test",
+    "catalog": {
+      "product_id": "prod_V9v4lUUnhp1sZN",
+      "price_id": "price_1U9bENGv1R7moOUqQAqMfyHY",
+      "product_name": "ARC Fixed Five-Page Website",
+      "description": "Sandbox-only V11 checkout for the ARC fixed five-page website. No real payment or customer fulfillment.",
+      "currency": "usd",
+      "unit_amount": 500000,
+      "price_type": "one_time",
+      "tax_behavior": "exclusive",
+      "product_tax_code": "txcd_10701200",
+      "product_active": true,
+      "price_active": true,
+      "livemode": false
+    },
+    "restricted_keys": [
+      {
+        "environment_name": "ARC_STRIPE_REVIEW_SECRET_KEY",
+        "required_prefix": "rk_test_",
+        "storage_context": "NETLIFY_DEPLOY_PREVIEW_ONLY",
+        "status": "STORED",
+        "observed_scopes": [
+          "Products Read",
+          "Prices Read",
+          "Checkout Sessions Write",
+          "Tax Settings/Registrations Read"
+        ],
+        "runtime_operations": [
+          "GET /v1/account",
+          "GET /v1/prices/:id",
+          "POST /v1/checkout/sessions",
+          "GET /v1/checkout/sessions/:id",
+          "POST /v1/checkout/sessions/:id/expire",
+          "GET /v1/tax/settings",
+          "GET /v1/tax/registrations"
+        ],
+        "unverified_runtime_operations": [
+          "GET /v1/account"
+        ]
+      },
+      {
+        "environment_name": "ARC_STRIPE_ACCOUNT_VERIFICATION_KEY",
+        "required_prefix": "rk_test_",
+        "storage_context": "NETLIFY_DEPLOY_PREVIEW_ONLY",
+        "status": "STORED",
+        "observed_scopes": [
+          "Events Read",
+          "Payment Intents Read",
+          "Checkout Sessions Read"
+        ],
+        "runtime_operations": [
+          "GET /v1/account",
+          "GET /v1/events/:id",
+          "GET /v1/checkout/sessions/:id"
+        ],
+        "unverified_runtime_operations": [
+          "GET /v1/account"
+        ]
+      }
+    ],
+    "webhook_contract_source": "operations/review-activation-environment.json#stripe_webhook",
+    "webhook_status": "NOT_CREATED",
+    "tax_registration_action": "UNCHANGED"
+  },
+  "resend": {
+    "sending_domain": "send.arcweb.onl",
+    "dns_status": "VERIFIED",
+    "sender_identity": {
+      "status": "STAGED",
+      "storage_context": "NETLIFY_PRODUCTION_ONLY",
+      "value": "ARC <preview@send.arcweb.onl>"
+    },
+    "api_key": {
+      "environment_name": "ARC_RESEND_API_KEY",
+      "required_prefix": "re_",
+      "domain_scope": "send.arcweb.onl",
+      "permission": "emails.send",
+      "storage_context": "NETLIFY_PRODUCTION_ONLY",
+      "status": "STORED"
+    },
+    "webhook": {
+      "url": "https://arcweb.onl/api/webhooks/resend",
+      "path": "/api/webhooks/resend",
+      "status": "ENABLED",
+      "signing_secret_storage_context": "NETLIFY_PRODUCTION_ONLY",
+      "required_events": [
+        "email.delivered",
+        "email.bounced",
+        "email.complained",
+        "email.failed",
+        "email.suppressed"
+      ],
+      "subscribed_events": [
+        "email.sent",
+        "email.delivery_delayed",
+        "email.delivered",
+        "email.bounced",
+        "email.complained",
+        "email.failed",
+        "email.suppressed"
+      ]
+    }
+  },
+  "blockers": [
+    "STRIPE_RESTRICTED_KEY_RUNTIME_SCOPE_MISMATCH",
+    "STRIPE_WEBHOOK_NOT_CREATED",
+    "PROVIDER_E2E_NOT_RUN"
+  ]
+}

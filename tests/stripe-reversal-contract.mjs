@@ -106,7 +106,17 @@ const processStripeReversalEvent = (raw, stripeSignature, environment, adapters 
   return processStripeReversalEventCore(raw, stripeSignature, environment, { ...adapters, accountFetch });
 };
 assert.equal(stripeReversalConfiguration(env).enabled, true);
+assert.equal(STRIPE_WEBHOOK_API_VERSION, '2026-08-26.dahlia');
 assert.equal(stripeReversalConfiguration({}).enabled, false);
+for (const unsupportedApiVersion of ['2026-07-29.dahlia', '2026-07-29.preview']) {
+  const unsupported = stripeReversalConfiguration({
+    ...env,
+    ARC_STRIPE_WEBHOOK_API_VERSION: unsupportedApiVersion,
+  });
+  assert.equal(unsupported.apiVersionValid, false);
+  assert.equal(unsupported.webhookOperational, false,
+    'Only the exact stable Stripe API version may make reversal ingestion operational.');
+}
 const pausedRecheckEnv = { ...env, ARC_STRIPE_REVERSAL_RECHECK_ENABLED: 'false' };
 assert.equal(stripeReversalConfiguration(pausedRecheckEnv).enabled, false);
 assert.equal(stripeReversalConfiguration(pausedRecheckEnv).webhookOperational, true,
@@ -297,6 +307,12 @@ assert.throws(() => verifyStripeWebhookSignature(eventRaw, eventSignature(eventR
 assert.throws(() => verifyStripeWebhookSignature(eventRaw, eventSignature(eventRaw, Math.floor(now.getTime() / 1000), 'wrong-secret-but-long-enough-0123456789'),
   env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET, now), /mismatch/);
 assert.equal(normalizeStripeReversalEvent(eventRaw, eventSignature(eventRaw), env, now).eventType, 'refund.created');
+for (const unsupportedApiVersion of ['2026-07-29.dahlia', '2026-07-29.preview']) {
+  const unsupportedRaw = JSON.stringify(stripeEvent({ api_version: unsupportedApiVersion }));
+  assert.throws(() => normalizeStripeReversalEvent(
+    unsupportedRaw, eventSignature(unsupportedRaw), env, now,
+  ), /not allowlisted/i, 'Signed reversal events on a retired or preview API version must fail closed.');
+}
 
 const paymentIntentHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET, `payment-intent-v1\n${paymentIntentId}`);
 const haltFirstRaw = JSON.stringify(stripeEvent({ id: 'evt_haltFirstCrashArc1' }));

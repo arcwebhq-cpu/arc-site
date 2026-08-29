@@ -12,6 +12,7 @@ import {
   canonicalReviewActivationRuntimeJson,
   reviewActivationRuntimeAuthorityBinding,
 } from '../netlify/lib/review-activation-runtime-readback-core.mjs';
+import { ARC_STRIPE_API_VERSION } from '../netlify/lib/stripe-api-version.mjs';
 
 import {
   REVIEW_ACTIVATION_ENVIRONMENT_CONTRACT as contract,
@@ -55,6 +56,8 @@ function firstPartyRetentionReceipt(env) {
 assert.equal(contract.schema, 'arc-review-activation-environment-v1');
 assert.equal(contract.version, 1);
 assert.equal(contract.default_state, 'OFF');
+assert.equal(ARC_STRIPE_API_VERSION, '2026-08-26.dahlia');
+assert.equal(contract.stripe_webhook.api_version, ARC_STRIPE_API_VERSION);
 assert.deepEqual(contract.activation_order, [
   'OFF', 'EMAIL_SANDBOX', 'CLAIM_SANDBOX', 'LIVE_CHECKOUT', 'PUBLIC_INTAKE', 'PILOT', 'OUTREACH',
 ]);
@@ -136,7 +139,7 @@ const baseBindings = {
   ARC_STRIPE_CHECKOUT_SUCCESS_URL:
     'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
   ARC_STRIPE_CHECKOUT_TERMS_VERSION: '2026-08-25',
-  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.dahlia',
+  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-08-26.dahlia',
   ARC_ZAPIER_PAYMENT_ARC2_WORKFLOW_ID_SHA256: digest('zapier-payment-workflow'),
   ARC_ZAPIER_REVIEW_CHECKOUT_REVOCATION_WORKFLOW_ID_SHA256: digest('zapier-revocation-workflow'),
   ARC_ZAPIER_REVIEW_EMAIL_WORKFLOW_ID_SHA256: digest('zapier-email-workflow'),
@@ -151,7 +154,7 @@ function secretEnvironment(mode) {
     name,
     `review-activation-secret-${String(index).padStart(2, '0')}-abcdefghijklmnopqrstuvwxyz`,
   ]));
-  values.ARC_STRIPE_REVIEW_SECRET_KEY = `sk_${mode === 'sandbox' ? 'test' : 'live'}_` +
+  values.ARC_STRIPE_REVIEW_SECRET_KEY = `rk_${mode === 'sandbox' ? 'test' : 'live'}_` +
     'reviewActivationCheckoutKey0123456789';
   values.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY = `rk_${mode === 'sandbox' ? 'test' : 'live'}_` +
     'reviewActivationAccountKey0123456789';
@@ -587,7 +590,7 @@ assert.equal(JSON.stringify(duplicateSecret).includes(duplicateSecretEnv.ARC_REV
 
 const wrongKeyMode = createReviewActivationEnvironmentReport({
   ...sandboxEnv,
-  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'live', 'wrongModeReviewActivationKey0123456789'].join('_'),
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'live', 'wrongModeReviewActivationKey0123456789'].join('_'),
 }, { mode: 'sandbox', now });
 assert.ok(wrongKeyMode.invalid.includes('ARC_STRIPE_REVIEW_SECRET_KEY'));
 

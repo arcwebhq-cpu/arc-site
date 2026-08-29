@@ -59,9 +59,9 @@ const taxCodeId = 'txcd_10000000';
 const now = new Date('2026-08-27T22:00:00.000Z');
 const hex = character => character.repeat(64);
 const stripeKey = (scope, mode, label) => [scope, mode, label].join('_');
-const testSecretKey = stripeKey('sk', 'test', 'arc_review_checkout_0123456789abcdef');
+const testSecretKey = stripeKey('rk', 'test', 'arc_review_checkout_0123456789abcdef');
 const testRestrictedKey = stripeKey('rk', 'test', 'arc_account_verification_0123456789');
-const liveSecretKey = stripeKey('sk', 'live', 'arc_review_checkout_0123456789abcdef');
+const liveSecretKey = stripeKey('rk', 'live', 'arc_review_checkout_0123456789abcdef');
 
 const env = {
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
@@ -400,6 +400,7 @@ for (const invalidReadiness of [
   ), false);
 }
 
+assert.equal(STRIPE_REVIEW_CHECKOUT_API_VERSION, '2026-08-26.dahlia');
 assert.equal(stripeReviewCheckoutConfiguration({}).producerEnabled, false,
   'The Stripe Checkout producer must default off.');
 await assert.rejects(createStripeReviewCheckout(input, {}, { stripeClient: fakeStripe().client }),
@@ -606,6 +607,8 @@ for (const invalidEnvironment of [
   { ARC_STRIPE_REVIEW_CHECKOUT_ENABLED: 'false' },
   { ARC_STRIPE_LIVE_MODE_ENABLED: 'true' },
   { ARC_STRIPE_REVIEW_SECRET_KEY: liveSecretKey },
+  { ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.dahlia' },
+  { ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.preview' },
   { ARC_STRIPE_CHECKOUT_SUCCESS_URL: 'https://evil.example/review/?checkout=success&session_id={CHECKOUT_SESSION_ID}' },
   { ARC_STRIPE_CHECKOUT_SUCCESS_URL: 'https://arcweb.onl/review/?checkout=success&session_id={CHECKOUT_SESSION_ID}' },
   { ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER: 'arc_review_checkout_short' },
@@ -628,6 +631,10 @@ assert.equal(stripeReviewCheckoutConfiguration({
   ...env,
   ARC_STRIPE_REVIEW_SECRET_KEY: stripeKey('rk', 'test', 'arc_review_checkout_0123456789abcdef'),
 }).producerEnabled, true, 'A least-privilege restricted Stripe key must be supported.');
+assert.equal(stripeReviewCheckoutConfiguration({
+  ...env,
+  ARC_STRIPE_REVIEW_SECRET_KEY: stripeKey('sk', 'test', 'arc_review_checkout_0123456789abcdef'),
+}).producerEnabled, false, 'A broad Stripe secret key must not satisfy the Checkout producer gate.');
 
 for (const mutatePrice of [
   price => { price.active = false; },
