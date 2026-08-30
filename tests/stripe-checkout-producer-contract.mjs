@@ -37,6 +37,7 @@ import {
 import {
   assertReviewCheckoutFulfillmentAllowed,
   listReviewCheckoutBindingsForRecipient,
+  reviewCheckoutRevocationConfiguration,
 } from '../netlify/lib/review-checkout-revocation-core.mjs';
 import {
   decideReview,
@@ -368,6 +369,11 @@ productionReadinessEnv.ARC_ACTIVATION_MANIFEST = signActivationManifest({
 assert.equal(stripeReviewCheckoutConsumerReadiness(
   productionReadinessEnv, now, { deploymentSha: readinessDeploymentSha },
 ), true, 'Production consumer readiness must require a signed readback bound to the current deploy.');
+assert.equal(stripeReviewCheckoutConsumerReadiness({
+  ...productionReadinessEnv,
+  ARC_ROTATED_CREDENTIAL_V2: productionReadinessEnv.ARC_ACTIVATION_MANIFEST_HMAC_SECRET,
+}, now, { deploymentSha: readinessDeploymentSha }), false,
+'A valid production consumer readback must reject an arbitrary alias of the activation manifest secret.');
 for (const invalidReadiness of [
   { ...productionReadinessEnv, ARC_PAYMENT_ARC2_WORKER_ENABLED: 'false' },
   { ...productionReadinessEnv, ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false' },
@@ -420,6 +426,39 @@ const missingConsumerRuntime = {
   ARC_PAYMENT_ARC2_WORKER_SECRET: 'payment-worker-readiness-test-secret-0123456789abcdef',
   ARC_REVIEW_ACTIVATION_READBACK_JSON: '',
 };
+for (const credentialName of [
+  'NETLIFY_ADMIN_PAT',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+]) {
+  assert.equal(stripeReviewCheckoutConfiguration({
+    ...missingConsumerRuntime,
+    ARC_ROTATED_CREDENTIAL_V2: missingConsumerRuntime[credentialName],
+  }, now).secretsDistinct, false,
+  `${credentialName} must reject an arbitrary alias in the production Checkout adapter.`);
+}
+assert.equal(reviewCheckoutRevocationConfiguration({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET,
+}).enabled, false, 'Checkout revocation signing must reject an arbitrary configured alias.');
+for (const credentialName of [
+  'ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET',
+  'ARC_STRIPE_REVIEW_SECRET_KEY',
+  'ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET',
+  'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
+  'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+  'ARC_REVIEW_INVITE_HMAC_SECRET',
+  'ARC_REVIEW_SESSION_HMAC_SECRET',
+  'ARC_REVIEW_RECORD_HMAC_SECRET',
+  'ARC_REVIEW_DECISION_HMAC_SECRET',
+  'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+  'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
+]) {
+  assert.equal(stripeReviewCheckoutConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }, now).secretsDistinct, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
 assert.equal(stripeReviewCheckoutConfiguration(missingConsumerRuntime, now).consumerReadinessValid, false);
 assert.equal(stripeReviewCheckoutConfiguration({
   ...missingConsumerRuntime,

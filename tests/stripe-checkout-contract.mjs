@@ -206,6 +206,18 @@ assert.equal(stripeCheckoutConfiguration({
   ...env,
   ARC_STRIPE_REVERSAL_HMAC_SECRET: env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET,
 }).enabled, false, 'Stripe signatures and stored identity HMACs must not share a secret.');
+for (const credentialName of [
+  'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+]) {
+  const aliased = stripeCheckoutConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  });
+  assert.equal(aliased.secretsValid, false,
+    `An arbitrary alias must not reuse ${credentialName}.`);
+  assert.equal(aliased.webhookOperational, false);
+}
 assert.equal(stripeCheckoutConfiguration({
   ...env,
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'sk_' + 'test_fullAccessKeysAreNotAccepted0123456789',

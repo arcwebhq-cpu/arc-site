@@ -22,6 +22,7 @@ import {
   registerStripeReversalBinding,
   registerStripeReversalRecheck,
   stripeReversalConfiguration,
+  stripeReversalSandboxExemption,
   stripeReversalKeys,
   verifyStripeWebhookSignature,
 } from '../netlify/lib/stripe-reversal-core.mjs';
@@ -106,6 +107,21 @@ const processStripeReversalEvent = (raw, stripeSignature, environment, adapters 
   return processStripeReversalEventCore(raw, stripeSignature, environment, { ...adapters, accountFetch });
 };
 assert.equal(stripeReversalConfiguration(env).enabled, true);
+for (const credentialName of [
+  'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+  'ARC_STRIPE_REVERSAL_BINDING_SECRET',
+  'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
+  'ARC_STRIPE_REVERSAL_RECHECK_SECRET',
+  'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
+  'ARC_HANDOFF_STATE_SECRET',
+  'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
+]) {
+  assert.equal(stripeReversalConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 assert.equal(STRIPE_WEBHOOK_API_VERSION, '2026-08-26.dahlia');
 assert.equal(stripeReversalConfiguration({}).enabled, false);
 for (const unsupportedApiVersion of ['2026-07-29.dahlia', '2026-07-29.preview']) {
@@ -123,6 +139,32 @@ assert.equal(stripeReversalConfiguration(pausedRecheckEnv).webhookOperational, t
   'Webhook ingestion must stay operational when a producer-side recheck is paused.');
 assert.equal(stripeReversalConfiguration({ ...env, ARC_HANDOFF_TRIGGER_SECRET: env.ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET }).enabled, false,
   'Stripe endpoint credentials must not reuse existing handoff authorization secrets.');
+const sandboxExemptionEnv = {
+  ...env,
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
+  ARC_RUNTIME_ENVIRONMENT: 'sandbox',
+  ARC_ALLOW_TEST_MODE_EVENTS: 'true',
+  ARC_HANDOFF_ENABLED: 'false',
+};
+assert.equal(stripeReversalSandboxExemption(sandboxExemptionEnv), true);
+assert.equal(stripeReversalConfiguration(sandboxExemptionEnv).sandboxExemption, true);
+await assert.doesNotReject(assertHandoffFulfillmentAllowed(
+  new FakeStore(), handoffId, sandboxExemptionEnv,
+), 'Only the exact non-live, test-only, handoff-disabled sandbox may omit reversal control.');
+for (const unsafeSandboxMutation of [
+  { ARC_STRIPE_LIVE_MODE_ENABLED: 'true' },
+  { ARC_ALLOW_TEST_MODE_EVENTS: 'false' },
+  { ARC_HANDOFF_ENABLED: 'true' },
+  { ARC_RUNTIME_ENVIRONMENT: 'production' },
+]) {
+  const unsafeSandboxEnv = { ...sandboxExemptionEnv, ...unsafeSandboxMutation };
+  assert.equal(stripeReversalSandboxExemption(unsafeSandboxEnv), false);
+  assert.equal(stripeReversalConfiguration(unsafeSandboxEnv).sandboxExemption, false);
+  await assert.rejects(assertHandoffFulfillmentAllowed(
+    new FakeStore(), handoffId, unsafeSandboxEnv,
+  ), /REVERSAL_CONTROL_DISABLED/,
+  'A sandbox label cannot exempt a live, test-disabled, handoff-enabled, or production runtime.');
+}
 
 const normalizedFixture = {
   payment: {
@@ -169,6 +211,24 @@ await createIndex(store, stripeReversalKeys.checkoutSessionIndexKey(checkoutSess
   artifact_evidence_sha256: record.artifact_evidence_sha256,
   bundle_fingerprint: record.bundle_fingerprint,
 });
+const checkoutLedgerBinding = (id, sessionId, intentId, paymentEvidenceSha256) => ({
+  schema: 'arc-stripe-checkout-handoff-binding-v1',
+  handoff_id: id,
+  checkout_session_id_hmac_sha256: hmacHex(
+    env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `stripe-checkout-session-id-v1\n${sessionId}`,
+  ),
+  payment_intent_id_hmac_sha256: hmacHex(
+    env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `stripe-checkout-payment-intent-id-v1\n${intentId}`,
+  ),
+  payment_link_id_hmac_sha256: 'f'.repeat(64),
+  payment_evidence_sha256: paymentEvidenceSha256,
+  stripe_account_id_sha256: accountHash,
+  livemode: false,
+});
+await createIndex(store, `stripe-checkout-handoff/${handoffId}`,
+  checkoutLedgerBinding(handoffId, checkoutSessionId, paymentIntentId, record.payment_evidence_sha256));
 
 await assert.rejects(assertHandoffFulfillmentAllowed(store, handoffId, env, { checkoutSessionId }), /BINDING_REQUIRED/,
   'Required control must stop before any provider write when the PaymentIntent binding is absent.');
@@ -198,14 +258,41 @@ await createIndex(partialStore, stripeReversalKeys.checkoutSessionIndexKey(check
   artifact_evidence_sha256: record.artifact_evidence_sha256,
   bundle_fingerprint: record.bundle_fingerprint,
 });
+await createIndex(partialStore, `stripe-checkout-handoff/${handoffId}`,
+  checkoutLedgerBinding(handoffId, checkoutSessionId, paymentIntentId, record.payment_evidence_sha256));
 partialStore.failKeyOnce = stripeReversalKeys.handoffBindingKey(handoffId);
 await assert.rejects(registerStripeReversalBinding(bindingEvidence, bindingSignature, env, {
   store: partialStore, clock: () => new Date(now),
 }), /simulated_partial_binding_crash/);
 assert.ok(await readIndex(partialStore, stripeReversalKeys.paymentIntentIndexKey(paymentIntentId, env)),
-  'The simulated crash occurs after the immutable PaymentIntent half is reserved.');
+  'The simulated crash occurs after the unique PaymentIntent half is reserved.');
 assert.equal(await readIndex(partialStore, stripeReversalKeys.handoffBindingKey(handoffId)), null);
+await assert.rejects(assertHandoffFulfillmentAllowed(partialStore, handoffId, env, {
+  checkoutSessionId, now,
+}), /BINDING_REQUIRED/);
 await assert.rejects(assertHandoffFulfillmentAllowed(store, handoffId, env, { checkoutSessionId, now }), /RECHECK_REQUIRED/);
+const competingPaymentIntentId = 'pi_arcReversalCompeting456';
+const competingBindingEvidence = canonicalJson({
+  ...bindingValue,
+  payment_intent_id: competingPaymentIntentId,
+});
+await assert.rejects(registerStripeReversalBinding(competingBindingEvidence, hmacHex(
+  env.ARC_STRIPE_REVERSAL_BINDING_SECRET,
+  `${STRIPE_REVERSAL_BINDING_PREFIX}${competingBindingEvidence}`,
+), env, { store: partialStore, clock: () => new Date(now) }), /CHECKOUT_BINDING_MISMATCH/,
+'A competing PaymentIntent must fail against the immutable Checkout ledger before writing either half.');
+assert.equal(await readIndex(partialStore,
+  stripeReversalKeys.paymentIntentIndexKey(competingPaymentIntentId, env)), null);
+assert.equal(await readIndex(partialStore, stripeReversalKeys.handoffBindingKey(handoffId)), null);
+const regeneratedBindingEvidence = canonicalJson({
+  ...bindingValue,
+  issued_at: new Date(now.getTime() + 1).toISOString(),
+});
+await assert.rejects(registerStripeReversalBinding(regeneratedBindingEvidence, hmacHex(
+  env.ARC_STRIPE_REVERSAL_BINDING_SECRET,
+  `${STRIPE_REVERSAL_BINDING_PREFIX}${regeneratedBindingEvidence}`,
+), env, { store: partialStore, clock: () => new Date(now.getTime() + 1) }), /INDEX_CONFLICT/,
+'Partial-write recovery must retry the byte-identical canonical body rather than regenerate issued_at.');
 const recheckValue = {
   version: STRIPE_REVERSAL_RECHECK_SCHEMA,
   scope: STRIPE_REVERSAL_RECHECK_SCOPE,
@@ -221,6 +308,10 @@ const recheckValue = {
 };
 const recheckEvidence = canonicalJson(recheckValue);
 const recheckSignature = hmacHex(env.ARC_STRIPE_REVERSAL_RECHECK_SECRET, `${STRIPE_REVERSAL_RECHECK_PREFIX}${recheckEvidence}`);
+await assert.rejects(registerStripeReversalRecheck(recheckEvidence, recheckSignature, env, {
+  store: partialStore, clock: () => new Date(now),
+}), /RECHECK_BINDING_MISMATCH/,
+'A clean recheck cannot authorize a partial reciprocal reversal binding.');
 assert.equal((await registerStripeReversalRecheck(recheckEvidence, recheckSignature, env, {
   store, clock: () => new Date(now),
 })).idempotentReplay, false);
@@ -247,7 +338,21 @@ await assert.doesNotReject(assertHandoffFulfillmentAllowed(store, handoffId, env
   maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
   now: new Date(now.getTime() + 60_000),
   recheckNotBefore: nextRecheckValue.issued_at,
+  recheckNotAfter: nextRecheckValue.issued_at,
 }));
+await assert.rejects(assertHandoffFulfillmentAllowed(store, handoffId, env, {
+  checkoutSessionId,
+  now: new Date(now.getTime() + 60_000),
+  recheckNotAfter: new Date(Date.parse(nextRecheckValue.issued_at) - 1).toISOString(),
+}), /RECHECK_REQUIRED/,
+'A Stripe observation one millisecond after the provider-read boundary cannot authorize those reads.');
+await assert.rejects(assertHandoffFulfillmentAllowed(store, handoffId, env, {
+  checkoutSessionId,
+  now: new Date(now.getTime() + 60_000),
+  recheckNotBefore: nextRecheckValue.issued_at,
+  recheckNotAfter: new Date(Date.parse(nextRecheckValue.issued_at) - 1).toISOString(),
+}), /guard options are invalid/,
+'A caller cannot reverse the Stripe observation boundary.');
 await assert.rejects(assertHandoffFulfillmentAllowed(store, handoffId, env, {
   checkoutSessionId,
   maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
@@ -439,6 +544,12 @@ await createIndex(store, stripeReversalKeys.checkoutSessionIndexKey(pendingCheck
   artifact_evidence_sha256: pendingRecord.artifact_evidence_sha256,
   bundle_fingerprint: pendingRecord.bundle_fingerprint,
 });
+await createIndex(store, `stripe-checkout-handoff/${pendingHandoffId}`, checkoutLedgerBinding(
+  pendingHandoffId,
+  pendingCheckoutSessionId,
+  'pi_unboundArcContract',
+  pendingRecord.payment_evidence_sha256,
+));
 const pendingBindingEvidence = canonicalJson({
   ...bindingValue,
   checkout_session_id: pendingCheckoutSessionId,

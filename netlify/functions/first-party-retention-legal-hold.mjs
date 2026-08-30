@@ -14,6 +14,7 @@ import {
 import { enqueueRetentionGenerationFenceCriticalAlert } from
   '../lib/retention-generation-fence-alert-queue-core.mjs';
 import { writeRetentionLegalHoldFenced } from '../lib/retention-fenced-route-core.mjs';
+import { sensitiveCredentialsAreIsolated } from '../lib/sensitive-credential-isolation.mjs';
 
 export const FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV =
   'ARC_FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER';
@@ -26,8 +27,6 @@ const INPUT_FIELDS = Object.freeze([
   'reason_code',
   'subject_hmac_sha256',
 ]);
-const SENSITIVE_ENV_NAME = /(?:SECRET|KEY|BEARER|TOKEN|_PAT)$/;
-
 function response(status, value, headers = {}) {
   return new Response(JSON.stringify(value), { status, headers: {
     'Cache-Control': 'no-store',
@@ -49,9 +48,8 @@ export function firstPartyRetentionLegalHoldWriterConfiguration(env = process.en
   const retention = firstPartyRetentionConfiguration(env);
   const bearer = env[FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV];
   const bearerValid = validSecret(bearer);
-  const bearerDistinct = bearerValid && !Object.entries(env).some(([name, value]) =>
-    name !== FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV && SENSITIVE_ENV_NAME.test(name) &&
-    typeof value === 'string' && value.length > 0 && value === bearer);
+  const bearerDistinct = bearerValid && sensitiveCredentialsAreIsolated(env,
+    [FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV]);
   return Object.freeze({
     requested: retention.requested,
     enabled: retention.enabled && bearerValid && bearerDistinct,

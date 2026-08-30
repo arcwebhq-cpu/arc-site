@@ -168,16 +168,36 @@ for (const [name, value] of Object.entries(savedAnalyticsAuthority)) {
 
 const savedUser = process.env.ARC_ANALYTICS_DASHBOARD_USER;
 const savedPassword = process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;
+const savedRotatedCredential = process.env.ARC_ROTATED_CREDENTIAL_V2;
 delete process.env.ARC_ANALYTICS_DASHBOARD_USER;
 delete process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;
+delete process.env.ARC_ROTATED_CREDENTIAL_V2;
 try {
   const unconfiguredDashboard = await analyticsDashboardHandler(new Request('https://arcweb.onl/internal/analytics'));
   assert.equal(unconfiguredDashboard.status, 503);
+  process.env.ARC_ANALYTICS_DASHBOARD_USER = 'arc-analytics-operator';
+  process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD = 'analytics-dashboard-password-unique-0123456789';
+  for (const credentialName of [
+    'ARC_ANALYTICS_DASHBOARD_USER',
+    'ARC_ANALYTICS_DASHBOARD_PASSWORD',
+  ]) {
+    process.env.ARC_ROTATED_CREDENTIAL_V2 = process.env[credentialName];
+    const aliasedDashboard = await analyticsDashboardHandler(new Request('https://arcweb.onl/internal/analytics', {
+      headers: {
+        authorization: `Basic ${Buffer.from(`${process.env.ARC_ANALYTICS_DASHBOARD_USER}:${
+          process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD}`).toString('base64')}`,
+      },
+    }));
+    assert.equal(aliasedDashboard.status, 503,
+      `${credentialName} must reject an arbitrary configured alias before storage access.`);
+  }
 } finally {
   if (savedUser === undefined) delete process.env.ARC_ANALYTICS_DASHBOARD_USER;
   else process.env.ARC_ANALYTICS_DASHBOARD_USER = savedUser;
   if (savedPassword === undefined) delete process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;
   else process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD = savedPassword;
+  if (savedRotatedCredential === undefined) delete process.env.ARC_ROTATED_CREDENTIAL_V2;
+  else process.env.ARC_ROTATED_CREDENTIAL_V2 = savedRotatedCredential;
 }
 
 class FakeAnalyticsPruneStore {
@@ -294,6 +314,13 @@ const missingConfigPrune = createAnalyticsPruneHandler({
   env: { ARC_ANALYTICS_PRUNE_AUTOMATION_ENABLED: 'true' }, store: untouchedStore, clock: () => now,
 });
 assert.equal((await missingConfigPrune(pruneRequest())).status, 503, 'Enabled pruning without a dedicated secret must fail closed.');
+const duplicatedConfigPrune = createAnalyticsPruneHandler({
+  env: { ...pruneEnv, ARC_ANALYTICS_PRUNE_SECRET_V2: pruneSecret },
+  store: untouchedStore,
+  clock: () => now,
+});
+assert.equal((await duplicatedConfigPrune(pruneRequest())).status, 503,
+  'A renamed analytics prune credential copy must fail closed.');
 const guardedPrune = createAnalyticsPruneHandler({ env: pruneEnv, store: untouchedStore, clock: () => now });
 assert.equal((await guardedPrune(pruneRequest(undefined, 'GET'))).status, 405);
 assert.equal((await guardedPrune(pruneRequest(undefined, 'POST', false))).status, 401);

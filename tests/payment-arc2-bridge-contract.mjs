@@ -19,6 +19,7 @@ import {
   ARC2_PRODUCTION_HEADERS_FILE,
   ARTIFACT_SIGNATURE_PREFIX,
   hmacHex,
+  normalizeReviewPaymentEvidence,
 } from '../netlify/lib/arc2-handoff-core.mjs';
 import { startHandoff, startReviewHandoff } from '../netlify/lib/arc2-handoff-service.mjs';
 import { stripeCheckoutKeys } from '../netlify/lib/stripe-checkout-core.mjs';
@@ -604,6 +605,30 @@ assert.notEqual(reviewEvidence.value.payer_email_sha256, reviewEvidence.value.cl
   'Billing payer identity is audit-only; signed review recipient remains fulfillment authority.');
 assert.equal(reviewEvidence.value.handoff_artifact_evidence_sha256, artifactBinding.artifact_evidence_sha256);
 assert.match(reviewEvidence.signature, /^[a-f0-9]{64}$/);
+assert.throws(() => normalizeReviewPaymentEvidence(
+  reviewEvidence.canonical,
+  reviewEvidence.signature,
+  env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
+  reviewArtifactObject,
+  {
+    ...env,
+    ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET: 'detached-payment-bridge-secret-0123456789abcdef',
+  },
+), /credential|isolated/i,
+'Review payment verification must bind the supplied key to the configured bridge credential.');
+for (const credentialName of [
+  'ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+  'ARC_CHECKOUT_BINDING_SECRET',
+]) {
+  assert.throws(() => normalizeReviewPaymentEvidence(
+    reviewEvidence.canonical,
+    reviewEvidence.signature,
+    env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
+    reviewArtifactObject,
+    { ...env, ARC_ROTATED_CREDENTIAL_V2: env[credentialName] },
+  ), /credential|isolated/i, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 await assert.rejects(createPaymentArc2ReviewEvidence(stores, {
   artifact_binding: { ...artifactBinding, production_content_sha256: hash('wrong-content') },
   checkout_session_id: rawSessionId,

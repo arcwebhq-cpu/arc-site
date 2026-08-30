@@ -34,6 +34,7 @@ import {
 } from '../netlify/lib/stripe-checkout-core.mjs';
 import {
   STRIPE_REVERSAL_BINDING_SCHEMA,
+  STRIPE_PAYMENT_INTENT_INDEX_SCHEMA,
   STRIPE_REVERSAL_RECHECK_SCHEMA,
   stripeReversalKeys,
 } from '../netlify/lib/stripe-reversal-core.mjs';
@@ -275,7 +276,7 @@ async function seed(store, record, outbox, authorityNow = now) {
   const reversalPaymentHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
     `payment-intent-v1\n${paymentIntentId}`);
   const bindingEvidenceSha256 = sha256Hex(`ack-binding:${record.handoff_id}`);
-  await createIndex(store, stripeReversalKeys.handoffBindingKey(record.handoff_id), {
+  const reversalBinding = {
     schema: STRIPE_REVERSAL_BINDING_SCHEMA,
     handoff_id: record.handoff_id,
     checkout_session_id_hmac_sha256: reversalCheckoutHmac,
@@ -284,6 +285,11 @@ async function seed(store, record, outbox, authorityNow = now) {
     livemode: false,
     payment_evidence_sha256: record.payment_evidence_sha256,
     binding_evidence_sha256: bindingEvidenceSha256,
+  };
+  await createIndex(store, stripeReversalKeys.handoffBindingKey(record.handoff_id), reversalBinding);
+  await createIndex(store, stripeReversalKeys.paymentIntentIndexKey(paymentIntentId, env), {
+    ...reversalBinding,
+    schema: STRIPE_PAYMENT_INTENT_INDEX_SCHEMA,
   });
   await createIndex(store, stripeReversalKeys.recheckKey(record.handoff_id), {
     schema: STRIPE_REVERSAL_RECHECK_SCHEMA,
@@ -340,6 +346,11 @@ assert.doesNotThrow(() => validateExpectedBindings(record));
 
 const store = new FakeStore();
 await seed(store, record, fixture.outbox);
+await assert.rejects(acknowledgeFinalDelivery(handoffId, receipt, signature, {
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_FINAL_DELIVERY_RECEIPT_SECRET,
+}, { store, clock: () => new Date(now) }), /distinct|isolated/i,
+'An arbitrary alias of the final-delivery receipt credential must fail before durable mutation.');
 const first = await acknowledgeFinalDelivery(handoffId, receipt, signature, env, { store, clock: () => new Date(now) });
 assert.equal(first.record.state, 'DELIVERED');
 assert.equal(first.record.revision, record.revision + 1, 'Receipt fields and DELIVERED must be one handoff CAS transition.');

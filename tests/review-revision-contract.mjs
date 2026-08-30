@@ -27,6 +27,7 @@ import {
   completeReviewRevisionWork,
   readReviewRevisionWork,
   reserveReviewRevisionWork,
+  reviewRevisionInternalWorkerAdapter,
   reviewRevisionOutboxConfiguration,
 } from '../netlify/lib/review-revision-outbox-core.mjs';
 import reviewDecisionHandler from '../netlify/functions/review-decision.mjs';
@@ -251,6 +252,30 @@ const completionInput = (leaseToken) => ({
 
 assert.equal(reviewRevisionOutboxConfiguration({}).enabled, false, 'The outbox must default off.');
 assert.equal(reviewRevisionOutboxConfiguration(env).enabled, true);
+for (const credentialName of [
+  'ARC_REVIEW_INVITE_HMAC_SECRET',
+  'ARC_REVIEW_SESSION_HMAC_SECRET',
+  'ARC_REVIEW_RECORD_HMAC_SECRET',
+  'ARC_REVIEW_DECISION_HMAC_SECRET',
+  'ARC_REVIEW_REVISION_OUTBOX_HMAC_SECRET',
+  'ARC_REVIEW_REVISION_SUPPLY_CHAIN_HMAC_SECRET',
+  'ARC_REVIEW_REVISION_INVITE_RESERVATION_HMAC_SECRET',
+  'ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET',
+  'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+  'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
+]) {
+  assert.equal(reviewRevisionOutboxConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
+assert.deepEqual(await reviewRevisionInternalWorkerAdapter({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET,
+})({ authorization: env.ARC_REVIEW_REVISION_INTERNAL_AUTH_SECRET }), {
+  authorized: false,
+  worker_id_sha256: '0'.repeat(64),
+});
 assert.equal(reviewRevisionOutboxConfiguration({
   ...env,
   ARC_REVIEW_REVISION_SUPPLY_CHAIN_HMAC_SECRET: env.ARC_REVIEW_RECORD_HMAC_SECRET,

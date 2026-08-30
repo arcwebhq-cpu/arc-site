@@ -26,6 +26,7 @@ import { operationsAuditConfiguration } from '../netlify/lib/operations-audit-co
 import { claimSandboxBootstrapConfiguration } from '../netlify/lib/claim-sandbox-bootstrap-core.mjs';
 import { retentionGenerationFenceConfiguration } from '../netlify/lib/retention-generation-fence-core.mjs';
 import { ARC_STRIPE_API_VERSION } from '../netlify/lib/stripe-api-version.mjs';
+import { sensitiveCredentialsAreIsolated } from '../netlify/lib/sensitive-credential-isolation.mjs';
 
 const CONTRACT_URL = new URL('../operations/review-activation-environment.json', import.meta.url);
 export const REVIEW_ACTIVATION_ENVIRONMENT_CONTRACT = Object.freeze(
@@ -364,9 +365,11 @@ export function createReviewActivationEnvironmentReport(
     else if (!validSecret(env[present[0]])) invalid.push(present[0]);
     else selectedAliasSecretNames.push(present[0]);
   }
-  const presentSecrets = [...secretNames, ...selectedAliasSecretNames]
-    .filter((name) => validSecret(env[name])).map((name) => env[name]);
-  if (new Set(presentSecrets).size !== presentSecrets.length) invalid.push('SECRET_DISTINCTNESS');
+  const configuredSecretNames = [...secretNames, ...selectedAliasSecretNames];
+  if (configuredSecretNames.every((name) => validSecret(env[name])) &&
+      !sensitiveCredentialsAreIsolated(env, configuredSecretNames)) {
+    invalid.push('SECRET_DISTINCTNESS');
+  }
   const retentionGenerationFence = retentionGenerationFenceConfiguration(env);
   if (!retentionGenerationFence.ready) invalid.push('RETENTION_GENERATION_FENCE_CONFIGURATION');
   const keyMode = profile.stripe_key_mode;

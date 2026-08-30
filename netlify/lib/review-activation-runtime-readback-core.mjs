@@ -11,6 +11,7 @@ import {
   ACTIVATION_NEXT_MANIFEST_ENV,
   validateActivationManifest,
 } from './activation-manifest-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 import REVIEW_ACTIVATION_ENVIRONMENT_CONTRACT from
   '../../operations/review-activation-environment.json' with { type: 'json' };
 
@@ -197,7 +198,9 @@ function bindingsComplete(bindings) {
 export function selectedNetlifyCredentialName(env = process.env) {
   const present = ['NETLIFY_ADMIN_PAT', 'NETLIFY_ACCESS_TOKEN']
     .filter((name) => typeof env[name] === 'string' && env[name].length > 0);
-  return present.length === 1 ? present[0] : null;
+  return present.length === 1 && sensitiveCredentialsAreIsolated(env, [present[0]])
+    ? present[0]
+    : null;
 }
 
 export function reviewActivationRuntimeEnvironmentNamesSha256(env = process.env) {
@@ -223,7 +226,12 @@ export function reviewActivationRuntimeAuthorityBinding(env = process.env, optio
   const bindings = expectedBindings(env);
   const environmentNamesSha256 = reviewActivationRuntimeEnvironmentNamesSha256(env);
   const credentialName = selectedNetlifyCredentialName(env);
-  const credential = credentialName ? env[credentialName] : null;
+  const rawCredentialNames = credentialName
+    ? [credentialName, ACTIVATION_MANIFEST_SECRET_ENV]
+    : [];
+  const rawCredentialsIsolated = rawCredentialNames.length === 2 &&
+    sensitiveCredentialsAreIsolated(env, rawCredentialNames);
+  const credential = rawCredentialsIsolated ? env[credentialName] : null;
   const rawBindingsValid = UUID.test(String(env.ARC_EXPECTED_NETLIFY_SITE_ID || '')) &&
     PRICE_ID.test(String(env.ARC_EXPECTED_PRICE_ID || '')) &&
     PRODUCT_ID.test(String(env.ARC_EXPECTED_PRODUCT_ID || '')) &&
@@ -246,6 +254,7 @@ export function reviewActivationRuntimeAuthorityBinding(env = process.env, optio
 }
 
 function manifestBindsRuntimeAuthority(env, deploymentSha, authoritySha256, now) {
+  if (!sensitiveCredentialsAreIsolated(env, [ACTIVATION_MANIFEST_SECRET_ENV])) return false;
   for (const name of [ACTIVATION_MANIFEST_ENV, ACTIVATION_NEXT_MANIFEST_ENV]) {
     const raw = env[name];
     const validation = validateActivationManifest(raw, {

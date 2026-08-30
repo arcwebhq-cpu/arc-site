@@ -6,6 +6,7 @@ import {
   EVENT_NAMES,
   RETENTION_DAYS,
 } from '../lib/analytics-core.mjs';
+import { sensitiveCredentialsAreIsolated } from '../lib/sensitive-credential-isolation.mjs';
 
 function safeEqual(left, right) {
   const a = Buffer.from(String(left));
@@ -67,7 +68,10 @@ function dashboardHtml(periods, generatedAt) {
 export default async (request) => {
   const expectedUser = process.env.ARC_ANALYTICS_DASHBOARD_USER;
   const expectedPassword = process.env.ARC_ANALYTICS_DASHBOARD_PASSWORD;
-  if (!expectedUser || !expectedPassword) return unauthorized(503);
+  if (!expectedUser || !expectedPassword || !sensitiveCredentialsAreIsolated(process.env, [
+    'ARC_ANALYTICS_DASHBOARD_USER',
+    'ARC_ANALYTICS_DASHBOARD_PASSWORD',
+  ])) return unauthorized(503);
   const supplied = credentials(request);
   if (!supplied || !safeEqual(supplied.user, expectedUser) || !safeEqual(supplied.password, expectedPassword)) return unauthorized();
 

@@ -18,6 +18,7 @@ import {
   replaceIndex,
 } from './arc2-handoff-store.mjs';
 import { deleteEmailRecipientCapsule } from './email-recipient-vault-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET_ENV =
   'ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET';
@@ -87,6 +88,9 @@ function reviewState(kind) {
 }
 
 function resolvedSecret(env) {
+  if (!sensitiveCredentialsAreIsolated(env, [ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET_ENV])) {
+    throw new TypeError(`${ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET_ENV} is not isolated.`);
+  }
   return secret(env[ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET_ENV]);
 }
 

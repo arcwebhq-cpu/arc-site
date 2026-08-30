@@ -87,6 +87,10 @@ assert.equal(intakeAbuseProtectionConfiguration({
   ...baseEnv,
   ARC_INTAKE_ABUSE_HMAC_SECRET: baseEnv.ARC_TURNSTILE_SECRET_KEY,
 }).enabled, false, 'The abuse HMAC and provider secret may not share authority.');
+assert.equal(intakeAbuseProtectionConfiguration({
+  ...baseEnv,
+  ARC_INTAKE_ABUSE_HMAC_SECRET_ROTATED: baseEnv.ARC_INTAKE_ABUSE_HMAC_SECRET,
+}).enabled, false, 'A renamed abuse credential copy must fail closed.');
 
 const verifiedStore = new FakeStore();
 const verifiedForm = challengeForm();

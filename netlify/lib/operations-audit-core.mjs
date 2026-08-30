@@ -19,6 +19,7 @@ import {
   validateRetentionDeleteIntent,
   validateRetentionDeleteReceipt,
 } from './retention-control-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const OPERATIONS_ALERT_STORE = 'arc-operations-alerts';
 export const OPERATIONS_AUDIT_MAX_RECORDS = 5_000;
@@ -228,19 +229,12 @@ function requestAuditCursor(adapters) {
 }
 
 export function operationsAuditConfiguration(env = process.env) {
-  const secrets = [env.ARC_OPERATIONS_AUDIT_SECRET, env.ARC_OPERATIONS_ALERT_HMAC_SECRET,
-    env.ARC_EMAIL_CLAIM_BINDING_SECRET, env.ARC_HANDOFF_STATE_SECRET];
-  const values = secrets.filter(validSecret);
-  const otherSecretNames = [
-    'ARC_HANDOFF_TRIGGER_SECRET', 'ARC_CHECKOUT_BINDING_SECRET',
-    'ARC_CLAIM_TOKEN_SECRET', 'ARC_FINAL_DELIVERY_ACK_SECRET', 'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
-    'ARC_RETENTION_CLEANUP_SECRET', 'ARC_RETENTION_MANIFEST_SECRET', 'ARC_RETENTION_RECORD_HMAC_SECRET',
-    'ARC_STRIPE_WEBHOOK_SIGNING_SECRET', 'ARC_STRIPE_REVERSAL_HMAC_SECRET',
-    'ARC_STRIPE_REVERSAL_BINDING_SECRET', 'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
-    'ARC_STRIPE_REVERSAL_RECHECK_SECRET', 'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
+  const secretNames = [
+    'ARC_OPERATIONS_AUDIT_SECRET', 'ARC_OPERATIONS_ALERT_HMAC_SECRET',
+    'ARC_EMAIL_CLAIM_BINDING_SECRET', 'ARC_HANDOFF_STATE_SECRET',
   ];
-  const crossSecretCollision = otherSecretNames.some((name) => validSecret(env[name]) && values.includes(env[name]));
-  const secretsValid = values.length === secrets.length && new Set(values).size === values.length && !crossSecretCollision;
+  const secretsValid = secretNames.every((name) => validSecret(env[name])) &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   return { enabled: env.ARC_OPERATIONS_AUDIT_ENABLED === 'true' && secretsValid, secretsValid };
 }
 

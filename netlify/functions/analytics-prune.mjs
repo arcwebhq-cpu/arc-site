@@ -29,6 +29,7 @@ import {
 } from '../lib/retention-generation-fence-core.mjs';
 import { enqueueRetentionGenerationFenceCriticalAlert } from
   '../lib/retention-generation-fence-alert-queue-core.mjs';
+import { sensitiveCredentialsAreIsolated } from '../lib/sensitive-credential-isolation.mjs';
 
 export const ANALYTICS_PRUNE_SECRET_ENV = 'ARC_ANALYTICS_PRUNE_SECRET';
 export const ANALYTICS_PRUNE_RESULT_SCHEMA = 'arc-analytics-prune-result-v1';
@@ -73,9 +74,7 @@ function pruneSecret(env) {
   if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32 || Buffer.byteLength(secret, 'utf8') > 256) {
     return null;
   }
-  const duplicated = Object.entries(env).some(([name, value]) => name !== ANALYTICS_PRUNE_SECRET_ENV &&
-    /(?:SECRET|TOKEN|PAT|PASSWORD)$/.test(name) && typeof value === 'string' && value.length > 0 && value === secret);
-  return duplicated ? null : secret;
+  return sensitiveCredentialsAreIsolated(env, [ANALYTICS_PRUNE_SECRET_ENV]) ? secret : null;
 }
 
 function authenticated(request, secret) {

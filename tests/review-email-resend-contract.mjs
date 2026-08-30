@@ -189,6 +189,18 @@ try {
     ...env,
     ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET: env.ARC_REVIEW_INVITE_HMAC_SECRET,
   }).enabled, false, 'Provider binding authority must not reuse any review token-authority secret.');
+  for (const credentialName of [
+    'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+    'ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET',
+    'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET',
+    'ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET',
+    'ARC_RESEND_WEBHOOK_SECRET',
+  ]) {
+    assert.equal(previewReviewResendWorkerConfiguration({
+      ...env,
+      ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+    }).enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+  }
   const disabledStores = new Proxy({}, { get() { throw new Error('disabled review worker touched stores'); } });
   assert.deepEqual(await runPreviewReviewResendWorkerCycle({
     ...env, ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED: 'false',

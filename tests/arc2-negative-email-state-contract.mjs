@@ -111,6 +111,7 @@ const env = {
   NETLIFY_TEAM_SLUG: 'arc-team',
   ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'false',
   ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false',
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
   ARC_STRIPE_LIVE_MODE_ENABLED: 'false',
   ARC_ALLOW_TEST_MODE_EVENTS: 'true',
   ARC_HANDOFF_ENABLED: 'false',
@@ -122,6 +123,11 @@ assert.deepEqual(arc2NegativeEmailStateConfiguration({
   ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET: '',
 }), { requested: true, enabled: false },
 'Enabling either ARC2 email channel without its negative-state secret must fail closed.');
+assert.deepEqual(arc2NegativeEmailStateConfiguration({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET,
+}), { requested: true, enabled: false },
+'The negative-state signing credential must reject an arbitrary configured alias.');
 assert.deepEqual(await assertArc2EmailNegativeStateAllows(new FakeStore(), claimHandoffId,
   'claim_invitation', {
     ...env,

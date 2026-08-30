@@ -4,6 +4,7 @@ import {
   safeEqual,
   sha256Hex,
 } from './arc2-handoff-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const RETENTION_CONTROL_STORE = 'arc-retention-control';
 export const RETENTION_MANIFEST_SCHEMA = 'arc-retention-manifest-v1';
@@ -162,23 +163,14 @@ export function retentionConfiguration(env = process.env) {
   const enabled = env.ARC_RETENTION_CLEANUP_ENABLED === 'true';
   const executionMode = String(env.ARC_RETENTION_EXECUTION_MODE || 'disabled');
   const modeValid = ['dry-run', 'apply'].includes(executionMode);
-  const secrets = [
-    env.ARC_RETENTION_CLEANUP_SECRET,
-    env.ARC_RETENTION_MANIFEST_SECRET,
-    env.ARC_RETENTION_RECORD_HMAC_SECRET,
-    env.ARC_RETENTION_ADULT_APPROVAL_SECRET,
+  const secretNames = [
+    'ARC_RETENTION_CLEANUP_SECRET',
+    'ARC_RETENTION_MANIFEST_SECRET',
+    'ARC_RETENTION_RECORD_HMAC_SECRET',
+    'ARC_RETENTION_ADULT_APPROVAL_SECRET',
   ];
-  const secretValues = secrets.filter(validSecret);
-  const otherSecretNames = [
-    'ARC_HANDOFF_TRIGGER_SECRET', 'ARC_HANDOFF_STATE_SECRET', 'ARC_CHECKOUT_BINDING_SECRET',
-    'ARC_CLAIM_TOKEN_SECRET', 'ARC_EMAIL_CLAIM_BINDING_SECRET', 'ARC_FINAL_DELIVERY_ACK_SECRET',
-    'ARC_FINAL_DELIVERY_RECEIPT_SECRET', 'ARC_OPERATIONS_AUDIT_SECRET', 'ARC_OPERATIONS_ALERT_HMAC_SECRET',
-    'ARC_STRIPE_WEBHOOK_SIGNING_SECRET', 'ARC_STRIPE_REVERSAL_HMAC_SECRET',
-    'ARC_STRIPE_REVERSAL_BINDING_SECRET', 'ARC_STRIPE_REVERSAL_BINDING_ENDPOINT_SECRET',
-    'ARC_STRIPE_REVERSAL_RECHECK_SECRET', 'ARC_STRIPE_REVERSAL_RECHECK_ENDPOINT_SECRET',
-  ];
-  const crossSecretCollision = otherSecretNames.some((name) => validSecret(env[name]) && secretValues.includes(env[name]));
-  const secretsValid = secretValues.length === secrets.length && new Set(secretValues).size === secretValues.length && !crossSecretCollision;
+  const secretsValid = secretNames.every((name) => validSecret(env[name])) &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   const applyAttestationsValid = env.ARC_RETENTION_ADULT_OPERATOR_VERIFIED === 'true' &&
     env.ARC_RETENTION_LEGAL_HOLD_CHECK_VERIFIED === 'true' && env.ARC_RETENTION_DELETION_VERIFIED === 'true';
   return { applyAttestationsValid, enabled: enabled && modeValid && secretsValid, executionMode, modeValid, secretsValid };

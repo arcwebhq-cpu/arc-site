@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_EMAIL_VERIFICATION_ENABLED_ENV = 'ARC_INTAKE_EMAIL_VERIFICATION_ENABLED';
 export const INTAKE_EMAIL_VERIFICATION_STATE_SECRET_ENV = 'ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET';
@@ -95,13 +96,7 @@ export function intakeEmailVerificationConfiguration(env = process.env) {
       INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET_ENV,
     ];
     const values = Object.fromEntries(names.map((name) => [name, secret(env[name], name)]));
-    if (new Set(Object.values(values)).size !== names.length) throw new TypeError('Verification secrets must be distinct.');
-    // Prevent accidental reuse of a verification authority as any other ARC
-    // HMAC/encryption/provider authority supplied to the same runtime.
-    const surrounding = Object.entries(env).filter(([name, value]) => !names.includes(name) &&
-      /^ARC_[A-Z0-9_]*(?:SECRET|KEY|BEARER|TOKEN|PASSWORD|CREDENTIAL|CREDENTIALS)$/.test(name) &&
-      typeof value === 'string');
-    if (Object.values(values).some((value) => surrounding.some(([, candidate]) => safeEqual(value, candidate)))) {
+    if (!sensitiveCredentialsAreIsolated(env, names)) {
       throw new TypeError('Verification secrets must be distinct from other ARC secrets.');
     }
     return Object.freeze({ enabled: true, origin: origin(env.URL), ...values });

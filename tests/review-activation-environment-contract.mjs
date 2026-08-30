@@ -587,6 +587,11 @@ duplicateSecretEnv.ARC_REVIEW_EMAIL_INTERNAL_API_SECRET =
 const duplicateSecret = createReviewActivationEnvironmentReport(duplicateSecretEnv, { mode: 'sandbox', now });
 assert.ok(duplicateSecret.invalid.includes('SECRET_DISTINCTNESS'));
 assert.equal(JSON.stringify(duplicateSecret).includes(duplicateSecretEnv.ARC_REVIEW_EMAIL_INTERNAL_API_SECRET), false);
+const rotatedAliasEnv = environment('sandbox');
+rotatedAliasEnv.ARC_ROTATED_CREDENTIAL_V2 = rotatedAliasEnv.ARC_STRIPE_REVIEW_SECRET_KEY;
+assert.ok(createReviewActivationEnvironmentReport(rotatedAliasEnv, { mode: 'sandbox', now })
+  .invalid.includes('SECRET_DISTINCTNESS'),
+'An unknown rotated credential alias must not bypass the release-wide isolation check.');
 
 const wrongKeyMode = createReviewActivationEnvironmentReport({
   ...sandboxEnv,

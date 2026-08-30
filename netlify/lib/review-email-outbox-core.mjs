@@ -17,6 +17,7 @@ import {
   readReviewEmailRecipientControl,
   suppressReviewEmailRecipientControl,
 } from './review-email-recipient-control-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const REVIEW_EMAIL_OUTBOX_SCHEMA = 'arc-preview-review-email-outbox-v1';
 export const REVIEW_EMAIL_RECEIPT_SCHEMA = 'arc-preview-review-email-receipt-v1';
@@ -170,8 +171,13 @@ export function reviewEmailOutboxConfiguration(env = process.env) {
     env.ARC_REVIEW_RECORD_HMAC_SECRET,
     env.ARC_REVIEW_DECISION_HMAC_SECRET,
   ];
+  const selectedSecretNames = [
+    'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+    'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
+  ];
   const secretsValid = validSecret(outboxSecret) && validSecret(receiptSecret) && outboxSecret !== receiptSecret &&
-    !related.includes(outboxSecret) && !related.includes(receiptSecret);
+    !related.includes(outboxSecret) && !related.includes(receiptSecret) &&
+    sensitiveCredentialsAreIsolated(env, selectedSecretNames);
   const reviewOrigin = configuredOrigin(env.ARC_REVIEW_PUBLIC_ORIGIN);
   return {
     enabled: flagValid && env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED === 'true' && secretsValid && Boolean(reviewOrigin),

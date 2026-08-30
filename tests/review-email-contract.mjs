@@ -165,10 +165,24 @@ function signedReceipt(value, environment = env) {
 
 assert.equal(reviewEmailOutboxConfiguration({}).enabled, false, 'Review email must default off.');
 assert.equal(reviewEmailOutboxConfiguration(env).enabled, true);
+for (const credentialName of [
+  'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+  'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
+]) {
+  assert.equal(reviewEmailOutboxConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
 assert.equal(reviewEmailOutboxConfiguration({
   ...env,
   ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET: env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET,
 }).enabled, false, 'Email outbox and receipt secrets must be distinct.');
+await assert.rejects(readReviewEmailRecipientControl(
+  new Proxy({}, { get() { throw new Error('aliased recipient control touched storage'); } }),
+  sha('a'),
+  { ...env, ARC_ROTATED_CREDENTIAL_V2: env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET },
+), /OUTBOX_DISABLED/, 'Recipient control must reject an aliased signing credential before storage access.');
 
 const rawEmail = 'Customer@Example.com';
 const normalizedEmail = 'customer@example.com';

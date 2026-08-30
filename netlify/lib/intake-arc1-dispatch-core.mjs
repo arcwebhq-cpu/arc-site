@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { normalizeStoredIntakeSubmissionForBridge, validateIntakeSubmissionForBridge } from './intake-arc1-bridge-core.mjs';
 import { intakeEmailVerificationDispatchReady } from './intake-email-verification-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_ARC1_DISPATCH_ENABLED_ENV = 'ARC_INTAKE_ARC1_DISPATCH_ENABLED';
 export const INTAKE_ARC1_DISPATCH_TIMEOUT_MS = 5_000;
@@ -39,6 +40,9 @@ function wallNow(adapters) {
 }
 
 function recoveryCursorSecret(env) {
+  if (!sensitiveCredentialsAreIsolated(env, ['ARC_INTAKE_ARC1_RUN_SECRET'])) {
+    throw new TypeError('ARC1 recovery cursor secret must be isolated.');
+  }
   return secret(env.ARC_INTAKE_ARC1_RUN_SECRET, 'ARC_INTAKE_ARC1_RUN_SECRET');
 }
 
@@ -105,7 +109,10 @@ function requestRecoveryCursor(request, adapters) {
 export function resolveSameDeployDispatcher(request, env) {
   const dispatchSecret = secret(env.ARC_INTAKE_ARC1_DISPATCH_SECRET, 'ARC_INTAKE_ARC1_DISPATCH_SECRET');
   const runSecret = secret(env.ARC_INTAKE_ARC1_RUN_SECRET, 'ARC_INTAKE_ARC1_RUN_SECRET');
-  if (safeEqual(dispatchSecret, runSecret)) throw new TypeError('Dispatch and run secrets must be distinct.');
+  if (!sensitiveCredentialsAreIsolated(env, [
+    'ARC_INTAKE_ARC1_DISPATCH_SECRET',
+    'ARC_INTAKE_ARC1_RUN_SECRET',
+  ])) throw new TypeError('Dispatch and run secrets must be distinct.');
   const publicOrigin = String(env.URL || '').replace(/\/+$/, '');
   let configured;
   let requestUrl;

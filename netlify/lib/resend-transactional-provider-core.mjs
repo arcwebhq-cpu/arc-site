@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
+
 export const RESEND_SEND_ENABLED_ENV = 'ARC_RESEND_SEND_ENABLED';
 export const RESEND_WEBHOOK_ENABLED_ENV = 'ARC_RESEND_WEBHOOK_ENABLED';
 export const RESEND_API_KEY_ENV = 'ARC_RESEND_API_KEY';
@@ -89,12 +91,16 @@ export function resendProviderConfiguration(env = process.env) {
   try { sender = fromAddress(env[RESEND_FROM_ENV]); } catch {}
   try { sendKey = apiKey(env[RESEND_API_KEY_ENV]); } catch {}
   try { signingKey = webhookSecret(env[RESEND_WEBHOOK_SECRET_ENV]); } catch {}
+  const sendCredentialIsolated = Boolean(sendKey) &&
+    sensitiveCredentialsAreIsolated(env, [RESEND_API_KEY_ENV]);
+  const webhookCredentialIsolated = Boolean(signingKey) &&
+    sensitiveCredentialsAreIsolated(env, [RESEND_WEBHOOK_SECRET_ENV]);
   return Object.freeze({
-    send_enabled: env[RESEND_SEND_ENABLED_ENV] === 'true' && Boolean(sender && sendKey),
-    webhook_enabled: env[RESEND_WEBHOOK_ENABLED_ENV] === 'true' && Boolean(signingKey),
+    send_enabled: env[RESEND_SEND_ENABLED_ENV] === 'true' && Boolean(sender) && sendCredentialIsolated,
+    webhook_enabled: env[RESEND_WEBHOOK_ENABLED_ENV] === 'true' && webhookCredentialIsolated,
     from: sender,
-    apiKey: sendKey,
-    webhookSigningKey: signingKey,
+    apiKey: sendCredentialIsolated ? sendKey : null,
+    webhookSigningKey: webhookCredentialIsolated ? signingKey : null,
   });
 }
 

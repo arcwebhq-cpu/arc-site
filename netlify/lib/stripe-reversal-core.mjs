@@ -18,6 +18,7 @@ import {
   stripeAccountVerificationConfigured,
   verifyStripeEventOwnership,
 } from './stripe-account-verification.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const STRIPE_REVERSAL_SCHEMA = 'arc-stripe-reversal-state-v1';
 export const STRIPE_REVERSAL_EVENT_SCHEMA = 'arc-stripe-reversal-event-v1';
@@ -35,6 +36,14 @@ export const STRIPE_WEBHOOK_API_VERSION = REQUIRED_STRIPE_WEBHOOK_API_VERSION;
 export const STRIPE_SIGNATURE_TOLERANCE_SECONDS = 300;
 export const STRIPE_REVERSAL_RECHECK_MAX_AGE_MS = 5 * 60_000;
 export const STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS = 60_000;
+
+export class StripeReversalHaltError extends Error {
+  constructor(handoffId) {
+    super('ARC_STRIPE_REVERSAL_HALT');
+    this.name = 'StripeReversalHaltError';
+    this.handoffId = handoffId;
+  }
+}
 
 export const STRIPE_REVERSAL_EVENT_TYPES = Object.freeze([
   'charge.dispute.closed',
@@ -92,6 +101,14 @@ const RECHECK_FIELDS = Object.freeze([
   'version',
 ]);
 
+export function stripeReversalSandboxExemption(env = process.env) {
+  return env.ARC_STRIPE_REVERSAL_CONTROL_REQUIRED === 'false' &&
+    env.ARC_RUNTIME_ENVIRONMENT === 'sandbox' &&
+    env.ARC_STRIPE_LIVE_MODE_ENABLED === 'false' &&
+    env.ARC_ALLOW_TEST_MODE_EVENTS === 'true' &&
+    env.ARC_HANDOFF_ENABLED === 'false';
+}
+
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new TypeError(`${label} must be a plain object.`);
@@ -140,6 +157,16 @@ function paymentIntentIndexKey(paymentIntentId, env) {
   return `stripe-payment-intent/${hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET, `payment-intent-v1\n${paymentIntentId}`)}`;
 }
 
+function paymentIntentIndexKeyFromHmac(paymentIntentHmac) {
+  if (!HEX_64.test(paymentIntentHmac)) throw new TypeError('PaymentIntent HMAC is invalid.');
+  return `stripe-payment-intent/${paymentIntentHmac}`;
+}
+
+function checkoutLedgerHandoffKey(handoffId) {
+  if (!HANDOFF_ID.test(handoffId)) throw new TypeError('Handoff id is invalid.');
+  return `stripe-checkout-handoff/${handoffId}`;
+}
+
 function eventReservationKey(eventId, env) {
   if (!EVENT_ID.test(eventId)) throw new TypeError('Stripe event id is invalid.');
   return `stripe-reversal-event/${hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET, `stripe-event-v1\n${eventId}`)}`;
@@ -161,6 +188,44 @@ function objectIdentityHmac(kind, id, env) {
 
 function exactStored(actual, expected) {
   return actual && canonicalJson(actual) === canonicalJson(expected);
+}
+
+function reciprocalPaymentIntentBinding(binding) {
+  return {
+    ...binding,
+    schema: STRIPE_PAYMENT_INTENT_INDEX_SCHEMA,
+  };
+}
+
+async function requireReciprocalPaymentIntentBinding(store, binding) {
+  const payment = await readIndex(
+    store,
+    paymentIntentIndexKeyFromHmac(binding.payment_intent_id_hmac_sha256),
+  );
+  return {
+    exact: exactStored(payment, reciprocalPaymentIntentBinding(binding)),
+    payment,
+  };
+}
+
+function checkoutLedgerBindingMatches(binding, normalized, checkoutIndex, env) {
+  const allowedSchemas = new Set([
+    'arc-stripe-checkout-handoff-binding-v1',
+    'arc-stripe-review-checkout-handoff-binding-v1',
+  ]);
+  return binding && allowedSchemas.has(binding.schema) &&
+    binding.handoff_id === normalized.value.handoff_id &&
+    binding.checkout_session_id_hmac_sha256 === hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-session-id-v1\n${normalized.value.checkout_session_id}`,
+    ) &&
+    binding.payment_intent_id_hmac_sha256 === hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-payment-intent-id-v1\n${normalized.value.payment_intent_id}`,
+    ) &&
+    binding.payment_evidence_sha256 === checkoutIndex.payment_evidence_sha256 &&
+    binding.stripe_account_id_sha256 === normalized.value.stripe_account_id_sha256 &&
+    binding.livemode === normalized.value.livemode;
 }
 
 async function ensureImmutable(store, key, value) {
@@ -190,20 +255,13 @@ export function stripeReversalConfiguration(env = process.env) {
     'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
   ];
   const supplied = names.map((name) => env[name]).filter(validSecret);
-  const otherSecretNames = [
-    'ARC_HANDOFF_TRIGGER_SECRET', 'ARC_CHECKOUT_BINDING_SECRET', 'ARC_CLAIM_TOKEN_SECRET',
-    'ARC_EMAIL_CLAIM_BINDING_SECRET', 'ARC_CLAIM_STATE_EVIDENCE_SECRET', 'ARC_FINAL_DELIVERY_ACK_SECRET',
-    'ARC_FINAL_DELIVERY_RECEIPT_SECRET', 'ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET', 'ARC_LEAD_ROUTE_EVIDENCE_SECRET',
-    'ARC_OPERATIONS_AUDIT_SECRET', 'ARC_OPERATIONS_ALERT_HMAC_SECRET', 'ARC_RETENTION_CLEANUP_SECRET',
-    'ARC_RETENTION_MANIFEST_SECRET', 'ARC_RETENTION_RECORD_HMAC_SECRET',
-  ];
-  const distinct = new Set(supplied).size === supplied.length &&
-    !otherSecretNames.some((name) => validSecret(env[name]) && supplied.includes(env[name]));
+  const distinct = supplied.length === names.length && sensitiveCredentialsAreIsolated(env, names);
   const expectedAccount = String(env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 || '');
   const required = env.ARC_STRIPE_REVERSAL_CONTROL_REQUIRED === 'true';
   const webhookEnabled = env.ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED === 'true';
   const bindingEnabled = env.ARC_STRIPE_REVERSAL_BINDING_ENABLED === 'true';
   const recheckEnabled = env.ARC_STRIPE_REVERSAL_RECHECK_ENABLED === 'true';
+  const sandboxExemption = stripeReversalSandboxExemption(env);
   const apiVersionValid = env.ARC_STRIPE_WEBHOOK_API_VERSION === STRIPE_WEBHOOK_API_VERSION;
   const accountVerificationValid = stripeAccountVerificationConfigured(env);
   const commonValid = liveModeValid && HEX_64.test(expectedAccount) && distinct &&
@@ -226,7 +284,8 @@ export function stripeReversalConfiguration(env = process.env) {
     required,
     recheckEnabled,
     recheckOperational,
-    secretsValid: distinct && supplied.length === names.length && accountVerificationValid,
+    sandboxExemption,
+    secretsValid: distinct && accountVerificationValid,
     webhookEnabled,
     webhookOperational,
   };
@@ -283,6 +342,9 @@ export async function registerStripeReversalRecheck(raw, signature, env, adapter
       binding.checkout_session_id_hmac_sha256 !== hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET, `checkout-session-v1\n${normalized.value.checkout_session_id}`) ||
       binding.payment_intent_id_hmac_sha256 !== hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET, `payment-intent-v1\n${normalized.value.payment_intent_id}`) ||
       binding.stripe_account_id_sha256 !== normalized.value.stripe_account_id_sha256 || binding.livemode !== normalized.value.livemode) {
+    throw new Error('ARC_STRIPE_REVERSAL_RECHECK_BINDING_MISMATCH');
+  }
+  if (!(await requireReciprocalPaymentIntentBinding(adapters.store, binding)).exact) {
     throw new Error('ARC_STRIPE_REVERSAL_RECHECK_BINDING_MISMATCH');
   }
   if (await readIndex(adapters.store, pendingPaymentKeyFromHmac(binding.payment_intent_id_hmac_sha256))) {
@@ -438,6 +500,13 @@ export async function registerStripeReversalBinding(raw, signature, env, adapter
   const handoff = await readEntry(adapters.store, `handoffs/${normalized.value.handoff_id}`);
   if (!handoff || validateExpectedBindings(handoff.record).payment_evidence_sha256 !== checkoutIndex.payment_evidence_sha256) {
     throw new Error('ARC_STRIPE_REVERSAL_HANDOFF_BINDING_MISMATCH');
+  }
+  const checkoutLedgerBinding = await readIndex(
+    adapters.store,
+    checkoutLedgerHandoffKey(normalized.value.handoff_id),
+  );
+  if (!checkoutLedgerBindingMatches(checkoutLedgerBinding, normalized, checkoutIndex, env)) {
+    throw new Error('ARC_STRIPE_REVERSAL_CHECKOUT_BINDING_MISMATCH');
   }
   const values = bindingValues(normalized, checkoutIndex, env);
   const existingHandoff = await readIndex(adapters.store, handoffKey);
@@ -876,7 +945,10 @@ export async function processStripeReversalEvent(raw, stripeSignature, env, adap
 export async function assertHandoffFulfillmentAllowed(store, handoffId, env, options = {}) {
   if (!HANDOFF_ID.test(handoffId)) throw new TypeError('Handoff id is invalid.');
   const configuration = stripeReversalConfiguration(env);
-  if (!configuration.required) return;
+  if (!configuration.required) {
+    if (configuration.sandboxExemption) return;
+    throw new Error('ARC_STRIPE_REVERSAL_CONTROL_DISABLED');
+  }
   if (!configuration.enabled) throw new Error('ARC_STRIPE_REVERSAL_CONTROL_DISABLED');
   const binding = await readIndex(store, handoffBindingKey(handoffId));
   if (!binding || binding.schema !== STRIPE_REVERSAL_BINDING_SCHEMA || binding.handoff_id !== handoffId ||
@@ -884,6 +956,9 @@ export async function assertHandoffFulfillmentAllowed(store, handoffId, env, opt
       binding.livemode !== configuration.expectedLivemode) {
     throw new Error('ARC_STRIPE_REVERSAL_BINDING_REQUIRED');
   }
+  const reciprocal = await requireReciprocalPaymentIntentBinding(store, binding);
+  if (!reciprocal.payment) throw new Error('ARC_STRIPE_REVERSAL_BINDING_REQUIRED');
+  if (!reciprocal.exact) throw new Error('ARC_STRIPE_REVERSAL_BINDING_CONFLICT');
   if (options.checkoutSessionId) {
     if (!CHECKOUT_SESSION_ID.test(options.checkoutSessionId) || binding.checkout_session_id_hmac_sha256 !== hmacHex(
       env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
@@ -892,7 +967,7 @@ export async function assertHandoffFulfillmentAllowed(store, handoffId, env, opt
   }
   const state = await readIndex(store, reversalHandoffKey(handoffId));
   if (await readIndex(store, pendingPaymentKeyFromHmac(binding.payment_intent_id_hmac_sha256))) {
-    throw new Error('ARC_STRIPE_REVERSAL_HALT');
+    throw new StripeReversalHaltError(handoffId);
   }
   if (state) {
     if (state.schema !== STRIPE_REVERSAL_SCHEMA || state.handoff_id !== handoffId || state.delivery_halted !== true ||
@@ -900,16 +975,19 @@ export async function assertHandoffFulfillmentAllowed(store, handoffId, env, opt
         state.checkout_session_id_hmac_sha256 !== binding.checkout_session_id_hmac_sha256) {
       throw new Error('ARC_STRIPE_REVERSAL_STATE_CONFLICT');
     }
-    throw new Error('ARC_STRIPE_REVERSAL_HALT');
+    throw new StripeReversalHaltError(handoffId);
   }
   const recheck = await readIndex(store, recheckKey(handoffId));
   const now = new Date(options.now || new Date());
   const recheckIssuedAt = recheck?.issued_at ? Date.parse(recheck.issued_at) : NaN;
   const maxRecheckAgeMs = options.maxRecheckAgeMs ?? STRIPE_REVERSAL_RECHECK_MAX_AGE_MS;
   const recheckNotBeforeMs = options.recheckNotBefore === undefined ? null : Date.parse(options.recheckNotBefore);
+  const recheckNotAfterMs = options.recheckNotAfter === undefined ? null : Date.parse(options.recheckNotAfter);
   if (!Number.isSafeInteger(maxRecheckAgeMs) || maxRecheckAgeMs < 0 ||
       maxRecheckAgeMs > STRIPE_REVERSAL_RECHECK_MAX_AGE_MS ||
-      (recheckNotBeforeMs !== null && !Number.isFinite(recheckNotBeforeMs))) {
+      (recheckNotBeforeMs !== null && !Number.isFinite(recheckNotBeforeMs)) ||
+      (recheckNotAfterMs !== null && !Number.isFinite(recheckNotAfterMs)) ||
+      (recheckNotBeforeMs !== null && recheckNotAfterMs !== null && recheckNotBeforeMs > recheckNotAfterMs)) {
     throw new TypeError('Stripe reversal recheck guard options are invalid.');
   }
   if (!recheck || recheck.schema !== STRIPE_REVERSAL_RECHECK_SCHEMA || recheck.handoff_id !== handoffId ||
@@ -919,9 +997,64 @@ export async function assertHandoffFulfillmentAllowed(store, handoffId, env, opt
       recheck.payment_intent_status !== 'succeeded' || recheck.refunded_amount_minor_units !== 0 || recheck.dispute_status !== 'none' ||
       !Number.isFinite(now.getTime()) || !Number.isFinite(recheckIssuedAt) || recheckIssuedAt > now.getTime() + 30_000 ||
       recheckIssuedAt < now.getTime() - maxRecheckAgeMs ||
-      (recheckNotBeforeMs !== null && recheckIssuedAt < recheckNotBeforeMs)) {
+      (recheckNotBeforeMs !== null && recheckIssuedAt < recheckNotBeforeMs) ||
+      (recheckNotAfterMs !== null && recheckIssuedAt > recheckNotAfterMs)) {
     throw new Error('ARC_STRIPE_REVERSAL_RECHECK_REQUIRED');
   }
+}
+
+export async function readStripeReversalHaltEvidence(store, handoffId, env) {
+  if (!HANDOFF_ID.test(handoffId)) throw new TypeError('Handoff id is invalid.');
+  const configuration = stripeReversalConfiguration(env);
+  if (!configuration.required || !configuration.enabled) {
+    throw new Error('ARC_STRIPE_REVERSAL_CONTROL_DISABLED');
+  }
+  const binding = await readIndex(store, handoffBindingKey(handoffId));
+  if (!binding || binding.schema !== STRIPE_REVERSAL_BINDING_SCHEMA || binding.handoff_id !== handoffId ||
+      binding.stripe_account_id_sha256 !== env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 ||
+      binding.livemode !== configuration.expectedLivemode) {
+    throw new Error('ARC_STRIPE_REVERSAL_BINDING_REQUIRED');
+  }
+  const reciprocal = await requireReciprocalPaymentIntentBinding(store, binding);
+  if (!reciprocal.payment) throw new Error('ARC_STRIPE_REVERSAL_BINDING_REQUIRED');
+  if (!reciprocal.exact) throw new Error('ARC_STRIPE_REVERSAL_BINDING_CONFLICT');
+  const pending = await readIndex(store,
+    pendingPaymentKeyFromHmac(binding.payment_intent_id_hmac_sha256));
+  const expectedPending = {
+    schema: STRIPE_PENDING_PAYMENT_SCHEMA,
+    payment_intent_id_hmac_sha256: binding.payment_intent_id_hmac_sha256,
+    stripe_account_id_sha256: binding.stripe_account_id_sha256,
+    livemode: binding.livemode,
+    delivery_halted: true,
+  };
+  if (pending && !exactStored(pending, expectedPending)) {
+    throw new Error('ARC_STRIPE_PENDING_REVERSAL_CONFLICT');
+  }
+  const state = await readIndex(store, reversalHandoffKey(handoffId));
+  if (state && (state.schema !== STRIPE_REVERSAL_SCHEMA || state.handoff_id !== handoffId ||
+      state.delivery_halted !== true || state.manual_review_required !== true ||
+      state.automatic_refund_requested !== false ||
+      state.payment_intent_id_hmac_sha256 !== binding.payment_intent_id_hmac_sha256 ||
+      state.checkout_session_id_hmac_sha256 !== binding.checkout_session_id_hmac_sha256 ||
+      state.stripe_account_id_sha256 !== binding.stripe_account_id_sha256 ||
+      state.livemode !== binding.livemode)) {
+    throw new Error('ARC_STRIPE_REVERSAL_STATE_CONFLICT');
+  }
+  if (!pending && !state) throw new Error('ARC_STRIPE_REVERSAL_HALT_NOT_DURABLE');
+  const evidence = {
+    binding_evidence_sha256: binding.binding_evidence_sha256,
+    checkout_session_id_hmac_sha256: binding.checkout_session_id_hmac_sha256,
+    handoff_id: handoffId,
+    payment_intent_id_hmac_sha256: binding.payment_intent_id_hmac_sha256,
+    pending_payment_halt: Boolean(pending),
+    reversal_state_sha256: state ? sha256Hex(canonicalJson(state)) : null,
+    stripe_account_id_sha256: binding.stripe_account_id_sha256,
+  };
+  return Object.freeze({
+    code: 'ARC_STRIPE_REVERSAL_HALT',
+    evidence_sha256: sha256Hex(canonicalJson(evidence)),
+    handoff_id: handoffId,
+  });
 }
 
 export const stripeReversalKeys = Object.freeze({

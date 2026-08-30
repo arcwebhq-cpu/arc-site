@@ -20,18 +20,31 @@ export const PROVIDER_SANDBOX_SAFE_OFF_CONTRACT = Object.freeze(
 
 const ACTIVATION_CONTRACT = JSON.parse(readFileSync(ACTIVATION_CONTRACT_URL, 'utf8'));
 const EXTRA_SAFE_OFF_FLAGS = Object.freeze([
+  'ARC_ADULT_OPERATOR_VERIFIED',
   'ARC_ALLOW_TEST_MODE_EVENTS',
+  'ARC_BUSINESS_LICENSE_VERIFIED',
   'ARC_BUILD_TURNSTILE_ENABLED',
+  'ARC_DEVICE_QA_VERIFIED',
+  'ARC_LEAD_ROUTE_VERIFIED',
+  'ARC_POSTCLAIM_READBACK_VERIFIED',
   'ARC_REVIEW_ACTIVATION_RUNTIME_READBACK_ENABLED',
+  'ARC_RETENTION_ADULT_OPERATOR_VERIFIED',
+  'ARC_RETENTION_CONTROL_VERIFIED',
+  'ARC_RETENTION_DELETION_VERIFIED',
+  'ARC_RETENTION_LEGAL_HOLD_CHECK_VERIFIED',
+  'ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED',
+  'ARC_STRIPE_REVERSAL_CONTROL_REQUIRED',
+  'ARC_TAX_REGISTRATION_VERIFIED',
+  'ARC_TRANSACTIONAL_EMAIL_VERIFIED',
 ]);
 export const PROVIDER_SAFE_OFF_FLAG_NAMES = Object.freeze(
   [...new Set([...AUTOMATION_FLAG_NAMES, ...EXTRA_SAFE_OFF_FLAGS])].sort(),
 );
 const EXPECTED_NON_SECRET_ENVIRONMENT = Object.freeze({
   ARC_RUNTIME_ENVIRONMENT: 'sandbox',
-  ARC_EXPECTED_NETLIFY_SITE_ID: '8f9d462c-952f-42fc-a3a0-50a2529e8f5d',
-  ARC_PUBLIC_ORIGIN: 'https://arcweb.onl',
-  ARC_REVIEW_PUBLIC_ORIGIN: 'https://arcweb.onl',
+  ARC_EXPECTED_NETLIFY_SITE_ID: 'e2b737ab-70e1-48d2-9d99-a6718c04fa86',
+  ARC_PUBLIC_ORIGIN: 'https://arc2-sandbox.netlify.app',
+  ARC_REVIEW_PUBLIC_ORIGIN: 'https://arc2-sandbox.netlify.app',
   ARC_REVIEW_PREVIEW_ORIGIN: 'https://arcwebhq-cpu.github.io',
   ARC_REVIEW_CHECKOUT_ORIGIN: 'https://checkout.stripe.com',
   ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256:
@@ -44,8 +57,8 @@ const EXPECTED_NON_SECRET_ENVIRONMENT = Object.freeze({
   ARC_STRIPE_CHECKOUT_TERMS_VERSION: '2026-08-25',
   ARC_STRIPE_WEBHOOK_API_VERSION: ARC_STRIPE_API_VERSION,
   ARC_STRIPE_CHECKOUT_SUCCESS_URL:
-    'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
-  ARC_STRIPE_CHECKOUT_CANCEL_URL: 'https://arcweb.onl/review/?checkout=cancelled',
+    'https://arc2-sandbox.netlify.app/payment-success/?session_id={CHECKOUT_SESSION_ID}',
+  ARC_STRIPE_CHECKOUT_CANCEL_URL: 'https://arc2-sandbox.netlify.app/review/?checkout=cancelled',
   ARC_REVIEW_EMAIL_PROVIDER: 'resend',
   ARC_RESEND_FROM: RESEND_FROM_IDENTITY,
 });
@@ -164,7 +177,7 @@ export function createProviderSandboxSafeOffContractReport(
     'environment_name', 'required_prefix', 'storage_context', 'status', 'observed_scopes',
     'runtime_operations', 'unverified_runtime_operations',
   ]) && value.required_prefix === 'rk_test_' && value.status === 'STORED' &&
-    value.storage_context === 'NETLIFY_DEPLOY_PREVIEW_ONLY';
+    value.storage_context === 'NETLIFY_PRODUCTION_ONLY';
   if (extraKeys.length !== 0 || !keyShape(reviewKey) || !keyShape(accountKey) ||
       reviewKey.environment_name !== 'ARC_STRIPE_REVIEW_SECRET_KEY' ||
       accountKey.environment_name !== 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY' ||
@@ -195,7 +208,7 @@ export function createProviderSandboxSafeOffContractReport(
       !exactKeys(webhook, [
         'url', 'path', 'status', 'signing_secret_storage_context', 'required_events', 'subscribed_events',
       ]) ||
-      webhook?.url !== `https://arcweb.onl${RESEND_WEBHOOK_PATH}` ||
+      webhook?.url !== `https://arc2-sandbox.netlify.app${RESEND_WEBHOOK_PATH}` ||
       webhook?.path !== RESEND_WEBHOOK_PATH || webhook?.status !== 'ENABLED' ||
       webhook?.signing_secret_storage_context !== 'NETLIFY_PRODUCTION_ONLY' ||
       !exactArray(webhook?.required_events, RESEND_REQUIRED_WEBHOOK_EVENT_TYPES) ||

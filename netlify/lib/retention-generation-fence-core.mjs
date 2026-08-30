@@ -4,6 +4,7 @@ import {
   safeEqual,
   sha256Hex,
 } from './arc2-handoff-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const RETENTION_GENERATION_FENCE_STORE = 'arc-retention-control';
 export const RETENTION_GENERATION_FENCE_SECRET_ENV = 'ARC_FIRST_PARTY_RETENTION_FENCE_HMAC_SECRET';
@@ -210,9 +211,9 @@ export function retentionGenerationFenceConfiguration(env = process.env) {
     invalid.push(RETENTION_GENERATION_FENCE_SECRET_ENV);
   }
   if (validSecret(secret)) {
-    const collision = Object.entries(env).some(([name, value]) =>
-      name !== RETENTION_GENERATION_FENCE_SECRET_ENV && typeof value === 'string' && value === secret);
-    if (collision) invalid.push('ARC_FIRST_PARTY_RETENTION_FENCE_SECRET_SEPARATION');
+    if (!sensitiveCredentialsAreIsolated(env, [RETENTION_GENERATION_FENCE_SECRET_ENV])) {
+      invalid.push('ARC_FIRST_PARTY_RETENTION_FENCE_SECRET_SEPARATION');
+    }
   }
   return Object.freeze({
     ready: missing.length === 0 && invalid.length === 0,

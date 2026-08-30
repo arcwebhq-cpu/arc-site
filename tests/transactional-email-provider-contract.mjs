@@ -5,12 +5,14 @@ import { readFile } from 'node:fs/promises';
 import { createResendWebhookHandler, config as webhookConfig } from '../netlify/functions/resend-webhook.mjs';
 import { config as workerConfig } from '../netlify/functions/transactional-email-worker.mjs';
 import {
+  emailSendAttemptConfiguration,
   markEmailProviderAccepted,
   readEmailSendAttempt,
   reconcileEmailProviderEvent,
   reserveEmailSendAttempt,
 } from '../netlify/lib/email-send-attempt-core.mjs';
 import {
+  emailRecipientVaultConfiguration,
   openEmailRecipientCapsule,
   sealEmailRecipientCapsule,
 } from '../netlify/lib/email-recipient-vault-core.mjs';
@@ -115,6 +117,30 @@ for (const wrongSender of [
     ARC_RESEND_FROM: wrongSender,
   }).send_enabled, false, 'Only the exact staged ARC sender identity may be used.');
 }
+for (const [credentialName, disabled] of [
+  ['ARC_RESEND_API_KEY', (configuration) => configuration.send_enabled === false && configuration.apiKey === null],
+  ['ARC_RESEND_WEBHOOK_SECRET', (configuration) =>
+    configuration.webhook_enabled === false && configuration.webhookSigningKey === null],
+]) {
+  const configuration = resendProviderConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  });
+  assert.equal(disabled(configuration), true, `${credentialName} must reject an arbitrary configured alias.`);
+}
+for (const credentialName of [
+  'ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY',
+  'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET',
+]) {
+  assert.equal(emailRecipientVaultConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
+assert.equal(emailSendAttemptConfiguration({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET,
+}).enabled, false, 'Email attempt signing must reject an arbitrary configured alias.');
 assert.equal(webhookConfig.path, RESEND_WEBHOOK_PATH);
 
 async function reserveConfirmation(sourceRecord, confirmationStore, vaultStore) {
