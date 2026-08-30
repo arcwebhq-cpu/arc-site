@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ACTIVATION_BUILD_IDENTITY } from './activation-build-identity.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const ACTIVATION_MANIFEST_ENV = 'ARC_ACTIVATION_MANIFEST';
 export const ACTIVATION_MANIFEST_SECRET_ENV = 'ARC_ACTIVATION_MANIFEST_HMAC_SECRET';
@@ -66,7 +67,6 @@ const SHA_256 = /^[a-f0-9]{64}$/;
 const DEPLOYMENT_SHA = /^[a-f0-9]{40}$/;
 const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RECEIPT_REF = /^[a-z][a-z0-9-]{2,31}:[a-f0-9]{16,64}$/;
-const SENSITIVE_ENV_NAME = /(?:_SECRET|_BEARER|_PAT|_TOKEN|_PASSWORD|_CREDENTIAL|_CREDENTIALS|_KEY)$/;
 const SIGNATURE_DOMAIN = `${ACTIVATION_MANIFEST_SCHEMA}\n`;
 const TEST_BOOTSTRAP_FORBIDDEN_FLAGS = Object.freeze([
   'ARC_ANALYTICS_COLLECTION_ENABLED',
@@ -159,7 +159,7 @@ function testBootstrapEnvironmentReady(env, stage) {
     env.ARC_ALLOW_TEST_MODE_EVENTS === 'true' &&
     env.ARC_HANDOFF_ENABLED === 'false' &&
     TEST_BOOTSTRAP_FORBIDDEN_FLAGS.every((name) => env[name] !== 'true') &&
-    (testReviewKey === undefined || /^sk_test_[A-Za-z0-9_]{16,240}$/.test(testReviewKey)) &&
+    (testReviewKey === undefined || /^rk_test_[A-Za-z0-9_]{16,240}$/.test(testReviewKey)) &&
     (testAccountKey === undefined || /^rk_test_[A-Za-z0-9_]{16,240}$/.test(testAccountKey)) &&
     (stage !== 'CLAIM_SANDBOX' || claimBootstrapSiteReady(env));
 }
@@ -196,9 +196,7 @@ export function activationStageAtLeast(stage, minimumStage) {
 export function activationManifestSecretIsDistinct(env = {}) {
   const secret = env[ACTIVATION_MANIFEST_SECRET_ENV];
   if (!validSecret(secret)) return false;
-  return !Object.entries(env).some(([name, value]) =>
-    name !== ACTIVATION_MANIFEST_SECRET_ENV && SENSITIVE_ENV_NAME.test(name) &&
-    typeof value === 'string' && value.length > 0 && value === secret);
+  return sensitiveCredentialsAreIsolated(env, [ACTIVATION_MANIFEST_SECRET_ENV]);
 }
 
 export function signActivationManifest(unsigned, secret) {

@@ -12,7 +12,11 @@ import {
   enqueueOperationsAlertCondition,
   operationsAuditConfiguration,
 } from '../lib/operations-audit-core.mjs';
-import { resendProviderConfiguration, verifyAndNormalizeResendWebhook } from '../lib/resend-transactional-provider-core.mjs';
+import {
+  RESEND_WEBHOOK_PATH,
+  resendProviderConfiguration,
+  verifyAndNormalizeResendWebhook,
+} from '../lib/resend-transactional-provider-core.mjs';
 import { reconcileVerifiedResendWebhook } from '../lib/resend-webhook-core.mjs';
 import { acknowledgePreviewReviewResendEvent } from '../lib/review-email-resend-core.mjs';
 import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
@@ -147,13 +151,14 @@ const handler = createResendWebhookHandler();
 
 export default createRetentionFencedRouteHandler({
   route: 'resend-webhook',
-  paths: ['/api/webhooks/resend'],
+  paths: [RESEND_WEBHOOK_PATH],
   active: ({ env }) => resendProviderConfiguration(env).webhook_enabled &&
     env[EMAIL_SEND_ATTEMPT_ENABLED_ENV] === 'true',
   handler,
 });
 
 export const config = {
+  // Netlify's static extractor requires this path to remain an inline literal.
   path: '/api/webhooks/resend', method: 'POST',
   rateLimit: { windowLimit: 180, windowSize: 60, aggregateBy: ['domain'] },
 };

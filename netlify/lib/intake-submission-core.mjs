@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { validateDecodableImageAsset } from './image-asset-validation.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_STORE = 'arc-intake-submissions';
 export const INTAKE_SUBMISSION_SCHEMA = 'arc-intake-function-submission-v1';
@@ -67,8 +68,7 @@ const EMAIL_FIELDS = Object.freeze(['email', 'lead_notification_email', 'public_
 export function intakeIdempotencyConfigured(env = process.env) {
   const secret = env[INTAKE_IDEMPOTENCY_SECRET_ENV];
   if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32 || Buffer.byteLength(secret, 'utf8') > 256) return false;
-  return !Object.entries(env).some(([name, value]) => name !== INTAKE_IDEMPOTENCY_SECRET_ENV &&
-    /(?:SECRET|TOKEN|PAT)$/.test(name) && typeof value === 'string' && value.length > 0 && value === secret);
+  return sensitiveCredentialsAreIsolated(env, [INTAKE_IDEMPOTENCY_SECRET_ENV]);
 }
 
 export function createInitialArc1DeliveryState(receivedAt) {

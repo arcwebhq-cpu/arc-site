@@ -8,6 +8,7 @@ import {
 } from 'node:crypto';
 
 import { TRANSACTIONAL_EMAIL_KINDS } from './transactional-email-template-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const EMAIL_RECIPIENT_VAULT_STORE = 'arc-email-recipient-vault';
 export const EMAIL_RECIPIENT_VAULT_SCHEMA = 'arc-email-recipient-vault-v1';
@@ -291,6 +292,10 @@ function decryptRecord(record, resolved) {
 export function emailRecipientVaultConfiguration(env = process.env) {
   if (env[EMAIL_RECIPIENT_VAULT_ENABLED_ENV] !== 'true') return Object.freeze({ enabled: false });
   try {
+    if (!sensitiveCredentialsAreIsolated(env, [
+      EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV,
+      EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY_ENV,
+    ])) throw new TypeError('Email vault credentials must be isolated.');
     const hmacSecret = secret(env[EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV], EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV);
     const key = encryptionKey(env[EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY_ENV]);
     if (safeEqual(hmacSecret, env[EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY_ENV])) {

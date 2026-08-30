@@ -161,6 +161,21 @@ env.ARC_INTAKE_ARC1_ADAPTER_ATTESTATION = createAdapterAttestation({
   tests_passed: true, default_off_verified: true, verified_at: now.toISOString(),
   expires_at: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
 }, env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET);
+assert.doesNotThrow(() => resolveArc1AdapterEnvironment(env));
+for (const credentialName of [
+  'ARC_INTAKE_ARC1_RUN_SECRET', 'ARC_INTAKE_ARC1_DESTINATION_BEARER',
+  'ARC_INTAKE_ARC1_EVIDENCE_SECRET', 'ARC_INTAKE_ARC1_ACK_SECRET',
+  'ARC_INTAKE_ARC1_STATE_SECRET', 'ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET',
+  'ARC_INTAKE_ASSET_RETRIEVAL_SECRET', 'ARC1_ASSET_RECEIPT_SECRET',
+  'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER', 'ARC_INTAKE_ARC1_DISPATCH_SECRET',
+  'ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
+  'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET',
+]) {
+  assert.throws(() => resolveArc1AdapterEnvironment({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }), /distinct/, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 assert.throws(() => resolveArc1AdapterEnvironment({
   ...env, URL: 'https://arcsites.netlify.app',
   ARC_INTAKE_ARC1_ENDPOINT: 'https://arcsites.netlify.app/internal/intake/arc1/adapter',

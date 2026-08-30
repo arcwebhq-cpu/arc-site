@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
+
 export const REVIEW_EMAIL_RECIPIENT_CONTROL_SCHEMA =
   'arc-preview-review-email-recipient-control-v1';
 export const REVIEW_EMAIL_RECIPIENT_AUTHORITY_LEASE_MS = 60_000;
@@ -70,7 +72,8 @@ function controlSecret(env) {
     env.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET,
   ];
   if (env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED !== 'true' || typeof secret !== 'string' ||
-      secret.length < 32 || secret.length > 512 || distinct.includes(secret)) {
+      secret.length < 32 || secret.length > 512 || distinct.includes(secret) ||
+      !sensitiveCredentialsAreIsolated(env, ['ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET'])) {
     throw new Error('ARC_REVIEW_EMAIL_OUTBOX_DISABLED');
   }
   return secret;

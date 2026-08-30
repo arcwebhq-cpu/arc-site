@@ -3,6 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { readBoundedRequestText, RequestBodyTooLargeError } from './bounded-request-body.mjs';
 import { reviewEmailOutboxConfiguration } from './review-email-outbox-core.mjs';
 import { reviewPortalConfiguration } from './review-flow-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const REVIEW_EMAIL_INTERNAL_SIGNATURE_PREFIX =
   'arc-preview-review-email-internal-request-signature-v1\n';
@@ -34,9 +35,7 @@ export function reviewEmailInternalApiConfiguration(env = process.env) {
   const flagValid = exactBoolean(env.ARC_REVIEW_EMAIL_INTERNAL_API_ENABLED);
   const secret = env[INTERNAL_SECRET_ENV];
   const secretValid = validSecret(secret);
-  const secretReused = secretValid && Object.entries(env).some(([name, value]) =>
-    name !== INTERNAL_SECRET_ENV && /(?:SECRET|TOKEN|PASSWORD|KEY)$/.test(name) &&
-      typeof value === 'string' && value.length > 0 && value === secret);
+  const secretReused = secretValid && !sensitiveCredentialsAreIsolated(env, [INTERNAL_SECRET_ENV]);
   const outbox = reviewEmailOutboxConfiguration(env);
   const portalEnabled = reviewPortalConfiguration(env).enabled;
   return Object.freeze({

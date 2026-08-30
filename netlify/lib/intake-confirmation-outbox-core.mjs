@@ -4,6 +4,7 @@ import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { canonicalJson } from './intake-arc1-bridge-core.mjs';
 import { sealEmailRecipientCapsule } from './email-recipient-vault-core.mjs';
 import { INTAKE_SUBMISSION_SCHEMA } from './intake-submission-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_CONFIRMATION_OUTBOX_ENABLED_ENV = 'ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED';
 export const INTAKE_CONFIRMATION_CONSUMER_ENABLED_ENV = 'ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED';
@@ -80,11 +81,16 @@ function exactOrigin(value) {
 }
 
 export function resolveIntakeConfirmationEnvironment(env = process.env) {
+  const credentialNames = [
+    INTAKE_CONFIRMATION_OUTBOX_SECRET_ENV,
+    INTAKE_CONFIRMATION_CONSUMER_BEARER_ENV,
+    INTAKE_CONFIRMATION_RECEIPT_SECRET_ENV,
+  ];
   const origin = exactOrigin(env.URL);
   const outboxSecret = secret(env[INTAKE_CONFIRMATION_OUTBOX_SECRET_ENV], INTAKE_CONFIRMATION_OUTBOX_SECRET_ENV);
   const consumerBearer = secret(env[INTAKE_CONFIRMATION_CONSUMER_BEARER_ENV], INTAKE_CONFIRMATION_CONSUMER_BEARER_ENV);
   const receiptSecret = secret(env[INTAKE_CONFIRMATION_RECEIPT_SECRET_ENV], INTAKE_CONFIRMATION_RECEIPT_SECRET_ENV);
-  if (new Set([outboxSecret, consumerBearer, receiptSecret]).size !== 3) {
+  if (!sensitiveCredentialsAreIsolated(env, credentialNames)) {
     throw new TypeError('Intake confirmation secrets must be distinct.');
   }
   return { origin, outboxSecret, consumerBearer, receiptSecret };

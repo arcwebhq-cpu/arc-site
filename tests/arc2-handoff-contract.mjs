@@ -27,6 +27,7 @@ import {
   netlifyRequest,
   readNetlifyJsonBounded,
   pollDeployReady,
+  normalizePaymentEvidence,
   normalizeStartPayload,
   PAYMENT_SIGNATURE_PREFIX,
   netlifyClaimUrl,
@@ -36,7 +37,7 @@ import {
   validateExpectedBindings,
   verifyNetlifyHandoff,
 } from '../netlify/lib/arc2-handoff-core.mjs';
-import { createEntry, createIndex, readEntry, replaceEntry } from '../netlify/lib/arc2-handoff-store.mjs';
+import { createEntry, createIndex, readEntry, readIndex, replaceEntry } from '../netlify/lib/arc2-handoff-store.mjs';
 import {
   duplicatePaymentReviewKey,
   duplicatePaymentReviewValue,
@@ -77,6 +78,30 @@ import statusRouteHandler, { config as statusConfig } from '../netlify/functions
 
 const now = new Date('2026-08-12T18:00:00.000Z');
 const stripeAccountId = 'acct_ArcHandoffContract123';
+
+async function ensureCheckoutSourceBinding(targetStore, record, sessionId, paymentIntentId, paymentLinkId, env) {
+  const key = stripeCheckoutKeys.handoffBindingKey(record.handoff_id);
+  if (await readIndex(targetStore, key)) return;
+  await createIndex(targetStore, key, {
+    schema: STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
+    handoff_id: record.handoff_id,
+    checkout_session_id_hmac_sha256: hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-session-id-v1\n${sessionId}`,
+    ),
+    payment_intent_id_hmac_sha256: hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-payment-intent-id-v1\n${paymentIntentId}`,
+    ),
+    payment_link_id_hmac_sha256: hmacHex(
+      env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+      `stripe-checkout-payment-link-id-v1\n${paymentLinkId}`,
+    ),
+    payment_evidence_sha256: record.payment_evidence_sha256,
+    stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+    livemode: false,
+  });
+}
 const secrets = Object.fromEntries([
   'ARC_CHECKOUT_BINDING_SECRET',
   'ARC_HANDOFF_ARTIFACT_EVIDENCE_SECRET',
@@ -208,6 +233,10 @@ assert.equal(configuredEnvironment({
   ...productionEnv,
   NETLIFY_ACCESS_TOKEN: productionEnv.NETLIFY_ADMIN_PAT,
 }).enabled, true, 'Matching canonical and alias values must be accepted.');
+assert.equal(configuredEnvironment({
+  ...productionEnv,
+  ARC_ROTATED_CREDENTIAL_V2: productionEnv.NETLIFY_ADMIN_PAT,
+}).enabled, false, 'An unrelated alias must not reuse the normalized Netlify credential.');
 const conflictingAliases = configuredEnvironment({
   ...productionEnv,
   NETLIFY_ACCESS_TOKEN: `${productionEnv.NETLIFY_ADMIN_PAT}-different`,
@@ -215,6 +244,10 @@ const conflictingAliases = configuredEnvironment({
 assert.equal(conflictingAliases.enabled, false, 'Conflicting canonical and alias values must fail closed.');
 assert.ok(conflictingAliases.invalid.includes('NETLIFY_ADMIN_PAT_NETLIFY_ACCESS_TOKEN_CONFLICT'));
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_CLAIM_TOKEN_SECRET: productionEnv.ARC_HANDOFF_STATE_SECRET }).enabled, false, 'Secrets must be distinct.');
+assert.equal(configuredEnvironment({
+  ...productionEnv,
+  ARC_ROTATED_CREDENTIAL_V2: productionEnv.ARC_HANDOFF_STATE_SECRET,
+}).enabled, false, 'A misleadingly named alias cannot reuse any handoff credential.');
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_TAX_REGISTRATION_VERIFIED: 'false' }).enabled, false, 'Manual attestations must be exact and fail closed.');
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_STRIPE_LIVE_MODE_ENABLED: 'yes' }).enabled, false, 'Stripe mode must be exact live in production.');
 assert.equal(configuredEnvironment({ ...productionEnv, ARC_CHECKOUT_BINDING_KEY_ID: '' }).enabled, false, 'Checkout key id must be explicit.');
@@ -332,7 +365,7 @@ const stableCheckoutConfiguration = {
   claim_recipient_email_sha256: sha256Hex(customerEmail), completed_sessions_limit: 1, currency: 'usd',
   customer_address_source: 'stripe_checkout_customer_details.address', name_collection_required: true,
   price_id: 'price_1ArcHandoffTest', price_tax_behavior: 'exclusive', product_id: 'prod_ArcHandoffTest', product_tax_code: 'txcd_10000000', quantity: 1,
-  stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256, stripe_api_version: '2026-07-29.dahlia', stripe_mode: 'test',
+  stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256, stripe_api_version: '2026-08-26.dahlia', stripe_mode: 'test',
   tax_contract_version: 'arc-tax-v1', tax_registrations: checkoutTaxRegistrations,
   tax_registrations_sha256: sha256Hex(canonicalJson(checkoutTaxRegistrations)), terms_document_sha256: sha256Hex('terms-document-v2'), terms_version: '2026-08-25',
 };
@@ -527,6 +560,22 @@ assert.equal(normalized.leadRouteRecipientHmacSha256, input.lead_route_recipient
 assert.deepEqual(normalized.deployArtifacts.map(({ path }) => path), [
   '_headers', 'about/index.html', 'contact/index.html', 'process/index.html', 'services/index.html', 'index.html',
 ]);
+assert.throws(() => normalizePaymentEvidence(
+  paymentEvidence,
+  input.payment_evidence_hmac_sha256,
+  env.ARC_CHECKOUT_BINDING_SECRET,
+  artifactEvidenceObject,
+  {
+    ...env,
+    ARC_CHECKOUT_BINDING_SECRET: 'detached-checkout-binding-secret-0123456789abcdef',
+  },
+), /credential|isolated/i,
+'Payment evidence must bind its supplied verification key to the configured checkout credential.');
+assert.throws(() => normalizeStartPayload(input, {
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_CHECKOUT_BINDING_SECRET,
+}, now), /credential|isolated/i,
+'An arbitrary alias of the checkout credential must fail before payment verification.');
 assert.throws(() => normalizeStartPayload(legacyV3Input, env, now), /version|invalid/i,
   'A newly submitted v3 artifact/payment envelope must fail closed.');
 const normalizedLegacyV3 = normalizeStartPayload(legacyV3Input, env, now, { allowLegacyV3: true });
@@ -850,6 +899,8 @@ for (const [label, snapshotOverrides] of [
   ['approval', { approval_content_sha256: '0'.repeat(64) }],
   ['terms', { terms_version: '2026-08-12' }],
   ['stripe-api', { stripe_api_version: '2026-06-24.dahlia' }],
+  ['stripe-api-retired', { stripe_api_version: '2026-07-29.dahlia' }],
+  ['stripe-api-preview', { stripe_api_version: '2026-07-29.preview' }],
 ]) {
   const invalidPolicyBundle = signedBundleInput({
     productionHtml: '<!doctype html><main>Policy-bound home</main>\n',
@@ -1341,6 +1392,14 @@ const noFormAdapters = {
 const noFormBootstrap = await startHandoff(noFormBundle.input, env, noFormAdapters);
 assert.equal(noFormBootstrap.record.state, 'PAYMENT_VERIFIED');
 assert.equal(noFormProviderCalls.length, 0, 'No-form bootstrap must reserve state before any provider request.');
+await ensureCheckoutSourceBinding(
+  noFormStore,
+  noFormBootstrap.record,
+  noFormBundle.paymentValue.checkout_session_id,
+  noFormPaymentIntentId,
+  noFormBundle.paymentValue.payment_link_id,
+  env,
+);
 const noFormBindingValue = {
   version: STRIPE_REVERSAL_BINDING_SCHEMA,
   scope: STRIPE_REVERSAL_BINDING_SCOPE,
@@ -1400,7 +1459,10 @@ const checkoutPaymentIntentHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
   `stripe-checkout-payment-intent-id-v1\n${noFormPaymentIntentId}`);
 const checkoutPaymentLinkHmac = hmacHex(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
   `stripe-checkout-payment-link-id-v1\n${noFormBundle.paymentValue.payment_link_id}`);
-await createIndex(checkoutReviewStore, stripeCheckoutKeys.handoffBindingKey(noFormBootstrap.handoffId), {
+assert.deepEqual(await readIndex(
+  checkoutReviewStore,
+  stripeCheckoutKeys.handoffBindingKey(noFormBootstrap.handoffId),
+), {
   schema: STRIPE_CHECKOUT_HANDOFF_BINDING_SCHEMA,
   handoff_id: noFormBootstrap.handoffId,
   checkout_session_id_hmac_sha256: checkoutSessionHmac,
@@ -1510,9 +1572,17 @@ const providerCallsBeforeBootstrap = fetchCalls.length;
 const bootstrap = await startHandoff(input, tokenAliasTestEnv, adapters);
 assert.equal(bootstrap.record.state, 'PAYMENT_VERIFIED');
 assert.equal(bootstrap.reversalControlReady, false);
+const paymentIntentId = 'pi_arc2HandoffContract';
+await ensureCheckoutSourceBinding(
+  store,
+  bootstrap.record,
+  paymentEvidenceObject.checkout_session_id,
+  paymentIntentId,
+  paymentEvidenceObject.payment_link_id,
+  env,
+);
 assert.equal(fetchCalls.length, providerCallsBeforeBootstrap,
   'The bootstrap call must return the durable handoff id before any Netlify provider write.');
-const paymentIntentId = 'pi_arc2HandoffContract';
 const bindingValue = {
   version: STRIPE_REVERSAL_BINDING_SCHEMA,
   scope: STRIPE_REVERSAL_BINDING_SCOPE,
@@ -1952,15 +2022,27 @@ assert.equal(successfulClaim.record.state, 'FINAL_DEPLOY_READY',
   'One authenticated claim callback must converge every bounded post-claim stage.');
 const delayedAuthorizationAt = new Date(claimAt.getTime() + 31 * 60_000);
 await registerNoReversalRecheck(successfulClaimStore, delayedAuthorizationAt);
+let movingReadClockMs = delayedAuthorizationAt.getTime();
+const providerReadStarts = [];
+const movingReadFetch = async (...args) => {
+  providerReadStarts.push(movingReadClockMs);
+  movingReadClockMs += 25;
+  return successfulClaimFetch(...args);
+};
 const delayedPrivateStatus = await getHandoffStatus(started.handoffId, env, {
   ...claimAdapters,
   store: successfulClaimStore,
-  fetch: successfulClaimFetch,
-  clock: () => new Date(delayedAuthorizationAt),
+  fetch: movingReadFetch,
+  clock: () => new Date(movingReadClockMs),
 }, { includePrivate: true });
 const delayedAuthorization = JSON.parse(delayedPrivateStatus.claim_state_evidence_private);
 assert.equal(delayedAuthorization.issued_at, delayedAuthorizationAt.toISOString(),
   'A worker outage beyond the original 30-minute window must receive freshly reverified send authority.');
+assert.ok(providerReadStarts.length > 0);
+assert.ok(providerReadStarts.every((readStartedAt) =>
+  Date.parse(delayedAuthorization.provider_observed_at) <= readStartedAt &&
+  Date.parse(delayedAuthorization.issued_at) <= readStartedAt),
+'Signed provider-observation timestamps must never postdate any read in the verified batch.');
 const delayedPrivateReplay = await getHandoffStatus(started.handoffId, env, {
   ...claimAdapters,
   store: successfulClaimStore,
@@ -2014,6 +2096,31 @@ await assert.rejects(getHandoffStatus(started.handoffId, env, {
 }, { includePrivate: true }), /ARC_STRIPE_REVERSAL_HALT/,
 'A reversal observed during final Netlify readback must be caught before send authority is emitted.');
 assert.equal(reversalInjectedDuringSendReadback, true);
+
+const recheckDuringReadStore = new FakeStore();
+recheckDuringReadStore.values = new Map([...successfulClaimStore.values.entries()]
+  .map(([key, value]) => [key, structuredClone(value)]));
+recheckDuringReadStore.counter = successfulClaimStore.counter;
+let recheckInjectedDuringRead = false;
+const recheckDuringReadFetch = async (...args) => {
+  const response = await successfulClaimFetch(...args);
+  if (!recheckInjectedDuringRead) {
+    recheckInjectedDuringRead = true;
+    await registerNoReversalRecheck(
+      recheckDuringReadStore,
+      new Date(staleSendAuthorizationAt.getTime() + 1),
+    );
+  }
+  return response;
+};
+await assert.rejects(getHandoffStatus(started.handoffId, env, {
+  ...claimAdapters,
+  store: recheckDuringReadStore,
+  fetch: recheckDuringReadFetch,
+  clock: () => new Date(staleSendAuthorizationAt),
+}, { includePrivate: true }), /ARC_STRIPE_REVERSAL_RECHECK_REQUIRED/,
+'A newer no-reversal observation created during provider reads cannot authorize the earlier read batch.');
+assert.equal(recheckInjectedDuringRead, true);
 
 const crashedClaimStore = new FakeStore();
 crashedClaimStore.values = new Map([...consumedSnapshotForClaim.entries()].map(([key, value]) => [key, structuredClone(value)]));

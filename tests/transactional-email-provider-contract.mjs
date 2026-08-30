@@ -5,12 +5,14 @@ import { readFile } from 'node:fs/promises';
 import { createResendWebhookHandler, config as webhookConfig } from '../netlify/functions/resend-webhook.mjs';
 import { config as workerConfig } from '../netlify/functions/transactional-email-worker.mjs';
 import {
+  emailSendAttemptConfiguration,
   markEmailProviderAccepted,
   readEmailSendAttempt,
   reconcileEmailProviderEvent,
   reserveEmailSendAttempt,
 } from '../netlify/lib/email-send-attempt-core.mjs';
 import {
+  emailRecipientVaultConfiguration,
   openEmailRecipientCapsule,
   sealEmailRecipientCapsule,
 } from '../netlify/lib/email-recipient-vault-core.mjs';
@@ -20,6 +22,12 @@ import {
 import { reserveIntakeEmailVerification } from '../netlify/lib/intake-email-verification-core.mjs';
 import { INTAKE_SUBMISSION_SCHEMA } from '../netlify/lib/intake-submission-core.mjs';
 import {
+  RESEND_RECONCILED_EVENT_TYPES,
+  RESEND_FROM_IDENTITY,
+  RESEND_REQUIRED_WEBHOOK_EVENT_TYPES,
+  RESEND_SENDING_DOMAIN,
+  RESEND_WEBHOOK_PATH,
+  resendProviderConfiguration,
   sendResendTransactionalEmail,
   verifyAndNormalizeResendWebhook,
 } from '../netlify/lib/resend-transactional-provider-core.mjs';
@@ -74,7 +82,7 @@ const env = {
   ARC_RESEND_WEBHOOK_ENABLED: 'true',
   ARC_RESEND_API_KEY: 're_0123456789abcdefghijklmnopqrstuvwxyz',
   ARC_RESEND_WEBHOOK_SECRET: `whsec_${signingBytes.toString('base64')}`,
-  ARC_RESEND_FROM: 'ARC Web <previews@arcweb.onl>',
+  ARC_RESEND_FROM: 'ARC <preview@send.arcweb.onl>',
   ARC_TRANSACTIONAL_EMAIL_WORKER_ENABLED: 'true',
   ARC_INTAKE_CONFIRMATION_OUTBOX_ENABLED: 'true',
   ARC_INTAKE_CONFIRMATION_CONSUMER_ENABLED: 'true',
@@ -88,6 +96,52 @@ const env = {
   ARC_INTAKE_EMAIL_VERIFICATION_ARC1_RELEASE_SECRET: 'verification-release-secret-unique-01234567',
 };
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
+assert.equal(RESEND_SENDING_DOMAIN, 'send.arcweb.onl');
+assert.equal(RESEND_FROM_IDENTITY, 'ARC <preview@send.arcweb.onl>');
+assert.equal(RESEND_WEBHOOK_PATH, '/api/webhooks/resend');
+assert.deepEqual(RESEND_REQUIRED_WEBHOOK_EVENT_TYPES, [
+  'email.delivered', 'email.bounced', 'email.complained', 'email.failed', 'email.suppressed',
+]);
+assert.ok(RESEND_REQUIRED_WEBHOOK_EVENT_TYPES.every((eventType) =>
+  RESEND_RECONCILED_EVENT_TYPES.includes(eventType)));
+for (const wrongSender of [
+  'ARC Web <preview@send.arcweb.onl>',
+  'ARC <previews@send.arcweb.onl>',
+  'preview@send.arcweb.onl',
+  'ARC <preview@arcweb.onl>',
+  'arc <preview@send.arcweb.onl>',
+]) {
+  assert.equal(resendProviderConfiguration({
+    ...env,
+    ARC_RESEND_FROM: wrongSender,
+  }).send_enabled, false, 'Only the exact staged ARC sender identity may be used.');
+}
+for (const [credentialName, disabled] of [
+  ['ARC_RESEND_API_KEY', (configuration) => configuration.send_enabled === false && configuration.apiKey === null],
+  ['ARC_RESEND_WEBHOOK_SECRET', (configuration) =>
+    configuration.webhook_enabled === false && configuration.webhookSigningKey === null],
+]) {
+  const configuration = resendProviderConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  });
+  assert.equal(disabled(configuration), true, `${credentialName} must reject an arbitrary configured alias.`);
+}
+for (const credentialName of [
+  'ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY',
+  'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET',
+]) {
+  assert.equal(emailRecipientVaultConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
+assert.equal(emailSendAttemptConfiguration({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET,
+}).enabled, false, 'Email attempt signing must reject an arbitrary configured alias.');
+assert.equal(webhookConfig.path, RESEND_WEBHOOK_PATH);
 
 async function reserveConfirmation(sourceRecord, confirmationStore, vaultStore) {
   const verification = await reserveIntakeEmailVerification(sourceRecord, env, new FakeStore(), { clock: () => now });

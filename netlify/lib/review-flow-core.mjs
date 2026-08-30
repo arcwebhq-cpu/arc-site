@@ -5,6 +5,7 @@ import {
   readReviewEmailRecipientControl,
   releaseReviewEmailRecipientAuthority,
 } from './review-email-recipient-control-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const REVIEW_STORE = 'arc-preview-reviews';
 export const REVIEW_INVITE_SCHEMA = 'arc-preview-review-invite-v1';
@@ -146,13 +147,14 @@ function configuredOrigin(value) {
 export function reviewPortalConfiguration(env = process.env) {
   const portalFlagValid = exactBoolean(env.ARC_REVIEW_PORTAL_ENABLED);
   const checkoutFlagValid = exactBoolean(env.ARC_REVIEW_CHECKOUT_ENABLED);
-  const secrets = [
-    env.ARC_REVIEW_INVITE_HMAC_SECRET,
-    env.ARC_REVIEW_SESSION_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
+  const secretNames = [
+    'ARC_REVIEW_INVITE_HMAC_SECRET',
+    'ARC_REVIEW_SESSION_HMAC_SECRET',
+    'ARC_REVIEW_RECORD_HMAC_SECRET',
+    'ARC_REVIEW_DECISION_HMAC_SECRET',
   ];
-  const secretsValid = secrets.every(validSecret) && new Set(secrets).size === secrets.length;
+  const secretsValid = secretNames.every((name) => validSecret(env[name])) &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   const previewOrigin = configuredOrigin(env.ARC_REVIEW_PREVIEW_ORIGIN);
   const checkoutOrigin = configuredOrigin(env.ARC_REVIEW_CHECKOUT_ORIGIN);
   const enabled = portalFlagValid && env.ARC_REVIEW_PORTAL_ENABLED === 'true' && secretsValid && Boolean(previewOrigin);
@@ -369,14 +371,9 @@ export function reviewInviteHmac(inviteToken, env = process.env) {
 function reviewRecipientSuppressionSecret(env) {
   if (env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED !== 'true') return null;
   const secret = env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET;
-  const distinct = [
-    env.ARC_REVIEW_INVITE_HMAC_SECRET,
-    env.ARC_REVIEW_SESSION_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
-    env.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET,
-  ];
-  if (!validSecret(secret) || distinct.includes(secret)) {
+  if (!validSecret(secret) || !sensitiveCredentialsAreIsolated(
+    env, ['ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET'],
+  )) {
     throw new Error('ARC_REVIEW_EMAIL_OUTBOX_DISABLED');
   }
   return secret;
@@ -744,14 +741,8 @@ function normalizeEmailDeliveryBinding(value) {
 
 function reviewEmailReceiptSecret(env) {
   const value = env.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET;
-  const distinct = [
-    env.ARC_REVIEW_INVITE_HMAC_SECRET,
-    env.ARC_REVIEW_SESSION_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
-    env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET,
-  ];
-  if (env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED !== 'true' || !validSecret(value) || distinct.includes(value)) {
+  if (env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED !== 'true' || !validSecret(value) ||
+      !sensitiveCredentialsAreIsolated(env, ['ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET'])) {
     throw new Error('ARC_REVIEW_EMAIL_OUTBOX_DISABLED');
   }
   return value;

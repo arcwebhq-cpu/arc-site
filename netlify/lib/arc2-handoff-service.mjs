@@ -66,6 +66,7 @@ import {
 import { readReviewEmailRecipientControl } from './review-email-recipient-control-core.mjs';
 import { assertReviewCheckoutFulfillmentAllowed } from './review-checkout-revocation-core.mjs';
 import { assertArc2EmailNegativeStateAllows } from './arc2-negative-email-state-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 import {
   assertClaimSandboxBootstrapBound,
   claimSandboxBootstrapConfiguration,
@@ -1605,7 +1606,8 @@ function normalizeFinalDeliveryReceipt(raw, signature, record, env, now, options
   const receiptSecret = env.ARC_FINAL_DELIVERY_RECEIPT_SECRET;
   if (typeof receiptSecret !== 'string' || receiptSecret.length < 32 || receiptSecret.length > 512 ||
       receiptSecret === env.ARC_EMAIL_CLAIM_BINDING_SECRET || receiptSecret === env.ARC_HANDOFF_TRIGGER_SECRET ||
-      receiptSecret === env.ARC_CLAIM_STATE_EVIDENCE_SECRET || receiptSecret === env.ARC_FINAL_DELIVERY_ACK_SECRET) {
+      receiptSecret === env.ARC_CLAIM_STATE_EVIDENCE_SECRET || receiptSecret === env.ARC_FINAL_DELIVERY_ACK_SECRET ||
+      !sensitiveCredentialsAreIsolated(env, ['ARC_FINAL_DELIVERY_RECEIPT_SECRET'])) {
     throw new TypeError('Final delivery receipt secret is unavailable or not distinct.');
   }
   const suppliedSignature = sha256(signature, 'Final delivery receipt signature');
@@ -1883,17 +1885,21 @@ export async function getHandoffStatus(handoffId, env, adapters = {}, options = 
     // readiness and is no more than one minute old. Guard both sides of the
     // Netlify readback so provider latency cannot turn an old preflight check
     // into send authority.
+    const providerObservedAt = clock();
     const guardOptions = {
       maxRecheckAgeMs: STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS,
       recheckNotBefore: record.final_deploy_ready_at,
+      recheckNotAfter: providerObservedAt.toISOString(),
     };
-    await assertCheckoutAndReversalAllowed(record, env, adapters, { ...guardOptions, now: clock() });
+    await assertCheckoutAndReversalAllowed(record, env, adapters, {
+      ...guardOptions,
+      now: providerObservedAt,
+    });
     const deadlineMs = providerStageDeadline(adapters);
     await verifyClaimedRecord(record, record.final_deploy_id, record.destination_account_id,
       env, adapters.fetch || fetch, deadlineMs);
-    const authorizedAt = clock();
-    await assertCheckoutAndReversalAllowed(record, env, adapters, { ...guardOptions, now: authorizedAt });
-    Object.assign(status, createClaimStateEvidence(record, env, authorizedAt));
+    await assertCheckoutAndReversalAllowed(record, env, adapters, { ...guardOptions, now: clock() });
+    Object.assign(status, createClaimStateEvidence(record, env, providerObservedAt));
   }
   return status;
 }

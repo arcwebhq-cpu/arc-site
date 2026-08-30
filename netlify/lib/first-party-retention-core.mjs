@@ -30,6 +30,7 @@ import {
   validateRetentionFinalizeReceipt,
   validateRetentionFreezeIntent,
 } from './retention-generation-fence-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const FIRST_PARTY_RETENTION_ENABLED_ENV = 'ARC_FIRST_PARTY_RETENTION_ENABLED';
 export const FIRST_PARTY_RETENTION_HMAC_SECRET_ENV = 'ARC_FIRST_PARTY_RETENTION_HMAC_SECRET';
@@ -95,6 +96,7 @@ const PHASES = Object.freeze([
   Object.freeze({ family: 'checkout', store: 'review', prefix: 'review-checkout-binding/', kind: 'checkout-primary' }),
   Object.freeze({ family: 'review', store: 'review', prefix: 'review-invites/', kind: 'review-primary' }),
   Object.freeze({ family: 'handoff', store: 'handoff', prefix: 'handoffs/', kind: 'handoff-candidate' }),
+  Object.freeze({ family: 'handoff', store: 'payment', prefix: 'payment-arc2-manual-review/', kind: 'payment-child' }),
   Object.freeze({ family: 'handoff', store: 'payment', prefix: 'payment-arc2-pending/', kind: 'payment-child' }),
   Object.freeze({ family: 'handoff', store: 'payment', prefix: 'payment-arc2-start-outbox/', kind: 'payment-child' }),
   Object.freeze({ family: 'handoff', store: 'payment', prefix: 'payment-review-session-binding/', kind: 'payment-child' }),
@@ -247,10 +249,15 @@ const PAYMENT_REVIEW_IMMUTABLE_FIELDS = Object.freeze([
   'review_record_revision', 'review_record_sha256', 'revision_round', 'schema', 'scope_version',
   'stripe_account_id_sha256', 'subtotal_amount_minor_units', 'tax_amount_minor_units', 'amount_total_minor_units',
 ]);
-const PAYMENT_START_OUTBOX_FIELDS = Object.freeze([
+const PAYMENT_START_OUTBOX_V2_FIELDS = Object.freeze([
   'arc2_start_receipt_sha256', 'claim_attempt_count', 'completed_at', 'completion_claim_hmac_sha256',
   'completion_receipt_sha256', 'created_at', 'immutable', 'immutable_sha256', 'lease_claim_hmac_sha256',
   'lease_claimed_at', 'lease_expires_at', 'record_revision', 'schema', 'status', 'updated_at',
+]);
+const PAYMENT_START_OUTBOX_FIELDS = Object.freeze([
+  ...PAYMENT_START_OUTBOX_V2_FIELDS,
+  'manual_review_at', 'manual_review_claim_hmac_sha256', 'manual_review_code',
+  'manual_review_evidence_sha256', 'manual_review_handoff_id',
 ]);
 const PAYMENT_START_IMMUTABLE_FIELDS = Object.freeze([
   'approval_receipt_hmac_sha256', 'approval_receipt_sha256', 'authorization_expires_at', 'brief_sha256',
@@ -262,6 +269,10 @@ const PAYMENT_START_IMMUTABLE_FIELDS = Object.freeze([
 ]);
 const PAYMENT_PENDING_FIELDS = Object.freeze([
   'created_at', 'immutable_binding_sha256', 'outbox_key', 'schema',
+]);
+const PAYMENT_MANUAL_REVIEW_FIELDS = Object.freeze([
+  'created_at', 'handoff_id', 'immutable_binding_sha256', 'outbox_key',
+  'review_code', 'review_evidence_sha256', 'schema',
 ]);
 const STRIPE_REVIEW_CHECKOUT_HANDOFF_FIELDS = Object.freeze([
   'approval_receipt_sha256', 'bridge_immutable_binding_sha256', 'checkout_session_id_hmac_sha256',
@@ -355,10 +366,11 @@ export function firstPartyRetentionConfiguration(env = process.env) {
     const fenceConfiguration = retentionGenerationFenceConfiguration(env);
     for (const name of fenceConfiguration.missing) missing.push(name);
     for (const name of fenceConfiguration.invalid) invalid.push(name);
-    const suppliedSecrets = [secret, env[RETENTION_GENERATION_FENCE_SECRET_ENV],
-      ...SOURCE_SECRETS.map((name) => env[name])]
-      .filter((value) => typeof value === 'string' && value.length > 0);
-    if (new Set(suppliedSecrets).size !== suppliedSecrets.length) invalid.push('FIRST_PARTY_RETENTION_SECRET_SEPARATION');
+    const secretNames = [FIRST_PARTY_RETENTION_HMAC_SECRET_ENV,
+      RETENTION_GENERATION_FENCE_SECRET_ENV, ...SOURCE_SECRETS];
+    if (!sensitiveCredentialsAreIsolated(env, secretNames)) {
+      invalid.push('FIRST_PARTY_RETENTION_SECRET_SEPARATION');
+    }
   }
   return Object.freeze({
     requested,
@@ -2822,7 +2834,9 @@ function validatePaymentReviewBinding(value, key, context) {
 }
 
 function validatePaymentStartOutbox(value, key, context) {
-  if (!exactKeys(value, PAYMENT_START_OUTBOX_FIELDS) || value.schema !== 'arc-payment-arc2-start-outbox-v2' ||
+  const legacy = value?.schema === 'arc-payment-arc2-start-outbox-v2';
+  if (!exactKeys(value, legacy ? PAYMENT_START_OUTBOX_V2_FIELDS : PAYMENT_START_OUTBOX_FIELDS) ||
+      (!legacy && value.schema !== 'arc-payment-arc2-start-outbox-v3') ||
       !exactKeys(value.immutable, PAYMENT_START_IMMUTABLE_FIELDS) ||
       value.immutable.schema !== 'arc-payment-arc2-start-binding-v2' ||
       !HEX_64.test(value.immutable_sha256 || '') || value.immutable_sha256 !== recordSha(value.immutable) ||
@@ -2834,6 +2848,25 @@ function validatePaymentStartOutbox(value, key, context) {
   }
   iso(value.created_at, 'Payment start outbox created_at');
   iso(value.updated_at, 'Payment start outbox updated_at');
+  if (value.status === 'REVIEW_REQUIRED') {
+    if (legacy || value.claim_attempt_count < 1 ||
+        [value.lease_claim_hmac_sha256, value.lease_claimed_at, value.lease_expires_at,
+          value.completion_claim_hmac_sha256, value.arc2_start_receipt_sha256,
+          value.completion_receipt_sha256, value.completed_at].some((field) => field !== null) ||
+        value.manual_review_code !== 'ARC_STRIPE_REVERSAL_HALT' ||
+        ![value.manual_review_claim_hmac_sha256, value.manual_review_evidence_sha256,
+          value.manual_review_handoff_id].every((field) => HEX_64.test(field || ''))) {
+      throw new Error('payment-start-outbox-manual-review-invalid');
+    }
+    iso(value.manual_review_at, 'Payment start outbox manual_review_at');
+    // Reversal/manual-review records are deliberately non-terminal for retention.
+    return { value, terminal: false };
+  }
+  if (!legacy && [value.manual_review_at, value.manual_review_claim_hmac_sha256,
+    value.manual_review_code, value.manual_review_evidence_sha256,
+    value.manual_review_handoff_id].some((field) => field !== null)) {
+    throw new Error('payment-start-outbox-manual-review-invalid');
+  }
   if (value.status !== 'COMPLETED') return { value, terminal: false };
   if ([value.lease_claim_hmac_sha256, value.lease_claimed_at, value.lease_expires_at].some((field) => field !== null) ||
       ![value.completion_claim_hmac_sha256, value.arc2_start_receipt_sha256,
@@ -2842,6 +2875,20 @@ function validatePaymentStartOutbox(value, key, context) {
   }
   iso(value.completed_at, 'Payment start outbox completed_at');
   return { value, terminal: true };
+}
+
+function validatePaymentManualReviewIndex(value, key) {
+  if (!exactKeys(value, PAYMENT_MANUAL_REVIEW_FIELDS) ||
+      value.schema !== 'arc-payment-arc2-manual-review-index-v1' ||
+      !/^payment-arc2-start-outbox\/[a-f0-9]{64}$/.test(value.outbox_key || '') ||
+      key !== `payment-arc2-manual-review/${value.outbox_key.split('/').at(-1)}` ||
+      value.review_code !== 'ARC_STRIPE_REVERSAL_HALT' ||
+      ![value.handoff_id, value.immutable_binding_sha256,
+        value.review_evidence_sha256].every((field) => HEX_64.test(field || ''))) {
+    throw new Error('payment-manual-review-index-invalid');
+  }
+  iso(value.created_at, 'Payment manual review index created_at');
+  return value;
 }
 
 function validateStripeReviewCheckoutBinding(value, key, handoff = null) {
@@ -3033,6 +3080,20 @@ async function paymentChildPlanValid(context, mutation, handoffId) {
     return Boolean(outbox && !isRetentionTombstone(outbox.value) &&
       validatePaymentStartOutbox(outbox.value, value.outbox_key, context).terminal);
   }
+  if (key.startsWith('payment-arc2-manual-review/')) {
+    validatePaymentManualReviewIndex(value, key);
+    const outbox = await getEntryUnderFence(context, context.stores.payment, value.outbox_key);
+    if (!outbox || isRetentionTombstone(outbox.value)) return false;
+    const validated = validatePaymentStartOutbox(outbox.value, value.outbox_key, context).value;
+    if (validated.status !== 'REVIEW_REQUIRED' ||
+        validated.immutable_sha256 !== value.immutable_binding_sha256 ||
+        validated.manual_review_handoff_id !== value.handoff_id ||
+        validated.manual_review_code !== value.review_code ||
+        validated.manual_review_evidence_sha256 !== value.review_evidence_sha256) return false;
+    // Manual-review evidence remains preserved until a separately audited
+    // resolution protocol explicitly terminalizes it.
+    return false;
+  }
   return false;
 }
 
@@ -3108,11 +3169,15 @@ async function handoffHasRemainingChildren(context, handoffId) {
 }
 
 async function handoffIdForPaymentChild(context, key, value) {
-  if (key.startsWith('payment-arc2-pending/')) {
+  if (key.startsWith('payment-arc2-pending/') || key.startsWith('payment-arc2-manual-review/')) {
+    if (key.startsWith('payment-arc2-manual-review/')) {
+      try { validatePaymentManualReviewIndex(value, key); } catch { return null; }
+    }
     const outbox = typeof value?.outbox_key === 'string'
       ? await getEntryUnderFence(context, context.stores.payment, value.outbox_key) : null;
-    return outbox && !isRetentionTombstone(outbox.value)
-      ? handoffIdForPaymentChild(context, value.outbox_key, outbox.value) : null;
+    if (!outbox || isRetentionTombstone(outbox.value)) return null;
+    const owner = await handoffIdForPaymentChild(context, value.outbox_key, outbox.value);
+    return key.startsWith('payment-arc2-manual-review/') && value.handoff_id !== owner ? null : owner;
   }
   const bridgeBinding = key.startsWith('payment-arc2-start-outbox/')
     ? value?.immutable_sha256 : null;

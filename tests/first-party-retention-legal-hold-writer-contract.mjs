@@ -123,6 +123,11 @@ try {
     [FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV]:
       process.env.ARC_FIRST_PARTY_RETENTION_HMAC_SECRET,
   }).enabled, false, 'The operator bearer cannot reuse retention signing material.');
+  assert.equal(firstPartyRetentionLegalHoldWriterConfiguration({
+    ...process.env,
+    ARC_FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ROTATED:
+      process.env[FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV],
+  }).enabled, false, 'A renamed legal-hold bearer copy must fail closed.');
 
   // Authentication and shape checks happen before a Blob handle is opened.
   {

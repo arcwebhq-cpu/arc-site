@@ -75,6 +75,17 @@ assert.equal(retentionConfiguration({}).enabled, false);
 assert.equal(retentionConfiguration({ ...env,
   ARC_HANDOFF_TRIGGER_SECRET: env.ARC_RETENTION_CLEANUP_SECRET,
 }).enabled, false, 'Retention credentials must not reuse an existing handoff authorization secret.');
+for (const credentialName of [
+  'ARC_RETENTION_CLEANUP_SECRET',
+  'ARC_RETENTION_MANIFEST_SECRET',
+  'ARC_RETENTION_RECORD_HMAC_SECRET',
+  'ARC_RETENTION_ADULT_APPROVAL_SECRET',
+]) {
+  assert.equal(retentionConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 
 function intakeRecord(id, receivedAt = '2024-07-01T00:00:00.000Z') {
   return {

@@ -1,4 +1,5 @@
 import { safeEqual, sha256Hex } from './arc2-handoff-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const STRIPE_ACCOUNT_VERIFICATION_KEY_ENV = 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY';
 const ACCOUNT_ID_PATTERN = /^acct_[A-Za-z0-9]{6,128}$/;
@@ -14,8 +15,7 @@ export function stripeAccountVerificationConfigured(env = process.env) {
   const mode = env.ARC_STRIPE_LIVE_MODE_ENABLED === 'true' ? 'live' :
     env.ARC_STRIPE_LIVE_MODE_ENABLED === 'false' ? 'test' : null;
   if (!match || !mode || match[1] !== mode || key.length > 256) return false;
-  return !Object.entries(env).some(([name, value]) => name !== STRIPE_ACCOUNT_VERIFICATION_KEY_ENV &&
-    /(?:SECRET|TOKEN|PAT|KEY)$/.test(name) && typeof value === 'string' && value.length > 0 && value === key);
+  return sensitiveCredentialsAreIsolated(env, [STRIPE_ACCOUNT_VERIFICATION_KEY_ENV]);
 }
 
 async function readBoundedJson(response) {

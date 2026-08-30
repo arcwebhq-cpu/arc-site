@@ -185,7 +185,17 @@ const paymentEvidence = {
 };
 
 assert.equal(stripeCheckoutConfiguration(env).enabled, true);
+assert.equal(STRIPE_WEBHOOK_API_VERSION, '2026-08-26.dahlia');
 assert.equal(stripeCheckoutConfiguration({}).enabled, false);
+for (const unsupportedApiVersion of ['2026-07-29.dahlia', '2026-07-29.preview']) {
+  const unsupported = stripeCheckoutConfiguration({
+    ...env,
+    ARC_STRIPE_WEBHOOK_API_VERSION: unsupportedApiVersion,
+  });
+  assert.equal(unsupported.apiVersionValid, false);
+  assert.equal(unsupported.webhookOperational, false,
+    'Only the exact stable Stripe API version may make webhook ingestion operational.');
+}
 assert.equal(stripeCheckoutConfiguration({ ...env, ARC_STRIPE_CHECKOUT_LEDGER_REQUIRED: 'false' }).webhookOperational, true,
   'Sandbox webhook ingestion may run while handoff gating remains explicitly disabled.');
 assert.equal(stripeCheckoutConfiguration({ ...env, ARC_STRIPE_CHECKOUT_LEDGER_ENABLED: 'false' }).enabled, false);
@@ -196,6 +206,18 @@ assert.equal(stripeCheckoutConfiguration({
   ...env,
   ARC_STRIPE_REVERSAL_HMAC_SECRET: env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET,
 }).enabled, false, 'Stripe signatures and stored identity HMACs must not share a secret.');
+for (const credentialName of [
+  'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+  'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+]) {
+  const aliased = stripeCheckoutConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  });
+  assert.equal(aliased.secretsValid, false,
+    `An arbitrary alias must not reuse ${credentialName}.`);
+  assert.equal(aliased.webhookOperational, false);
+}
 assert.equal(stripeCheckoutConfiguration({
   ...env,
   ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: 'sk_' + 'test_fullAccessKeysAreNotAccepted0123456789',
@@ -205,6 +227,12 @@ const paidRaw = eventRaw();
 const normalizedPaid = normalizeStripeCheckoutEvent(paidRaw, signature(paidRaw), env, now);
 assert.equal(normalizedPaid.state, 'PAID');
 assert.equal(normalizedPaid.sessionId, sessionId);
+for (const unsupportedApiVersion of ['2026-07-29.dahlia', '2026-07-29.preview']) {
+  const unsupportedRaw = eventRaw({ apiVersion: unsupportedApiVersion });
+  assert.throws(() => normalizeStripeCheckoutEvent(
+    unsupportedRaw, signature(unsupportedRaw), env, now,
+  ), /allowlisted|bound/i, 'Signed events on a retired or preview API version must fail closed.');
+}
 assert.throws(() => normalizeStripeCheckoutEvent(paidRaw, 't=1787600000,v1=' + '0'.repeat(64), env, now), /signature/i);
 const wrongAccountStore = new FakeStore();
 await assert.rejects(processStripeCheckoutEventCore(paidRaw, signature(paidRaw), env, {

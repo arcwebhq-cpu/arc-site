@@ -27,6 +27,7 @@ import {
 } from './resend-transactional-provider-core.mjs';
 import { renderTransactionalEmail } from './transactional-email-template-core.mjs';
 import { sealTransactionalEmailAttemptContext } from './transactional-email-attempt-context-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const REVIEW_EMAIL_RESEND_CAPSULE_ENABLED_ENV = 'ARC_REVIEW_EMAIL_RESEND_CAPSULE_ENABLED';
 export const REVIEW_EMAIL_RESEND_WORKER_ENABLED_ENV = 'ARC_REVIEW_EMAIL_RESEND_WORKER_ENABLED';
@@ -134,6 +135,9 @@ function reviewUrl(origin, inviteToken) {
 
 function providerAccountHmac(env) {
   const id = accountId(env[RESEND_PROVIDER_ACCOUNT_ID_ENV]);
+  if (!sensitiveCredentialsAreIsolated(env, [RESEND_PROVIDER_BINDING_HMAC_SECRET_ENV])) {
+    throw new TypeError('Resend provider binding credential is not isolated.');
+  }
   return hmac(providerBindingSecret(env[RESEND_PROVIDER_BINDING_HMAC_SECRET_ENV]),
     `arc-resend-provider-account-binding-v1\n${id}`);
 }
@@ -153,10 +157,12 @@ function secretsDistinct(env) {
   ];
   const required = requiredNames.map((name) => env[name]);
   if (required.some((value) => typeof value !== 'string' || value.length === 0)) return false;
-  const optional = ['ARC_REVIEW_EMAIL_INTERNAL_API_SECRET', 'ARC_RESEND_WEBHOOK_SECRET']
-    .map((name) => env[name]).filter((value) => typeof value === 'string' && value.length > 0);
-  const values = [...required, ...optional];
-  return new Set(values).size === values.length;
+  const optionalNames = ['ARC_REVIEW_EMAIL_INTERNAL_API_SECRET', 'ARC_RESEND_WEBHOOK_SECRET']
+    .filter((name) => typeof env[name] === 'string' && env[name].length > 0);
+  const selectedNames = [...requiredNames, ...optionalNames];
+  const values = selectedNames.map((name) => env[name]);
+  return new Set(values).size === values.length &&
+    sensitiveCredentialsAreIsolated(env, selectedNames);
 }
 
 export function previewReviewCapsuleConfiguration(env = process.env) {

@@ -70,6 +70,12 @@ assert.equal(resolveSameDeployDispatcher(new Request('https://arcsites.netlify.a
   'Either fixed public alias may invoke, but the endpoint is derived only from the trusted configured URL.');
 assert.throws(() => resolveSameDeployDispatcher(new Request('https://evil.example/api/intake/submit'), env), /origin mismatch/);
 assert.throws(() => resolveSameDeployDispatcher(request, { ...env, ARC_INTAKE_ARC1_RUN_SECRET: env.ARC_INTAKE_ARC1_DISPATCH_SECRET }), /distinct/);
+for (const credentialName of ['ARC_INTAKE_ARC1_DISPATCH_SECRET', 'ARC_INTAKE_ARC1_RUN_SECRET']) {
+  assert.throws(() => resolveSameDeployDispatcher(request, {
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }), /distinct|isolated/, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 const disabled = await dispatchIntakeToArc1Background(submissionId, request, { ...env, ARC_INTAKE_ARC1_DISPATCH_ENABLED: 'false' }, { get store() { throw new Error('must not touch'); }, fetch: async () => { throw new Error('must not invoke'); } });
 assert.equal(disabled.state, 'DISPATCH_DISABLED');
 const unverifiedStore = new FakeStore();

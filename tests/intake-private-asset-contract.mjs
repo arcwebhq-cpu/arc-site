@@ -123,6 +123,15 @@ const env = {
   ARC_INTAKE_ARC1_STATE_SECRET: 'state-secret-unique-0123456789-abcdefgh', URL: 'https://arcweb.onl',
 };
 const resolved = resolvePrivateAssetEnvironment(env);
+for (const credentialName of [
+  'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
+  'ARC_INTAKE_ARC1_STATE_SECRET',
+]) {
+  assert.throws(() => resolvePrivateAssetEnvironment({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }), /distinct/, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 const grants = createPrivateAssetGrants(normalized.record, resolved);
 assert.deepEqual(grants.map(item => item.role), ['logo_file']);
 assert.equal(JSON.stringify(grants).includes(png.toString('base64')), false);

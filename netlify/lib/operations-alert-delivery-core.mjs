@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const OPERATIONS_ALERT_DELIVERY_STORE = 'arc-operations-alert-delivery';
 export const OPERATIONS_ALERT_DELIVERY_ENABLED_ENV = 'ARC_OPERATIONS_ALERT_DELIVERY_ENABLED';
@@ -225,10 +226,7 @@ export function operationsAlertWorkerLeaseToken(deliveryHmacSha256, env = proces
 export function operationsAlertDeliveryConfiguration(env = process.env) {
   const names = [OPERATIONS_ALERT_DELIVERY_HMAC_SECRET_ENV, OPERATIONS_ALERT_DELIVERY_BEARER_ENV];
   const secrets = names.map((name) => env[name]).filter(validSecret);
-  const otherSecrets = Object.entries(env).filter(([name]) => /(?:_SECRET|_BEARER|_TOKEN|_KEY)$/.test(name) &&
-    !names.includes(name)).map(([, value]) => value).filter(validSecret);
-  const secretsValid = secrets.length === names.length && new Set(secrets).size === secrets.length &&
-    !secrets.some((secret) => otherSecrets.includes(secret));
+  const secretsValid = secrets.length === names.length && sensitiveCredentialsAreIsolated(env, names);
   const provider = String(env[OPERATIONS_ALERT_PROVIDER_ENV] || '');
   const sender = String(env[OPERATIONS_ALERT_SENDER_ENV] || '');
   const recipient = String(env[OPERATIONS_ALERT_RECIPIENT_ENV] || '').toLowerCase();

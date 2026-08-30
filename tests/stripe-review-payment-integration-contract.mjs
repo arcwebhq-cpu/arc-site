@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { PAYMENT_ARC2_COMPLETION_SCHEMA } from '../netlify/lib/payment-arc2-bridge-core.mjs';
+import {
+  PAYMENT_ARC2_COMPLETION_SCHEMA,
+  PAYMENT_ARC2_PENDING_INDEX_SCHEMA,
+} from '../netlify/lib/payment-arc2-bridge-core.mjs';
 import {
   ACTIVATION_EVIDENCE_BY_STAGE,
   ACTIVATION_MANIFEST_SCHEMA,
@@ -22,8 +25,10 @@ import {
   STRIPE_REVERSAL_RECHECK_PREFIX,
   STRIPE_REVERSAL_RECHECK_SCHEMA,
   STRIPE_REVERSAL_RECHECK_SCOPE,
+  STRIPE_PENDING_PAYMENT_SCHEMA,
   registerStripeReversalBinding,
   registerStripeReversalRecheck,
+  stripeReversalKeys,
 } from '../netlify/lib/stripe-reversal-core.mjs';
 import {
   acknowledgeReviewEmailReceipt,
@@ -98,6 +103,14 @@ class FakeStore {
   }
 }
 
+const cloneStore = source => {
+  const copy = new FakeStore();
+  copy.sequence = source.sequence;
+  copy.values = new Map([...source.values].map(([key, entry]) => [key, structuredClone(entry)]));
+  copy.writeKeys = [...source.writeKeys];
+  return copy;
+};
+
 const now = new Date('2026-08-27T20:00:00.000Z');
 const sessionCreatedTimestamp = Math.floor((now.getTime() + 3_000) / 1000);
 const settlementNow = new Date(now.getTime() + 2 * 86_400_000);
@@ -146,6 +159,7 @@ const env = {
   ARC_HANDOFF_STATE_SECRET: 'handoff-state-integration-secret-0123456789abcdef',
   ARC_CLAIM_TOKEN_SECRET: 'claim-token-integration-secret-0123456789abcdef',
   ARC_EMAIL_CLAIM_BINDING_SECRET: 'email-claim-binding-integration-secret-0123456789abcdef',
+  ARC_FINAL_DELIVERY_RECEIPT_SECRET: 'final-delivery-receipt-integration-secret-0123456789abcdef',
   ARC_TRANSACTIONAL_EMAIL_ENABLED: 'true',
   ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET: 'payment-email-attempt-integration-secret-0123456789',
   ARC_EMAIL_RECIPIENT_VAULT_ENABLED: 'true',
@@ -190,7 +204,7 @@ const env = {
   ARC_STRIPE_REVIEW_CHECKOUT_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_ENABLED: 'true',
   ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET: 'stripe-review-revocation-integration-secret-0123456789abcdef',
-  ARC_STRIPE_REVIEW_SECRET_KEY: ['sk', 'test', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'test', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
   ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
   ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED: 'true',
   ARC_STRIPE_REVERSAL_BINDING_ENABLED: 'true',
@@ -587,8 +601,57 @@ assert.equal(paymentArc2WorkerConfiguration(env).enabled, true);
 assert.equal(paymentArc2WorkerConfiguration({ ...env, ARC_PAYMENT_ARC2_WORKER_ENABLED: 'false' }).enabled, false);
 assert.equal(paymentArc2WorkerConfiguration({
   ...env,
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
+}).enabled, true, 'The documented sandbox worker profile may run with reversal control not required.');
+for (const unsafeSandboxMutation of [
+  { ARC_STRIPE_LIVE_MODE_ENABLED: 'true' },
+  { ARC_ALLOW_TEST_MODE_EVENTS: 'false' },
+  { ARC_HANDOFF_ENABLED: 'true' },
+  {
+    ARC_STRIPE_LIVE_MODE_ENABLED: 'true',
+    ARC_ALLOW_TEST_MODE_EVENTS: 'false',
+    ARC_HANDOFF_ENABLED: 'true',
+  },
+]) {
+  const unsafeSandboxWorker = paymentArc2WorkerConfiguration({
+    ...env,
+    ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
+    ...unsafeSandboxMutation,
+  });
+  assert.equal(unsafeSandboxWorker.reversalPolicyValid, false,
+    'A sandbox label alone cannot exempt the worker from reversal control.');
+  assert.equal(unsafeSandboxWorker.enabled, false,
+    'A live, test-disabled, or handoff-enabled sandbox-labelled worker must fail closed.');
+}
+const productionWorkerEnv = {
+  ...env,
+  ARC_ALLOW_TEST_MODE_EVENTS: 'false',
+  ARC_HANDOFF_ENABLED: 'true',
+  ARC_RUNTIME_ENVIRONMENT: 'production',
+  ARC_STRIPE_ACCOUNT_VERIFICATION_KEY: ['rk', 'live', 'arcIntegrationAccountRead0123456789'].join('_'),
+  ARC_STRIPE_LIVE_MODE_ENABLED: 'true',
+  ARC_STRIPE_REVIEW_SECRET_KEY: ['rk', 'live', 'arcIntegrationCheckout0123456789abcdef'].join('_'),
+};
+assert.equal(paymentArc2WorkerConfiguration({
+  ...productionWorkerEnv,
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'false',
+}).enabled, false, 'A production worker can never run when reversal control is not required.');
+assert.equal(paymentArc2WorkerConfiguration({
+  ...productionWorkerEnv,
+  ARC_STRIPE_REVERSAL_CONTROL_REQUIRED: 'true',
+}).enabled, true, 'An otherwise valid production worker remains available with reversal control required.');
+assert.equal(paymentArc2WorkerConfiguration({
+  ...env,
+  ARC_RUNTIME_ENVIRONMENT: 'unknown',
+}).enabled, false, 'An unknown runtime environment must fail closed.');
+assert.equal(paymentArc2WorkerConfiguration({
+  ...env,
   ARC_PAYMENT_ARC2_WORKER_SECRET: env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
 }).enabled, false, 'The worker bearer secret must remain independent of durable identity HMACs.');
+assert.equal(paymentArc2WorkerConfiguration({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_PAYMENT_ARC2_WORKER_SECRET,
+}).enabled, false, 'A misleadingly named rotated alias cannot reuse the worker credential.');
 
 const savedEnvironment = { ...process.env };
 try {
@@ -755,6 +818,94 @@ try {
     env.ARC_STRIPE_REVERSAL_BINDING_SECRET,
     `${STRIPE_REVERSAL_BINDING_PREFIX}${reversalBindingEvidence}`,
   ), env, { store: ledger, clock: () => new Date(settlementNow) });
+
+  // A reversal that races after the handoff is prepared is terminal, not a
+  // perpetually claimed/retried queue item. Exercise the real worker path on
+  // an isolated copy so the clean-recheck happy path below remains intact.
+  const haltedLedger = cloneStore(ledger);
+  const haltedBridge = cloneStore(bridge);
+  const haltedReview = cloneStore(review);
+  const haltedVault = cloneStore(vault);
+  const paymentIntentHmac = hmac(env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
+    `payment-intent-v1\n${paymentIntentId}`);
+  await haltedLedger.setJSON(stripeReversalKeys.pendingPaymentKeyFromHmac(paymentIntentHmac), {
+    schema: STRIPE_PENDING_PAYMENT_SCHEMA,
+    payment_intent_id_hmac_sha256: paymentIntentHmac,
+    stripe_account_id_sha256: env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256,
+    livemode: false,
+    delivery_halted: true,
+  }, { onlyIfNew: true });
+  let haltedProviderReads = 0;
+  const haltedContext = {
+    ...workerContext,
+    arc2Store: haltedLedger,
+    emailRecipientVaultStore: haltedVault,
+    paymentArc2BridgeStore: haltedBridge,
+    paymentArc2ProviderAuthority: async () => {
+      haltedProviderReads += 1;
+      return {
+        account: { id: accountId, object: 'account' },
+        session: structuredClone(providerSession),
+      };
+    },
+    reviewStore: haltedReview,
+  };
+  const haltedResponse = await paymentArc2WorkerHandler(
+    workerRequest('/internal/payment-arc2/start', startBody), haltedContext,
+  );
+  assert.equal(haltedResponse.status, 409, await haltedResponse.clone().text());
+  const haltedBody = await haltedResponse.json();
+  assert.equal(haltedBody.error, 'payment_arc2_authority_halted');
+  assert.equal(haltedBody.state, 'REVIEW_REQUIRED');
+  assert.equal(haltedBody.manual_review_required, true);
+  assert.equal(haltedBody.retry_required, false);
+  const haltedOutbox = haltedBridge.values.get(claimed.outbox_key).data;
+  assert.equal(haltedOutbox.status, 'REVIEW_REQUIRED');
+  assert.equal(haltedOutbox.manual_review_code, 'ARC_STRIPE_REVERSAL_HALT');
+  assert.match(haltedOutbox.manual_review_evidence_sha256, /^[a-f0-9]{64}$/);
+  assert.equal([...haltedBridge.values.keys()].some(key => key.startsWith('payment-arc2-pending/')), false);
+  assert.equal([...haltedBridge.values.keys()].some(key => key.startsWith('payment-arc2-manual-review/')), true);
+  // Simulate process death after the REVIEW_REQUIRED CAS but before its
+  // manual-review index write. A Checkout webhook replay must reconstruct the
+  // terminal index before deleting the stale pending entry.
+  const haltedSuffix = claimed.outbox_key.slice('payment-arc2-start-outbox/'.length);
+  for (const key of [...haltedBridge.values.keys()]) {
+    if (key.startsWith('payment-arc2-manual-review/')) await haltedBridge.delete(key);
+  }
+  await haltedBridge.setJSON(`payment-arc2-pending/${haltedSuffix}`, {
+    schema: PAYMENT_ARC2_PENDING_INDEX_SCHEMA,
+    outbox_key: claimed.outbox_key,
+    immutable_binding_sha256: haltedOutbox.immutable_sha256,
+    created_at: haltedOutbox.created_at,
+  }, { onlyIfNew: true });
+  const haltedWebhookReplay = await stripeWebhookHandler(webhookRequest(), {
+    ...webhookContext,
+    arc2Store: haltedLedger,
+    paymentArc2BridgeStore: haltedBridge,
+    reviewStore: haltedReview,
+  });
+  assert.equal(haltedWebhookReplay.status, 200, await haltedWebhookReplay.clone().text());
+  assert.equal([...haltedBridge.values.keys()].some(key => key.startsWith('payment-arc2-pending/')), false);
+  assert.equal([...haltedBridge.values.keys()].some(key => key.startsWith('payment-arc2-manual-review/')), true,
+    'Webhook replay must recover terminal manual-review discoverability before pending cleanup.');
+  const attemptsAtHalt = haltedOutbox.claim_attempt_count;
+  const providerReadsAtHalt = haltedProviderReads;
+  const haltedReplay = await paymentArc2WorkerHandler(
+    workerRequest('/internal/payment-arc2/start', startBody), haltedContext,
+  );
+  assert.equal(haltedReplay.status, 409, await haltedReplay.clone().text());
+  const haltedReplayBody = await haltedReplay.json();
+  assert.equal(haltedReplayBody.error, 'payment_arc2_authority_halted');
+  assert.equal(haltedReplayBody.state, 'REVIEW_REQUIRED');
+  assert.equal(haltedReplayBody.manual_review_required, true);
+  assert.equal(haltedReplayBody.retry_required, false);
+  assert.equal(haltedReplayBody.manual_review_evidence_sha256,
+    haltedBody.manual_review_evidence_sha256);
+  assert.equal(haltedBridge.values.get(claimed.outbox_key).data.claim_attempt_count, attemptsAtHalt,
+    'A permanent reversal halt must never increment retries or reopen the claimed outbox.');
+  assert.equal(haltedProviderReads, providerReadsAtHalt,
+    'A terminal replay must return before any Stripe provider read.');
+
   const reversalRecheckValue = {
     version: STRIPE_REVERSAL_RECHECK_SCHEMA,
     scope: STRIPE_REVERSAL_RECHECK_SCOPE,

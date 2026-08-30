@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 import { TRANSACTIONAL_EMAIL_KINDS } from './transactional-email-template-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const EMAIL_SEND_ATTEMPT_STORE = 'arc-transactional-email-attempts';
 export const EMAIL_SEND_ATTEMPT_SCHEMA = 'arc-transactional-email-attempt-v1';
@@ -329,7 +330,12 @@ function buildRetentionTombstone(key, source, recordKind, attemptHmac, resolved,
 
 export function emailSendAttemptConfiguration(env = process.env) {
   if (env[EMAIL_SEND_ATTEMPT_ENABLED_ENV] !== 'true') return Object.freeze({ enabled: false });
-  try { return Object.freeze({ enabled: true, hmacSecret: secret(env[EMAIL_SEND_ATTEMPT_HMAC_SECRET_ENV]) }); }
+  try {
+    if (!sensitiveCredentialsAreIsolated(env, [EMAIL_SEND_ATTEMPT_HMAC_SECRET_ENV])) {
+      throw new TypeError('Email attempt credential must be isolated.');
+    }
+    return Object.freeze({ enabled: true, hmacSecret: secret(env[EMAIL_SEND_ATTEMPT_HMAC_SECRET_ENV]) });
+  }
   catch { return Object.freeze({ enabled: false }); }
 }
 

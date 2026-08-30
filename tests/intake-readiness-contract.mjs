@@ -485,6 +485,10 @@ try {
   process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = process.env.ARC_INTAKE_ARC1_ACK_SECRET;
   assert.equal(intakeIdempotencyConfigured(process.env), false, 'The intake idempotency secret must be distinct.');
   process.env[INTAKE_IDEMPOTENCY_SECRET_ENV] = savedIdempotencySecret;
+  process.env.ARC_INTAKE_IDEMPOTENCY_SECRET_V2 = savedIdempotencySecret;
+  assert.equal(intakeIdempotencyConfigured(process.env), false,
+    'A renamed intake idempotency credential copy must fail closed.');
+  delete process.env.ARC_INTAKE_IDEMPOTENCY_SECRET_V2;
 
   for (const invalidProof of [
     '',

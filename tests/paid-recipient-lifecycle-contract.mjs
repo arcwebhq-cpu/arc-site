@@ -100,7 +100,7 @@ const env = {
   ARC_RESEND_WEBHOOK_ENABLED: 'true',
   ARC_RESEND_API_KEY: 're_0123456789abcdefghijklmnopqrstuvwxyz',
   ARC_RESEND_WEBHOOK_SECRET: `whsec_${webhookKey.toString('base64')}`,
-  ARC_RESEND_FROM: 'ARC Web <previews@arcweb.onl>',
+  ARC_RESEND_FROM: 'ARC <preview@send.arcweb.onl>',
   ARC_RESEND_PROVIDER_ACCOUNT_ID: 'resend-account-arc-lifecycle',
   ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET: 'lifecycle-resend-binding-secret-0123456789abcd',
   ARC_STRIPE_REVIEW_REVOCATION_ENABLED: 'false',

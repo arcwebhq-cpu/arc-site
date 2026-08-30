@@ -52,7 +52,7 @@ const env = {
   ARC_RESEND_WEBHOOK_ENABLED: 'true',
   ARC_RESEND_API_KEY: 're_worker_test_key_0123456789abcdef',
   ARC_RESEND_WEBHOOK_SECRET: `whsec_${Buffer.alloc(32, 19).toString('base64')}`,
-  ARC_RESEND_FROM: 'ARC Web <preview@arcweb.onl>',
+  ARC_RESEND_FROM: 'ARC <preview@send.arcweb.onl>',
   ARC_RESEND_PROVIDER_ACCOUNT_ID: 'resend-account-arc-production',
   ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET: 'worker-provider-binding-secret-0123456789',
   ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED: 'true',
@@ -110,7 +110,18 @@ function job(kind, suffix) {
     : {
       ...base,
       production_url: 'https://customer-site.netlify.app/',
-      final_authority: null,
+      final_authority: {
+        handoff_id: handoffId,
+        job_key: jobKey,
+        recipient_email_sha256: sha256(recipient),
+        production_url: 'https://customer-site.netlify.app/',
+        production_url_sha256: sha256('https://customer-site.netlify.app/'),
+        netlify_site_id_sha256: '1'.repeat(64),
+        netlify_deploy_id_sha256: '2'.repeat(64),
+        final_deploy_ready_at: new Date(now.getTime() - 60_000).toISOString(),
+        authorized_at: now.toISOString(),
+        claim_state_evidence_sha256: '3'.repeat(64),
+      },
     };
 }
 
@@ -131,8 +142,18 @@ function workerAdapters(preparedJob, providerId, controls = {}) {
         ? { found: false }
         : { found: true, kind: preparedJob.kind, handoff_id: preparedJob.handoff_id,
           job_key: preparedJob.job_key },
-    prepareClaimInvitationEmailJob: async () => preparedJob,
-    prepareFinalDeliveryEmailJob: async () => preparedJob,
+    prepareClaimInvitationEmailJob: async () => {
+      controls.prepare_count = (controls.prepare_count || 0) + 1;
+      if (controls.prepare_error && controls.prepare_count === 2) throw controls.prepare_error;
+      return controls.refreshed_job && controls.prepare_count === 2
+        ? controls.refreshed_job : preparedJob;
+    },
+    prepareFinalDeliveryEmailJob: async () => {
+      controls.prepare_count = (controls.prepare_count || 0) + 1;
+      if (controls.prepare_error && controls.prepare_count === 2) throw controls.prepare_error;
+      return controls.refreshed_job && controls.prepare_count === 2
+        ? controls.refreshed_job : preparedJob;
+    },
     sendResendTransactionalEmail: async (_message, _key, _env, _adapters) => {
       controls.send_count = (controls.send_count || 0) + 1;
       assert.ok([...controls.vault.values.keys()].some((key) => key.startsWith('capsules/')),
@@ -153,6 +174,8 @@ assert.deepEqual(await runArc2TransactionalEmailWorkerCycle('claim_invitation', 
   state: 'PROVIDER_ACCEPTED', processed: 1, channel: 'claim_invitation', idempotent_replay: false,
 });
 assert.equal(claimControls.send_count, 1);
+assert.equal(claimControls.prepare_count, 2,
+  'Claim invitation must refresh its authority immediately before the provider request.');
 const claimAttempt = await readEmailSendAttempt(claimStores.attempt, {
   job_kind: 'claim_invitation', job_key: claimJob.job_key,
 }, env);
@@ -165,6 +188,21 @@ assert.doesNotMatch(JSON.stringify([...claimStores.attempt.values.values()]), /c
 assert.equal((await runArc2TransactionalEmailWorkerCycle('claim_invitation', env,
   claimStores, claimAdapters)).state, 'WAITING_WEBHOOK');
 assert.equal(claimControls.send_count, 1, 'Provider-accepted claim work must not resend or starve a scan forever.');
+
+const haltedClaimJob = job('claim_invitation', 'e');
+const haltedClaimStores = { ledger: new FakeStore(), review: new FakeStore(),
+  attempt: new FakeStore(), vault: new FakeStore() };
+const haltedClaimControls = {
+  vault: haltedClaimStores.vault,
+  send_count: 0,
+  prepare_error: new Error('ARC_PAYMENT_ARC2_REVIEW_REQUIRED'),
+};
+await assert.rejects(runArc2TransactionalEmailWorkerCycle('claim_invitation', env, haltedClaimStores,
+  workerAdapters(haltedClaimJob, '66666666-7777-4888-8999-000000000000', haltedClaimControls)),
+/ARC_PAYMENT_ARC2_REVIEW_REQUIRED/,
+'A review revocation recorded after initial preparation must stop the claim Resend POST.');
+assert.equal(haltedClaimControls.prepare_count, 2);
+assert.equal(haltedClaimControls.send_count, 0);
 
 const crashJob = job('claim_invitation', 'b');
 const crashStores = { ledger: new FakeStore(), review: new FakeStore(),
@@ -195,6 +233,8 @@ const finalStores = { ledger: new FakeStore(), review: new FakeStore(),
 const finalControls = { vault: finalStores.vault, send_count: 0 };
 const finalAdapters = workerAdapters(finalJob, '33333333-4444-4555-8666-777777777777', finalControls);
 await runArc2TransactionalEmailWorkerCycle('final_delivery', env, finalStores, finalAdapters);
+assert.equal(finalControls.prepare_count, 2,
+  'Final delivery must refresh its authority immediately before the provider request.');
 const finalAttempt = await readEmailSendAttempt(finalStores.attempt, {
   job_kind: 'final_delivery', job_key: finalJob.job_key,
 }, env);
@@ -210,6 +250,59 @@ const finalAuthority = {
   authorized_at: now.toISOString(),
   claim_state_evidence_sha256: '3'.repeat(64),
 };
+
+const haltedFinalJob = job('final_delivery', 'd');
+const haltedFinalStores = { ledger: new FakeStore(), review: new FakeStore(),
+  attempt: new FakeStore(), vault: new FakeStore() };
+const haltedFinalControls = {
+  vault: haltedFinalStores.vault,
+  send_count: 0,
+  prepare_error: new Error('ARC_STRIPE_REVERSAL_HALT'),
+};
+await assert.rejects(runArc2TransactionalEmailWorkerCycle('final_delivery', env, haltedFinalStores,
+  workerAdapters(haltedFinalJob, '44444444-5555-4666-8777-888888888888', haltedFinalControls)),
+/ARC_STRIPE_REVERSAL_HALT/,
+'A reversal recorded after initial preparation must stop the final Resend POST.');
+assert.equal(haltedFinalControls.prepare_count, 2);
+assert.equal(haltedFinalControls.send_count, 0);
+
+const changedFinalJob = job('final_delivery', '9');
+const changedFinalStores = { ledger: new FakeStore(), review: new FakeStore(),
+  attempt: new FakeStore(), vault: new FakeStore() };
+const changedFinalControls = {
+  vault: changedFinalStores.vault,
+  send_count: 0,
+  refreshed_job: {
+    ...changedFinalJob,
+    production_url: 'https://changed-customer-site.netlify.app/',
+  },
+};
+await assert.rejects(runArc2TransactionalEmailWorkerCycle('final_delivery', env, changedFinalStores,
+  workerAdapters(changedFinalJob, '77777777-8888-4999-8000-111111111111', changedFinalControls)),
+/ARC2_EMAIL_SEND_AUTHORITY_CHANGED/,
+'A changed delivery URL or rendered message after reservation must stop the provider POST.');
+assert.equal(changedFinalControls.send_count, 0);
+
+const staleFinalJob = job('final_delivery', 'f');
+const staleFinalStores = { ledger: new FakeStore(), review: new FakeStore(),
+  attempt: new FakeStore(), vault: new FakeStore() };
+let staleClock = new Date(now);
+const staleFinalControls = { vault: staleFinalStores.vault, send_count: 0 };
+const staleFinalAdapters = workerAdapters(
+  staleFinalJob, '55555555-6666-4777-8888-999999999999', staleFinalControls,
+);
+staleFinalAdapters.clock = () => staleClock;
+staleFinalAdapters.prepareFinalDeliveryEmailJob = async () => {
+  staleFinalControls.prepare_count = (staleFinalControls.prepare_count || 0) + 1;
+  if (staleFinalControls.prepare_count === 2) {
+    staleClock = new Date(now.getTime() + 60_001);
+  }
+  return staleFinalJob;
+};
+await assert.rejects(runArc2TransactionalEmailWorkerCycle('final_delivery', env, staleFinalStores,
+  staleFinalAdapters), /ARC2_FINAL_DELIVERY_EMAIL_AUTHORITY_STALE/,
+'A frozen cycle clock cannot extend final-delivery authority past one minute.');
+assert.equal(staleFinalControls.send_count, 0);
 let finalPrepareCount = 0;
 let finalAckCount = 0;
 let firstEvidence = null;

@@ -243,6 +243,20 @@ assert.equal(reviewActivationRuntimeReadbackConfiguration({
   ...env,
   NETLIFY_ACCESS_TOKEN: 'duplicate-netlify-credential-0123456789abcdef',
 }, now, { deploymentSha }).enabled, false, 'Ambiguous Netlify handoff credentials must fail closed.');
+for (const credentialName of [
+  'NETLIFY_ADMIN_PAT',
+  'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+]) {
+  const aliased = {
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  };
+  assert.equal(reviewActivationRuntimeAuthorityBinding(aliased, { deploymentSha }), null,
+    `${credentialName} must reject an arbitrary configured alias before raw authority access.`);
+  assert.equal(reviewActivationRuntimeReadbackConfiguration(
+    aliased, now, { deploymentSha },
+  ).enabled, false, `${credentialName} aliasing must disable runtime readback.`);
+}
 
 const productionPreflight = createReviewActivationRuntimeReadbackPreflightReport({
   ...env,

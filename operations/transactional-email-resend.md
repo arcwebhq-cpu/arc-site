@@ -30,7 +30,8 @@ Production-only Function secrets/configuration, never Git values:
   unpadded base64url.
 - `ARC_RESEND_API_KEY`: a least-privilege `re_...` key.
 - `ARC_RESEND_WEBHOOK_SECRET`: the endpoint's `whsec_...` signing secret.
-- `ARC_RESEND_FROM`: one mailbox on the verified ARC sending subdomain.
+- `ARC_RESEND_FROM`: `ARC <preview@send.arcweb.onl>` on the verified ARC sending
+  subdomain.
 - `ARC_RESEND_PROVIDER_ACCOUNT_ID`: the stable Resend account identity bound to
   native delivery receipts.
 - `ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET`: a distinct 32–256 byte secret used
@@ -42,6 +43,10 @@ The one-minute `transactional-email-worker` schedule remains inert unless every
 worker, ledger, vault, intake, Resend-send, and signed-webhook gate is valid.
 `POST /api/webhooks/resend` verifies the exact raw bytes with `svix-id`,
 `svix-timestamp`, and `svix-signature` before any Blob access.
+The provider subscription contains all seven recognized events: sent,
+delivery-delayed, delivered, bounced, complained, failed, and suppressed. Only
+delivered plus the four negative/suppression classes are activation-critical;
+sent and delivery-delayed never unlock delivery.
 
 ## Stage gate
 

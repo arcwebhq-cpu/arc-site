@@ -10,6 +10,8 @@ import {
   validateActivationManifestEnvironment,
 } from './activation-manifest-core.mjs';
 import { imageTypeForPath, validateImageAsset } from './image-asset-validation.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
+import { ARC_STRIPE_API_VERSION } from './stripe-api-version.mjs';
 
 export const HANDOFF_STORE = 'arc2-handoffs';
 export const LEGACY_HANDOFF_SCHEMA = 'arc2-netlify-handoff-v1';
@@ -42,7 +44,7 @@ export const CLAIM_TOKEN_TTL_SECONDS = 30 * 60;
 export const CLAIM_JWT_TTL_SECONDS = 60;
 export const MAX_DEPLOY_POLL_ATTEMPTS = 20;
 export const NETLIFY_REQUEST_TIMEOUT_MS = 10_000;
-export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = '2026-07-29.dahlia';
+export const REQUIRED_STRIPE_WEBHOOK_API_VERSION = ARC_STRIPE_API_VERSION;
 
 export const HANDOFF_STATES = Object.freeze([
   'PAYMENT_VERIFIED',
@@ -368,7 +370,13 @@ export function configuredEnvironment(env = process.env, now = new Date()) {
   const missing = required.filter((name) => !String(env[name] || '').trim());
   const secretNames = required.filter((name) => /SECRET|TOKEN|PAT/.test(name) || name === 'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY');
   const shortSecrets = secretNames.filter((name) => String(env[name] || '').length < 32 || String(env[name] || '').length > 512);
-  const duplicateSecrets = new Set(secretNames.map((name) => String(env[name] || '')).filter(Boolean)).size !== secretNames.filter((name) => env[name]).length;
+  // NETLIFY_ACCESS_TOKEN is the one explicitly supported spelling alias. The
+  // resolver has already rejected conflicting values, so omit that duplicate
+  // spelling while still comparing the normalized PAT against every unrelated
+  // configured string (including misleading rotated aliases).
+  const isolationEnvironment = { ...env };
+  delete isolationEnvironment.NETLIFY_ACCESS_TOKEN;
+  const duplicateSecrets = !sensitiveCredentialsAreIsolated(isolationEnvironment, secretNames);
   const operationalAttestations = [
     'ARC_RETENTION_CONTROL_VERIFIED',
     'ARC_POSTCLAIM_READBACK_VERIFIED',
@@ -723,6 +731,10 @@ export function deployArtifactsForPhase(artifacts, phase) {
 
 export function normalizePaymentEvidence(raw, signature, secret, artifactEvidence, env, options = {}) {
   env = requireResolvedHandoffEnvironment(env);
+  if (typeof secret !== 'string' || !safeEqual(secret, env.ARC_CHECKOUT_BINDING_SECRET) ||
+      !sensitiveCredentialsAreIsolated(env, ['ARC_CHECKOUT_BINDING_SECRET'])) {
+    throw new TypeError('Checkout binding credential is invalid or not isolated.');
+  }
   const canonical = stringValue(raw, 'Payment evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Payment evidence');
   const legacyPaymentVersion = value.version === LEGACY_PAYMENT_EVIDENCE_VERSION;
@@ -823,7 +835,7 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
     adult: snapshot.adult_acknowledgement_key === 'adultpurchaserack',
     names: snapshot.name_collection_required === true, limit: snapshot.completed_sessions_limit === 1,
     redirect: snapshot.checkout_redirect_url === 'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
-    api: snapshot.stripe_api_version === (legacyV3 ? '2026-06-24.dahlia' : '2026-07-29.dahlia'),
+    api: snapshot.stripe_api_version === (legacyV3 ? '2026-06-24.dahlia' : ARC_STRIPE_API_VERSION),
     receipt: HEX_64_PATTERN.test(snapshot.asset_publication_receipt_sha256),
     lead_recipient: /^(?:|[a-f0-9]{64})$/.test(snapshot.lead_route_recipient_hmac_sha256),
     claim_recipient: HEX_64_PATTERN.test(snapshot.claim_recipient_email_sha256),
@@ -931,6 +943,16 @@ export function normalizePaymentEvidence(raw, signature, secret, artifactEvidenc
 
 export function normalizeReviewPaymentEvidence(raw, signature, secret, artifactEvidence, env) {
   env = requireResolvedHandoffEnvironment(env);
+  const credentialNames = [
+    'ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET',
+    'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+    'ARC_CHECKOUT_BINDING_SECRET',
+  ];
+  if (typeof secret !== 'string' ||
+      !safeEqual(secret, env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET) ||
+      !sensitiveCredentialsAreIsolated(env, credentialNames)) {
+    throw new TypeError('Review payment credential is invalid or not isolated.');
+  }
   const canonical = stringValue(raw, 'Review payment evidence', 2, 100_000);
   const value = plainObject(JSON.parse(canonical), 'Review payment evidence');
   exactKeys(value, REVIEW_PAYMENT_FIELDS, 'Review payment evidence');
