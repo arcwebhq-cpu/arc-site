@@ -20,7 +20,7 @@
   "dependencies": {
     "@netlify/blobs": "10.7.12",
     "sharp": "0.35.3",
-    "stripe": "22.4.0"
+    "stripe": "22.6.0"
   },
   "overrides": {
     "image-size": "file:vendor/image-size-disabled"
