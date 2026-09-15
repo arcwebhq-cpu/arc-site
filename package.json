@@ -26,7 +26,7 @@
     "image-size": "file:vendor/image-size-disabled"
   },
   "devDependencies": {
-    "@sparticuz/chromium": "149.0.0",
+    "@sparticuz/chromium": "153.0.0",
     "playwright": "1.62.1"
   }
 }
