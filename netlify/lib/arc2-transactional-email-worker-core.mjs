@@ -29,6 +29,7 @@ import {
   resendProviderConfiguration,
   sendResendTransactionalEmail,
 } from './resend-transactional-provider-core.mjs';
+import { STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS } from './stripe-reversal-core.mjs';
 import { renderTransactionalEmail } from './transactional-email-template-core.mjs';
 
 export const ARC2_EMAIL_ATTEMPT_CONTEXT_SCHEMA = 'arc2-email-attempt-context-v1';
@@ -293,6 +294,35 @@ function enabledForKind(configuration, kind) {
     : configuration.final_delivery_enabled;
 }
 
+function validateRefreshedSendAuthority(original, refreshed, message, sendNow) {
+  if (!refreshed || refreshed.kind !== original.kind || refreshed.handoff_id !== original.handoff_id ||
+      refreshed.job_key !== original.job_key || refreshed.recipient_email !== original.recipient_email ||
+      refreshed.recipient_email_sha256 !== original.recipient_email_sha256 ||
+      refreshed.source_invite_hmac_sha256 !== original.source_invite_hmac_sha256 ||
+      canonicalJson(outboundMessage(refreshed)) !== canonicalJson(message)) {
+    throw new Error('ARC2_EMAIL_SEND_AUTHORITY_CHANGED');
+  }
+  if (original.kind !== 'final_delivery') return;
+  const authority = refreshed.final_authority;
+  const originalAuthority = original.final_authority;
+  const immutableAuthorityFields = [
+    'final_deploy_ready_at', 'handoff_id', 'job_key', 'netlify_deploy_id_sha256',
+    'netlify_site_id_sha256', 'production_url', 'production_url_sha256',
+    'recipient_email_sha256',
+  ];
+  if (!authority || !originalAuthority || immutableAuthorityFields.some((field) =>
+    authority[field] !== originalAuthority[field]) || !HEX_64.test(String(authority.claim_state_evidence_sha256 || ''))) {
+    throw new Error('ARC2_FINAL_DELIVERY_EMAIL_AUTHORITY_CHANGED');
+  }
+  const readyAt = Date.parse(authority.final_deploy_ready_at);
+  const authorizedAt = Date.parse(authority.authorized_at);
+  const sendAt = sendNow.getTime();
+  if (!Number.isFinite(readyAt) || !Number.isFinite(authorizedAt) || authorizedAt < readyAt ||
+      authorizedAt > sendAt || authorizedAt < sendAt - STRIPE_REVERSAL_SEND_AUTHORITY_MAX_AGE_MS) {
+    throw new Error('ARC2_FINAL_DELIVERY_EMAIL_AUTHORITY_STALE');
+  }
+}
+
 export async function runArc2TransactionalEmailWorkerCycle(kind, env, stores, adapters = {}) {
   validKind(kind);
   const configuration = arc2TransactionalEmailWorkerConfiguration(env);
@@ -366,10 +396,17 @@ export async function runArc2TransactionalEmailWorkerCycle(kind, env, stores, ad
       // The encrypted attempt context is strongly read back above. Therefore a
       // webhook can always bind the provider message to this exact handoff,
       // even if the invocation fails immediately after the network request.
+      // Refresh the complete authority after reservation/context writes so a
+      // concurrent reversal, review revocation, or negative email state stops
+      // before the provider POST. The live clock also prevents storage latency
+      // from extending final-delivery authority beyond its one-minute window.
+      const refreshedJob = await prepare(kind, stores, candidate, env, adapters);
+      const sendNow = validClock(adapters);
+      validateRefreshedSendAuthority(job, refreshedJob, message, sendNow);
       accepted = await (adapters.sendResendTransactionalEmail || sendResendTransactionalEmail)(
-        message, idempotencyKey, env, { fetch: adapters.fetch, clock: () => now });
+        message, idempotencyKey, env, { fetch: adapters.fetch, clock: adapters.clock });
       await persistAcceptance(stores.vault, context, accepted, env, {
-        clock: () => now,
+        clock: adapters.clock,
         randomBytes: adapters.randomBytes,
       });
     }

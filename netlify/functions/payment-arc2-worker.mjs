@@ -23,6 +23,7 @@ import {
   claimPaymentArc2StartOutbox,
   completePaymentArc2StartOutbox,
   createPaymentArc2ReviewEvidence,
+  markPaymentArc2StartOutboxManualReview,
   paymentArc2BridgeConfiguration,
   releasePaymentArc2StartOutbox,
 } from '../lib/payment-arc2-bridge-core.mjs';
@@ -30,6 +31,11 @@ import { REVIEW_STORE } from '../lib/review-flow-core.mjs';
 import { retrieveStripeReviewCheckoutAuthority } from '../lib/stripe-review-checkout-adapter.mjs';
 import { assertClaimMutationActivationAuthority } from '../lib/claim-sandbox-bootstrap-core.mjs';
 import { createRetentionFencedRouteHandler } from '../lib/retention-fenced-route-core.mjs';
+import { sensitiveCredentialsAreIsolated } from '../lib/sensitive-credential-isolation.mjs';
+import {
+  StripeReversalHaltError,
+  stripeReversalSandboxExemption,
+} from '../lib/stripe-reversal-core.mjs';
 
 const CLAIM_PATH = '/internal/payment-arc2/claim';
 const COMPLETE_PATH = '/internal/payment-arc2/complete';
@@ -48,19 +54,37 @@ function validSecret(value) {
 export function paymentArc2WorkerConfiguration(env = process.env) {
   const flagValid = exactBoolean(env.ARC_PAYMENT_ARC2_WORKER_ENABLED);
   const workerSecretValid = validSecret(env.ARC_PAYMENT_ARC2_WORKER_SECRET);
-  const secretReused = workerSecretValid && Object.entries(env).some(([name, value]) =>
-    name !== 'ARC_PAYMENT_ARC2_WORKER_SECRET' && /(?:SECRET|TOKEN|PAT|KEY)$/.test(name) &&
-      typeof value === 'string' && value.length > 0 && value === env.ARC_PAYMENT_ARC2_WORKER_SECRET);
+  const secretReused = workerSecretValid && !sensitiveCredentialsAreIsolated(
+    env,
+    ['ARC_PAYMENT_ARC2_WORKER_SECRET'],
+  );
   const reversalFlagValid = exactBoolean(env.ARC_STRIPE_REVERSAL_CONTROL_REQUIRED);
   const reversalControlRequired = env.ARC_STRIPE_REVERSAL_CONTROL_REQUIRED === 'true';
+  const sandboxMode = env.ARC_RUNTIME_ENVIRONMENT === 'sandbox' &&
+    env.ARC_STRIPE_LIVE_MODE_ENABLED === 'false' &&
+    env.ARC_ALLOW_TEST_MODE_EVENTS === 'true' &&
+    env.ARC_HANDOFF_ENABLED === 'false';
+  const productionMode = env.ARC_RUNTIME_ENVIRONMENT === 'production' &&
+    env.ARC_STRIPE_LIVE_MODE_ENABLED === 'true' &&
+    env.ARC_ALLOW_TEST_MODE_EVENTS === 'false' &&
+    env.ARC_HANDOFF_ENABLED === 'true';
+  const runtimeEnvironmentValid = sandboxMode || productionMode;
+  const sandboxReversalExemption = stripeReversalSandboxExemption(env);
+  const reversalPolicyValid = reversalFlagValid && runtimeEnvironmentValid &&
+    (reversalControlRequired || sandboxReversalExemption);
   const bridgeEnabled = paymentArc2BridgeConfiguration(env).enabled;
   return Object.freeze({
     bridgeEnabled,
     enabled: bridgeEnabled && flagValid && env.ARC_PAYMENT_ARC2_WORKER_ENABLED === 'true' &&
-      workerSecretValid && !secretReused && reversalFlagValid,
+      workerSecretValid && !secretReused && reversalPolicyValid,
     flagValid,
+    productionMode,
     reversalControlRequired,
     reversalFlagValid,
+    reversalPolicyValid,
+    runtimeEnvironmentValid,
+    sandboxMode,
+    sandboxReversalExemption,
     secretReused,
     workerSecretValid,
   });
@@ -153,6 +177,13 @@ const handler = async (request, context = {}) => {
           adapters,
         );
       if (result === null) return jsonResponse(200, { accepted: true, state: 'EMPTY' });
+      if (result.state === 'REVIEW_REQUIRED') {
+        return jsonResponse(409, {
+          accepted: false,
+          error: 'payment_arc2_authority_halted',
+          ...result,
+        });
+      }
       return jsonResponse(200, { accepted: true, ...result });
     }
     if (path === START_PATH) {
@@ -169,6 +200,13 @@ const handler = async (request, context = {}) => {
         }
         const { payload: ignored, ...publicClaimed } = claimed;
         return jsonResponse(200, { accepted: true, ...publicClaimed });
+      }
+      if (claimed.state === 'REVIEW_REQUIRED') {
+        return jsonResponse(409, {
+          accepted: false,
+          error: 'payment_arc2_authority_halted',
+          ...claimed,
+        });
       }
       if (claimed.state !== 'CLAIMED') throw new Error('ARC_PAYMENT_ARC2_CLAIM_REQUIRED');
       if (typeof body.artifact_evidence !== 'string') throw new TypeError('Artifact evidence is invalid.');
@@ -211,23 +249,41 @@ const handler = async (request, context = {}) => {
           recipient_email_sha256: claimed.payload.recipient_email_sha256,
         }, process.env, { clock: context.clock })
         : null;
-      const started = await startReviewHandoff({
-        artifact_evidence: body.artifact_evidence,
-        artifact_evidence_hmac_sha256: body.artifact_evidence_hmac_sha256,
-        deploy_artifacts: body.deploy_artifacts,
-        lead_notification_email: body.lead_notification_email,
-        lead_route_recipient_hmac_sha256: body.lead_route_recipient_hmac_sha256,
-        payment_evidence: evidence.canonical,
-        payment_evidence_hmac_sha256: evidence.signature,
-      }, process.env, {
-        store: stores.ledger,
-        reviewStore: stores.review,
-        clock: context.clock,
-        activationClock: context.activationClock,
-        fetch: context.netlifyFetch,
-        stripeAccountFetch: context.stripeAccountFetch,
-        uuid: context.uuid,
-      });
+      let started;
+      try {
+        started = await startReviewHandoff({
+          artifact_evidence: body.artifact_evidence,
+          artifact_evidence_hmac_sha256: body.artifact_evidence_hmac_sha256,
+          deploy_artifacts: body.deploy_artifacts,
+          lead_notification_email: body.lead_notification_email,
+          lead_route_recipient_hmac_sha256: body.lead_route_recipient_hmac_sha256,
+          payment_evidence: evidence.canonical,
+          payment_evidence_hmac_sha256: evidence.signature,
+        }, process.env, {
+          store: stores.ledger,
+          reviewStore: stores.review,
+          clock: context.clock,
+          activationClock: context.activationClock,
+          fetch: context.netlifyFetch,
+          stripeAccountFetch: context.stripeAccountFetch,
+          uuid: context.uuid,
+        });
+      } catch (error) {
+        if (!(error instanceof StripeReversalHaltError)) throw error;
+        const halted = await markPaymentArc2StartOutboxManualReview(
+          stores,
+          body.outbox_key,
+          body.claim_token,
+          error.handoffId,
+          process.env,
+          adapters,
+        );
+        return jsonResponse(409, {
+          accepted: false,
+          error: 'payment_arc2_authority_halted',
+          ...halted,
+        });
+      }
       if (started.startReceipt.value.continuation_ready !== true) {
         const released = await releasePaymentArc2StartOutbox(
           stores,
@@ -289,6 +345,13 @@ const handler = async (request, context = {}) => {
       process.env,
       adapters,
     );
+    if (result.state === 'REVIEW_REQUIRED') {
+      return jsonResponse(409, {
+        accepted: false,
+        error: 'payment_arc2_authority_halted',
+        ...result,
+      });
+    }
     return jsonResponse(200, { accepted: true, ...result });
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) {
@@ -300,7 +363,7 @@ const handler = async (request, context = {}) => {
     if (/COMPLETION_MISMATCH|START_RECEIPT_(?:INVALID|MISMATCH)/.test(error?.message || '')) {
       return jsonResponse(400, { error: 'invalid_worker_request' });
     }
-    if (/REVIEW_REQUIRED|APPROVAL_|LEDGER_|PAYMENT_NOT_AUTHORIZED|AUTHORITY_CHANGED/.test(error?.message || '')) {
+    if (/REVIEW_REQUIRED|APPROVAL_|LEDGER_|PAYMENT_NOT_AUTHORIZED|AUTHORITY_CHANGED|MANUAL_REVIEW_REQUIRED/.test(error?.message || '')) {
       return jsonResponse(409, { error: 'payment_arc2_authority_halted' });
     }
     if (/LEASED|LEASE_EXPIRED|CLAIM_REQUIRED|CLAIM_MISMATCH|COMPLETION_CONFLICT|CONTENTION|CONFLICT/.test(

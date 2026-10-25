@@ -35,6 +35,7 @@ import {
   RETENTION_GENERATION_FENCE_SECRET_ENV,
   retentionGenerationFenceConfiguration,
 } from '../netlify/lib/retention-generation-fence-core.mjs';
+import { sensitiveCredentialsAreIsolated } from '../netlify/lib/sensitive-credential-isolation.mjs';
 
 export const LAUNCH_STATES = Object.freeze([
   'SAFE_OFF',
@@ -171,7 +172,6 @@ const HANDOFF_BOOLEAN_FLAG_NAMES = Object.freeze([
 const BOOLEAN_SUFFIX = /_(?:ENABLED|VERIFIED|REQUIRED)$/;
 const FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV =
   'ARC_FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER';
-const SENSITIVE_ENV_NAME = /(?:SECRET|KEY|BEARER|TOKEN|_PAT)$/;
 const exactBoolean = (value) => value === 'true' || value === 'false';
 const uniqueSorted = (names) => [...new Set(names)].sort();
 const isPresent = (env, name) => typeof env[name] === 'string' && env[name].length > 0;
@@ -180,16 +180,7 @@ function retentionFenceSecretIsDistinct(env) {
   const secret = env[RETENTION_GENERATION_FENCE_SECRET_ENV];
   if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32 ||
       Buffer.byteLength(secret, 'utf8') > 512) return false;
-  const inventoryNames = new Set(reviewActivationContract.secrets.map(({ name }) => name));
-  for (const group of reviewActivationContract.secret_alias_groups || []) {
-    inventoryNames.add(group.canonical);
-    for (const alias of group.aliases || []) inventoryNames.add(alias);
-  }
-  for (const name of Object.keys(env)) {
-    if (/(?:SECRET|KEY|BEARER|TOKEN|_PAT)$/.test(name)) inventoryNames.add(name);
-  }
-  inventoryNames.delete(RETENTION_GENERATION_FENCE_SECRET_ENV);
-  return [...inventoryNames].every((name) => !isPresent(env, name) || env[name] !== secret);
+  return sensitiveCredentialsAreIsolated(env, [RETENTION_GENERATION_FENCE_SECRET_ENV]);
 }
 
 function booleanFlagNames(env) {
@@ -284,10 +275,10 @@ export function createLaunchPreflightReport(env = process.env, options = {}) {
   const legalHoldBearerValid = typeof legalHoldBearer === 'string' &&
     Buffer.byteLength(legalHoldBearer, 'utf8') >= 32 &&
     Buffer.byteLength(legalHoldBearer, 'utf8') <= 512;
-  const legalHoldBearerDistinct = legalHoldBearerValid &&
-    !Object.entries(env).some(([name, value]) =>
-      name !== FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV && SENSITIVE_ENV_NAME.test(name) &&
-      typeof value === 'string' && value.length > 0 && value === legalHoldBearer);
+  const legalHoldBearerDistinct = legalHoldBearerValid && sensitiveCredentialsAreIsolated(
+    env,
+    [FIRST_PARTY_RETENTION_LEGAL_HOLD_BEARER_ENV],
+  );
   const firstPartyLegalHoldWriterReady = firstPartyRetention.enabled &&
     legalHoldBearerValid && legalHoldBearerDistinct;
   const retentionGenerationFence = retentionGenerationFenceConfiguration(env);

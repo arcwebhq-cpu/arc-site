@@ -13,6 +13,7 @@ import {
   resolveArc1BridgeEnvironment,
 } from './intake-arc1-bridge-core.mjs';
 import { createPrivateAssetGrants, retrievePrivateAsset } from './intake-private-asset-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_ARC1_ADAPTER_ENABLED_ENV = 'ARC_INTAKE_ARC1_ADAPTER_ENABLED';
 export const INTAKE_ARC1_DOWNSTREAM_ENABLED_ENV = 'ARC_INTAKE_ARC1_DOWNSTREAM_ENABLED';
@@ -268,14 +269,18 @@ export function resolveArc1AdapterEnvironment(env) {
   const consumerReceiptSecret = secret(env.ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET,
     'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET');
   const downstreamEndpoint = exactDownstreamEndpoint(env.ARC_INTAKE_ARC1_DOWNSTREAM_ENDPOINT);
-  const allSecrets = [
-    bridge.ARC_INTAKE_ARC1_RUN_SECRET, bridge.ARC_INTAKE_ARC1_DESTINATION_BEARER,
-    bridge.ARC_INTAKE_ARC1_EVIDENCE_SECRET, bridge.ARC_INTAKE_ARC1_ACK_SECRET,
-    bridge.ARC_INTAKE_ARC1_STATE_SECRET, bridge.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET,
-    bridge.ARC_INTAKE_ASSET_RETRIEVAL_SECRET, assetReceiptSecret, downstreamBearer, dispatchSecret,
-    packetSecret, consumerBearer, consumerReceiptSecret,
+  const credentialNames = [
+    'ARC_INTAKE_ARC1_RUN_SECRET', 'ARC_INTAKE_ARC1_DESTINATION_BEARER',
+    'ARC_INTAKE_ARC1_EVIDENCE_SECRET', 'ARC_INTAKE_ARC1_ACK_SECRET',
+    'ARC_INTAKE_ARC1_STATE_SECRET', 'ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET',
+    'ARC_INTAKE_ASSET_RETRIEVAL_SECRET', 'ARC1_ASSET_RECEIPT_SECRET',
+    'ARC_INTAKE_ARC1_DOWNSTREAM_BEARER', 'ARC_INTAKE_ARC1_DISPATCH_SECRET',
+    'ARC_INTAKE_ARC1_PACKET_SECRET', 'ARC_INTAKE_ARC1_CONSUMER_BEARER',
+    'ARC_INTAKE_ARC1_CONSUMER_RECEIPT_SECRET',
   ];
-  if (new Set(allSecrets).size !== allSecrets.length) throw new TypeError('ARC1 adapter secrets must be distinct.');
+  if (!sensitiveCredentialsAreIsolated(env, credentialNames)) {
+    throw new TypeError('ARC1 adapter secrets must be distinct.');
+  }
   return {
     ...bridge, origin, assetReceiptSecret, downstreamBearer, dispatchSecret, downstreamEndpoint,
     packetSecret, consumerBearer, consumerReceiptSecret,

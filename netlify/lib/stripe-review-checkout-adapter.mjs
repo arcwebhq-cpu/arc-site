@@ -36,9 +36,11 @@ import {
 } from './review-activation-runtime-readback-core.mjs';
 import { reviewPortalConfiguration } from './review-flow-core.mjs';
 import { stripeAccountVerificationConfigured } from './stripe-account-verification.mjs';
+import { ARC_STRIPE_API_VERSION } from './stripe-api-version.mjs';
 import { stripeCheckoutConfiguration } from './stripe-checkout-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
-export const STRIPE_REVIEW_CHECKOUT_API_VERSION = '2026-07-29.dahlia';
+export const STRIPE_REVIEW_CHECKOUT_API_VERSION = ARC_STRIPE_API_VERSION;
 export const STRIPE_REVIEW_CHECKOUT_SCHEMA = 'arc-review-checkout-session-v1';
 
 const CHECKOUT_IDEMPOTENCY_PREFIX = 'arc-preview-checkout-idempotency-v1\n';
@@ -52,12 +54,16 @@ const ACCOUNT_ID = /^acct_[A-Za-z0-9]{6,128}$/;
 const PRICE_ID = /^price_[A-Za-z0-9_]{6,128}$/;
 const PRODUCT_ID = /^prod_[A-Za-z0-9_]{6,128}$/;
 const TAX_CODE_ID = /^txcd_[0-9]{8}$/;
-const SECRET_KEY = /^(?:rk|sk)_(test|live)_[A-Za-z0-9_]{16,240}$/;
+const RESTRICTED_KEY = /^rk_(test|live)_[A-Za-z0-9_]{16,240}$/;
 const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9_]{6,128}$/;
 const INTEGRATION_IDENTIFIER = /^arc_review_checkout_[a-z]{8}$/;
 const DEPLOYMENT_SHA = /^[a-f0-9]{40}$/;
 const READBACK_MAXIMUM_AGE_MS = 15 * 60_000;
-const SANDBOX_RETURN_ORIGINS = new Set(['https://arcweb.onl', 'https://arcsites.netlify.app']);
+const SANDBOX_RETURN_ORIGINS = new Set([
+  'https://arc2-sandbox.netlify.app',
+  'https://arcweb.onl',
+  'https://arcsites.netlify.app',
+]);
 const PRODUCTION_RETURN_ORIGINS = new Set(['https://arcweb.onl']);
 const INPUT_KEYS = Object.freeze([
   'approval_receipt_hmac_sha256',
@@ -163,6 +169,7 @@ function valueAtPath(value, path) {
 }
 
 function signedReadbackBoundToDeployment(env, readback, deploymentSha, now) {
+  if (!sensitiveCredentialsAreIsolated(env, [ACTIVATION_MANIFEST_SECRET_ENV])) return false;
   const digest = sha256(canonicalJson(readback));
   for (const name of [ACTIVATION_MANIFEST_ENV, ACTIVATION_NEXT_MANIFEST_ENV]) {
     const raw = env[name];
@@ -303,7 +310,7 @@ function exactMode(env) {
 function resolveConfiguration(env, now = new Date()) {
   const mode = exactMode(env);
   const keyMatch = typeof env.ARC_STRIPE_REVIEW_SECRET_KEY === 'string'
-    ? env.ARC_STRIPE_REVIEW_SECRET_KEY.match(SECRET_KEY) : null;
+    ? env.ARC_STRIPE_REVIEW_SECRET_KEY.match(RESTRICTED_KEY) : null;
   const keyMode = mode === 'production' ? 'live' : mode === 'sandbox' ? 'test' : null;
   const review = reviewPortalConfiguration(env);
   const ledger = stripeCheckoutConfiguration(env);
@@ -332,26 +339,34 @@ function resolveConfiguration(env, now = new Date()) {
     String(env.ARC_STRIPE_CHECKOUT_INTEGRATION_IDENTIFIER || ''));
   const urlsValid = review.checkoutOrigin === CHECKOUT_ORIGIN && successUrl !== null && cancelUrl !== null &&
     new URL(successUrl).origin === new URL(cancelUrl).origin;
-  const knownSecrets = [
-    env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
-    env.ARC_STRIPE_REVIEW_SECRET_KEY,
-    env.ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET,
-    env.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY,
-    env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET,
-    env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
-    env.ARC_REVIEW_INVITE_HMAC_SECRET,
-    env.ARC_REVIEW_SESSION_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
-    env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET,
-    env.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET,
+  const knownSecretNames = [
+    'ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET',
+    'ARC_STRIPE_REVIEW_SECRET_KEY',
+    'ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET',
+    'ARC_STRIPE_ACCOUNT_VERIFICATION_KEY',
+    'ARC_STRIPE_WEBHOOK_SIGNING_SECRET',
+    'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+    'ARC_REVIEW_INVITE_HMAC_SECRET',
+    'ARC_REVIEW_SESSION_HMAC_SECRET',
+    'ARC_REVIEW_RECORD_HMAC_SECRET',
+    'ARC_REVIEW_DECISION_HMAC_SECRET',
+    'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+    'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
   ];
-  if (mode === 'production') knownSecrets.push(
-    env.ARC_ACTIVATION_MANIFEST_HMAC_SECRET,
-    env.ARC_PAYMENT_ARC2_WORKER_SECRET,
+  if (mode === 'production') knownSecretNames.push(
+    'ARC_ACTIVATION_MANIFEST_HMAC_SECRET',
+    'ARC_PAYMENT_ARC2_WORKER_SECRET',
   );
-  const secretsDistinct = knownSecrets.every(value => typeof value === 'string' && value.length >= 32 && value.length <= 512) &&
-    new Set(knownSecrets).size === knownSecrets.length;
+  const configuredNetlifyCredentials = ['NETLIFY_ADMIN_PAT', 'NETLIFY_ACCESS_TOKEN']
+    .filter((name) => typeof env[name] === 'string' && env[name].length > 0);
+  if (mode === 'production' && configuredNetlifyCredentials.length === 1) {
+    knownSecretNames.push(configuredNetlifyCredentials[0]);
+  }
+  const secretsDistinct = knownSecretNames.every((name) => {
+    const value = env[name];
+    return typeof value === 'string' && value.length >= 32 && value.length <= 512;
+  }) && (mode !== 'production' || configuredNetlifyCredentials.length === 1) &&
+    sensitiveCredentialsAreIsolated(env, knownSecretNames);
   const authorityValid = mode !== 'production' || validateActivationManifestEnvironment(env, {
     minimumStage: 'LIVE_CHECKOUT', now,
   }).valid;

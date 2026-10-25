@@ -64,6 +64,10 @@ assert.equal(intakeEmailVerificationConfiguration({
   ...env,
   ARC_OTHER_HMAC_SECRET: env.ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET,
 }).enabled, false, 'Verification authority reuse with another ARC secret must fail closed.');
+assert.equal(intakeEmailVerificationConfiguration({
+  ...env,
+  ARC_OTHER_HMAC_SECRET_ROTATED: env.ARC_INTAKE_EMAIL_VERIFICATION_STATE_SECRET,
+}).enabled, false, 'Renamed verification authority copies must fail closed.');
 
 const store = new FakeStore();
 const reserved = await reserveIntakeEmailVerification(source, env, store, { clock: () => now });

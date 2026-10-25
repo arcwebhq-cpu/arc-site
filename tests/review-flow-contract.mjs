@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   REVIEW_INVITE_SCHEMA,
+  REVIEW_EMAIL_DELIVERY_BINDING_SCHEMA,
   REVIEW_MAX_REVISION_ROUNDS,
   authorizeReviewSession,
   createApprovedCheckout,
@@ -10,8 +11,10 @@ import {
   exchangeReviewInvite,
   issueReviewInvite,
   readReviewStatus,
+  readReviewRecipientSuppressionForAuthorization,
   reviewInviteKey,
   reviewPortalConfiguration,
+  signReviewEmailDeliveryBinding,
 } from '../netlify/lib/review-flow-core.mjs';
 import reviewCheckoutHandler, { config as checkoutConfig } from '../netlify/functions/review-checkout.mjs';
 import reviewDecisionHandler, { config as decisionConfig } from '../netlify/functions/review-decision.mjs';
@@ -81,6 +84,42 @@ assert.equal(reviewPortalConfiguration({
   ...env,
   ARC_REVIEW_SESSION_HMAC_SECRET: env.ARC_REVIEW_INVITE_HMAC_SECRET,
 }).enabled, false, 'Review secrets must be byte-distinct.');
+for (const credentialName of [
+  'ARC_REVIEW_INVITE_HMAC_SECRET',
+  'ARC_REVIEW_SESSION_HMAC_SECRET',
+  'ARC_REVIEW_RECORD_HMAC_SECRET',
+  'ARC_REVIEW_DECISION_HMAC_SECRET',
+]) {
+  assert.equal(reviewPortalConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
+const emailEnv = {
+  ...env,
+  ARC_REVIEW_EMAIL_OUTBOX_ENABLED: 'true',
+  ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET: 'review-email-outbox-secret-unique-0123456789abcdef',
+  ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET: 'review-email-receipt-secret-unique-0123456789abcdef',
+};
+await assert.rejects(readReviewRecipientSuppressionForAuthorization(
+  new FakeStore(), sha('b'), {
+    ...emailEnv,
+    ARC_ROTATED_CREDENTIAL_V2: emailEnv.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET,
+  },
+), /OUTBOX_DISABLED/, 'A renamed outbox credential must fail before recipient-state access.');
+const deliveryBinding = {
+  schema: REVIEW_EMAIL_DELIVERY_BINDING_SCHEMA,
+  invite_hmac_sha256: sha('1'),
+  outbox_hmac_sha256: sha('2'),
+  recipient_email_sha256: sha('3'),
+  preview_manifest_sha256: sha('4'),
+  delivery_receipt_sha256: sha('5'),
+  delivery_status: 'delivered',
+};
+assert.throws(() => signReviewEmailDeliveryBinding(deliveryBinding, {
+  ...emailEnv,
+  ARC_ROTATED_CREDENTIAL_V2: emailEnv.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET,
+}), /OUTBOX_DISABLED/, 'A renamed receipt credential must fail before signing delivery authority.');
 
 const store = new FakeStore();
 const initial = await issueReviewInvite(store, {

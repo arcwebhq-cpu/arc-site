@@ -641,7 +641,7 @@
   },
   "stripe_webhook": {
     "endpoint_path": "/internal/stripe/reversal-webhook",
-    "api_version": "2026-07-29.dahlia",
+    "api_version": "2026-08-26.dahlia",
     "signing_secret_environment_name": "ARC_STRIPE_WEBHOOK_SIGNING_SECRET",
     "destination_policy": "one-per-mode",
     "events": [

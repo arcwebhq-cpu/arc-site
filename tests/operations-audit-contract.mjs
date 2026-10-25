@@ -103,6 +103,17 @@ assert.equal(operationsAuditConfiguration({ ...env, ARC_HANDOFF_STATE_SECRET: ''
   'Duplicate-payment review validation requires the handoff-state HMAC secret.');
 assert.equal(operationsAuditConfiguration({ ...env, ARC_HANDOFF_TRIGGER_SECRET: env.ARC_OPERATIONS_AUDIT_SECRET }).enabled, false,
   'Audit authorization must not reuse an existing handoff secret.');
+for (const credentialName of [
+  'ARC_OPERATIONS_AUDIT_SECRET',
+  'ARC_OPERATIONS_ALERT_HMAC_SECRET',
+  'ARC_EMAIL_CLAIM_BINDING_SECRET',
+  'ARC_HANDOFF_STATE_SECRET',
+]) {
+  assert.equal(operationsAuditConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 
 const fixture = {
   payment: { digest: '1'.repeat(64), value: {

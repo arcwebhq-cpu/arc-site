@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
+
 export const REVIEW_CHECKOUT_BINDING_SCHEMA = 'arc-review-checkout-revocable-binding-v1';
 export const REVIEW_CHECKOUT_RECIPIENT_INDEX_SCHEMA = 'arc-review-checkout-recipient-index-v1';
 export const REVIEW_CHECKOUT_REVOCATION_ALERT_SCHEMA = 'arc-review-checkout-revocation-alert-v1';
@@ -116,7 +118,8 @@ export function reviewCheckoutRevocationConfiguration(env = process.env) {
     env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
     env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
   ];
-  const secretValid = validSecret(secret) && !related.includes(secret);
+  const secretValid = validSecret(secret) && !related.includes(secret) &&
+    sensitiveCredentialsAreIsolated(env, ['ARC_STRIPE_REVIEW_REVOCATION_HMAC_SECRET']);
   return Object.freeze({
     enabled: flagValid && env.ARC_STRIPE_REVIEW_REVOCATION_ENABLED === 'true' && secretValid &&
       env.ARC_REVIEW_EMAIL_OUTBOX_ENABLED === 'true',

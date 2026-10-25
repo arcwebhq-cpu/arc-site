@@ -25,6 +25,7 @@ import {
 } from './intake-private-asset-core.mjs';
 import { validateImageAsset } from './image-asset-validation.mjs';
 import { consumeVerifiedIntakeForArc1 } from './intake-email-verification-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_ARC1_BRIDGE_ENABLED_ENV = 'ARC_INTAKE_ARC1_BRIDGE_ENABLED';
 export const INTAKE_ARC1_ADAPTER_PROOF_ENV = 'ARC_INTAKE_ARC1_ADAPTER_ATTESTATION';
@@ -324,7 +325,7 @@ export function resolveArc1BridgeEnvironment(env) {
     'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
   ];
   const values = Object.fromEntries(names.map((name) => [name, secret(env[name], name)]));
-  if (new Set(Object.values(values)).size !== names.length) throw new TypeError('ARC1 bridge secrets must be distinct.');
+  if (!sensitiveCredentialsAreIsolated(env, names)) throw new TypeError('ARC1 bridge secrets must be distinct.');
   const endpoint = canonicalBridgeEndpoint(env.ARC_INTAKE_ARC1_ENDPOINT);
   const privateAssets = resolvePrivateAssetEnvironment(env);
   const siteId = String(env.SITE_ID || '').toLowerCase();

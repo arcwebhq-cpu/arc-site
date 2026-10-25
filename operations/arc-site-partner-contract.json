@@ -1,0 +1,21 @@
+{
+  "schema": "arc-site-partner-contract-manifest-v1",
+  "version": 1,
+  "repository": "arcwebhq-cpu/arc-site",
+  "bundle": {
+    "schema": "arc-site-partner-contract-bundle-v1",
+    "version": 1,
+    "directories": [
+      "netlify/lib",
+      "vendor/image-size-disabled"
+    ],
+    "files": [
+      "netlify/functions/arc2-handoff-start.mjs",
+      "operations/review-activation-environment.json",
+      "package-lock.json",
+      "package.json"
+    ],
+    "entry_count": 63,
+    "sha256": "400c888a4fa799c49130ee1bed320fc3adb5e3ce02e112882fe52bb80ce14647"
+  }
+}

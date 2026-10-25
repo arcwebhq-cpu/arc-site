@@ -25,6 +25,8 @@ import {
 import { operationsAuditConfiguration } from '../netlify/lib/operations-audit-core.mjs';
 import { claimSandboxBootstrapConfiguration } from '../netlify/lib/claim-sandbox-bootstrap-core.mjs';
 import { retentionGenerationFenceConfiguration } from '../netlify/lib/retention-generation-fence-core.mjs';
+import { ARC_STRIPE_API_VERSION } from '../netlify/lib/stripe-api-version.mjs';
+import { sensitiveCredentialsAreIsolated } from '../netlify/lib/sensitive-credential-isolation.mjs';
 
 const CONTRACT_URL = new URL('../operations/review-activation-environment.json', import.meta.url);
 export const REVIEW_ACTIVATION_ENVIRONMENT_CONTRACT = Object.freeze(
@@ -53,7 +55,7 @@ const EXACT_BINDINGS = Object.freeze({
   ARC_STRIPE_CHECKOUT_SUCCESS_URL:
     'https://arcweb.onl/payment-success/?session_id={CHECKOUT_SESSION_ID}',
   ARC_STRIPE_CHECKOUT_TERMS_VERSION: '2026-08-25',
-  ARC_STRIPE_WEBHOOK_API_VERSION: '2026-07-29.dahlia',
+  ARC_STRIPE_WEBHOOK_API_VERSION: ARC_STRIPE_API_VERSION,
 });
 
 function sha256(value) {
@@ -363,13 +365,15 @@ export function createReviewActivationEnvironmentReport(
     else if (!validSecret(env[present[0]])) invalid.push(present[0]);
     else selectedAliasSecretNames.push(present[0]);
   }
-  const presentSecrets = [...secretNames, ...selectedAliasSecretNames]
-    .filter((name) => validSecret(env[name])).map((name) => env[name]);
-  if (new Set(presentSecrets).size !== presentSecrets.length) invalid.push('SECRET_DISTINCTNESS');
+  const configuredSecretNames = [...secretNames, ...selectedAliasSecretNames];
+  if (configuredSecretNames.every((name) => validSecret(env[name])) &&
+      !sensitiveCredentialsAreIsolated(env, configuredSecretNames)) {
+    invalid.push('SECRET_DISTINCTNESS');
+  }
   const retentionGenerationFence = retentionGenerationFenceConfiguration(env);
   if (!retentionGenerationFence.ready) invalid.push('RETENTION_GENERATION_FENCE_CONFIGURATION');
   const keyMode = profile.stripe_key_mode;
-  if (!new RegExp(`^(?:sk|rk)_${keyMode}_[A-Za-z0-9_]{16,240}$`)
+  if (!new RegExp(`^rk_${keyMode}_[A-Za-z0-9_]{16,240}$`)
     .test(String(env.ARC_STRIPE_REVIEW_SECRET_KEY || ''))) invalid.push('ARC_STRIPE_REVIEW_SECRET_KEY');
   if (!new RegExp(`^rk_${keyMode}_[A-Za-z0-9_]{16,240}$`)
     .test(String(env.ARC_STRIPE_ACCOUNT_VERIFICATION_KEY || ''))) {

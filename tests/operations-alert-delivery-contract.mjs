@@ -79,6 +79,10 @@ assert.equal(operationsAlertDeliveryConfiguration({
   ...env,
   ARC_OPERATIONS_ALERT_DELIVERY_BEARER: env.ARC_OPERATIONS_ALERT_DELIVERY_HMAC_SECRET,
 }).enabled, false, 'Alert delivery secrets must be pairwise distinct.');
+assert.equal(operationsAlertDeliveryConfiguration({
+  ...env,
+  ARC_OPERATIONS_ALERT_DELIVERY_CREDENTIAL_V2: env.ARC_OPERATIONS_ALERT_DELIVERY_BEARER,
+}).enabled, false, 'A renamed alert delivery credential copy must fail closed.');
 const firstWorkerLease = operationsAlertWorkerLeaseToken('a'.repeat(64), env);
 assert.match(firstWorkerLease, /^[a-f0-9]{64}$/);
 assert.equal(operationsAlertWorkerLeaseToken('a'.repeat(64), env), firstWorkerLease,

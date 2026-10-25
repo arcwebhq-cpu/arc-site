@@ -14,6 +14,7 @@ import {
   INTAKE_CONFIRMATION_COMPLETION_REQUEST_SCHEMA,
   claimIntakeConfirmationOutbox,
   completeIntakeConfirmationOutbox,
+  intakeConfirmationRuntimeConfigured,
   reserveIntakeConfirmationOutbox,
   validateIntakeConfirmationOutbox,
 } from '../netlify/lib/intake-confirmation-outbox-core.mjs';
@@ -65,6 +66,17 @@ const env = {
   ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY: 'ERERERERERERERERERERERERERERERERERERERERERE',
   ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET: 'confirmation-vault-hmac-secret-unique-012345',
 };
+assert.equal(intakeConfirmationRuntimeConfigured(env), true);
+for (const credentialName of [
+  'ARC_INTAKE_CONFIRMATION_OUTBOX_SECRET',
+  'ARC_INTAKE_CONFIRMATION_CONSUMER_BEARER',
+  'ARC_INTAKE_CONFIRMATION_RECEIPT_SECRET',
+]) {
+  assert.equal(intakeConfirmationRuntimeConfigured({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }), false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 const sourceRecord = {
   schema: INTAKE_SUBMISSION_SCHEMA,
   submission_id: '11111111-1111-4111-8111-111111111111',

@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { assertPublicIntakeAuthority } from './activation-manifest-core.mjs';
 import { validateImageAsset } from './image-asset-validation.mjs';
 import { ASSET_PERMISSION_CONFIRMATION } from './intake-submission-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_PRIVATE_ASSET_ENABLED_ENV = 'ARC_INTAKE_ASSET_RETRIEVAL_ENABLED';
 export const INTAKE_PRIVATE_ASSET_GRANT_SCHEMA = 'arc-intake-private-asset-grant-v1';
@@ -46,7 +47,10 @@ function configuredOrigin(env) {
 export function resolvePrivateAssetEnvironment(env) {
   const retrievalSecret = secret(env.ARC_INTAKE_ASSET_RETRIEVAL_SECRET, 'ARC_INTAKE_ASSET_RETRIEVAL_SECRET');
   const stateSecret = secret(env.ARC_INTAKE_ARC1_STATE_SECRET, 'ARC_INTAKE_ARC1_STATE_SECRET');
-  if (safeEqual(retrievalSecret, stateSecret)) throw new TypeError('Private asset and state secrets must be distinct.');
+  if (!sensitiveCredentialsAreIsolated(env, [
+    'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
+    'ARC_INTAKE_ARC1_STATE_SECRET',
+  ])) throw new TypeError('Private asset and state secrets must be distinct.');
   const endpoint = `${configuredOrigin(env)}${INTAKE_PRIVATE_ASSET_ENDPOINT_PATH}`;
   return { endpoint, endpointSha256: sha256(endpoint), retrievalSecret, stateSecret };
 }
@@ -55,6 +59,7 @@ export function authorizePrivateAssetRetrieval(request, env) {
   try {
     const supplied = request.headers.get('authorization');
     return supplied?.startsWith('Bearer ') === true &&
+      sensitiveCredentialsAreIsolated(env, ['ARC_INTAKE_ASSET_RETRIEVAL_SECRET']) &&
       safeEqual(supplied.slice(7), secret(env.ARC_INTAKE_ASSET_RETRIEVAL_SECRET, 'private asset retrieval secret'));
   } catch { return false; }
 }

@@ -1,13 +1,25 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
+
 export const RESEND_SEND_ENABLED_ENV = 'ARC_RESEND_SEND_ENABLED';
 export const RESEND_WEBHOOK_ENABLED_ENV = 'ARC_RESEND_WEBHOOK_ENABLED';
 export const RESEND_API_KEY_ENV = 'ARC_RESEND_API_KEY';
 export const RESEND_WEBHOOK_SECRET_ENV = 'ARC_RESEND_WEBHOOK_SECRET';
 export const RESEND_FROM_ENV = 'ARC_RESEND_FROM';
 export const RESEND_SEND_ENDPOINT = 'https://api.resend.com/emails';
+export const RESEND_SENDING_DOMAIN = 'send.arcweb.onl';
+export const RESEND_FROM_IDENTITY = 'ARC <preview@send.arcweb.onl>';
+export const RESEND_WEBHOOK_PATH = '/api/webhooks/resend';
 export const RESEND_REQUEST_TIMEOUT_MS = 10_000;
 export const RESEND_WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
+export const RESEND_REQUIRED_WEBHOOK_EVENT_TYPES = Object.freeze([
+  'email.delivered',
+  'email.bounced',
+  'email.complained',
+  'email.failed',
+  'email.suppressed',
+]);
 export const RESEND_RECONCILED_EVENT_TYPES = Object.freeze([
   'email.sent',
   'email.delivery_delayed',
@@ -42,12 +54,14 @@ function apiKey(value) {
 }
 
 function fromAddress(value) {
-  if (typeof value !== 'string' || value.length < 3 || value.length > 254 || value !== value.trim() || CONTROL.test(value)) {
+  if (value !== RESEND_FROM_IDENTITY || CONTROL.test(value)) {
     throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
   }
   const bracketed = value.match(/^([^<>]{1,100}) <([^<>]+)>$/);
   const address = (bracketed ? bracketed[2] : value).toLowerCase();
-  if (!EMAIL.test(address)) throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
+  if (!EMAIL.test(address) || address.slice(address.lastIndexOf('@') + 1) !== RESEND_SENDING_DOMAIN) {
+    throw new TypeError(`${RESEND_FROM_ENV} is invalid.`);
+  }
   return value;
 }
 
@@ -77,12 +91,16 @@ export function resendProviderConfiguration(env = process.env) {
   try { sender = fromAddress(env[RESEND_FROM_ENV]); } catch {}
   try { sendKey = apiKey(env[RESEND_API_KEY_ENV]); } catch {}
   try { signingKey = webhookSecret(env[RESEND_WEBHOOK_SECRET_ENV]); } catch {}
+  const sendCredentialIsolated = Boolean(sendKey) &&
+    sensitiveCredentialsAreIsolated(env, [RESEND_API_KEY_ENV]);
+  const webhookCredentialIsolated = Boolean(signingKey) &&
+    sensitiveCredentialsAreIsolated(env, [RESEND_WEBHOOK_SECRET_ENV]);
   return Object.freeze({
-    send_enabled: env[RESEND_SEND_ENABLED_ENV] === 'true' && Boolean(sender && sendKey),
-    webhook_enabled: env[RESEND_WEBHOOK_ENABLED_ENV] === 'true' && Boolean(signingKey),
+    send_enabled: env[RESEND_SEND_ENABLED_ENV] === 'true' && Boolean(sender) && sendCredentialIsolated,
+    webhook_enabled: env[RESEND_WEBHOOK_ENABLED_ENV] === 'true' && webhookCredentialIsolated,
     from: sender,
-    apiKey: sendKey,
-    webhookSigningKey: signingKey,
+    apiKey: sendCredentialIsolated ? sendKey : null,
+    webhookSigningKey: webhookCredentialIsolated ? signingKey : null,
   });
 }
 

@@ -1,6 +1,7 @@
 import { createHmac, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { domainToASCII } from 'node:url';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_ABUSE_PROTECTION_ENABLED_ENV = 'ARC_INTAKE_ABUSE_PROTECTION_ENABLED';
 export const INTAKE_ABUSE_HMAC_SECRET_ENV = 'ARC_INTAKE_ABUSE_HMAC_SECRET';
@@ -68,9 +69,7 @@ const exactInteger = (raw, minimum, maximum) => {
 
 function secretIsDistinct(env, name, value) {
   if (utf8Bytes(value) < 20 || utf8Bytes(value) > 256) return false;
-  return !Object.entries(env).some(([otherName, otherValue]) => otherName !== name &&
-    /(?:SECRET|TOKEN|BEARER|API_KEY|_PAT)$/.test(otherName) && typeof otherValue === 'string' &&
-    otherValue.length > 0 && otherValue === value);
+  return sensitiveCredentialsAreIsolated(env, [name]);
 }
 
 export function intakeAbuseProtectionConfiguration(env = process.env) {

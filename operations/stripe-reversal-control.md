@@ -5,7 +5,7 @@ Status: **code complete, disabled, and not connected to an ARC Stripe event dest
 ## Safety properties
 
 - The webhook accepts only the explicit reversal event allowlist in `stripe-reversal-core.mjs` and requires a valid Stripe `v1` signature over the untouched request body within a five-minute delivery tolerance.
-- The endpoint requires Stripe API version `2026-07-29.dahlia`, the configured test/live mode, the expected ARC account hash, and a pre-registered Checkout Session → PaymentIntent → handoff binding.
+- The endpoint requires Stripe API version `2026-08-26.dahlia`, the configured test/live mode, the expected ARC account hash, and a pre-registered Checkout Session → PaymentIntent → handoff binding.
 - Each raw Stripe event ID, PaymentIntent ID, and reversal-object ID is converted to a domain-separated HMAC before durable storage. One create-only global event reservation prevents an event from being rebound to another handoff or other bytes.
 - Any accepted refund attempt, refunded charge, or dispute creates a permanent fulfillment halt and manual-review requirement. Later favorable events can update the status but can never lower severity, clear the halt, or resume fulfillment.
 - Before every controlled provider stage, ARC2 also requires a signed authoritative recheck issued within five minutes and bound to the exact handoff, Checkout Session, PaymentIntent, account, and mode. It must report `payment_intent_status=succeeded`, zero refunded amount, and no dispute. Rechecks are monotonic CAS records; older attestations cannot replace newer ones. The recheck producer must query Stripe's authoritative objects immediately before signing—webhook silence is never treated as proof of no reversal.
@@ -22,7 +22,8 @@ Netlify Blobs cannot atomically lock a Stripe webhook key and a Netlify provider
    destinations and never reuse secrets. Within one mode, Checkout and
    refund/dispute events must share that one endpoint and its single
    `ARC_STRIPE_WEBHOOK_SIGNING_SECRET`. Do not create a second Checkout webhook.
-2. Pin that destination to API version `2026-07-29.dahlia` and select exactly
+2. Pin that destination to the stable API version `2026-08-26.dahlia` (never
+   the `2026-07-29.preview` channel) and select exactly
    this complete union:
    - `checkout.session.completed`, `checkout.session.async_payment_succeeded`
    - `checkout.session.async_payment_failed`, `checkout.session.expired`
@@ -44,7 +45,7 @@ All controls default to off. Secrets must be unique, 32–512 characters, and st
 - `ARC_STRIPE_REVERSAL_WEBHOOK_ENABLED=true`
 - `ARC_STRIPE_REVERSAL_BINDING_ENABLED=true`
 - `ARC_STRIPE_REVERSAL_RECHECK_ENABLED=true`
-- `ARC_STRIPE_WEBHOOK_API_VERSION=2026-07-29.dahlia`
+- `ARC_STRIPE_WEBHOOK_API_VERSION=2026-08-26.dahlia`
 
 The first authenticated handoff-start call reserves immutable payment and
 artifact state, then returns HTTP 202 with `handoff_id`,

@@ -95,6 +95,17 @@ env.ARC_INTAKE_ARC1_ADAPTER_ATTESTATION = createAdapterAttestation({
   expires_at: new Date(receivedAt.getTime() + 24 * 60 * 60_000).toISOString(),
 }, env.ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET);
 resolveArc1BridgeEnvironment(env);
+for (const credentialName of [
+  'ARC_INTAKE_ARC1_RUN_SECRET', 'ARC_INTAKE_ARC1_DESTINATION_BEARER',
+  'ARC_INTAKE_ARC1_EVIDENCE_SECRET', 'ARC_INTAKE_ARC1_ACK_SECRET',
+  'ARC_INTAKE_ARC1_STATE_SECRET', 'ARC_INTAKE_ARC1_ADAPTER_PROOF_SECRET',
+  'ARC_INTAKE_ASSET_RETRIEVAL_SECRET',
+]) {
+  assert.throws(() => resolveArc1BridgeEnvironment({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }), /distinct/, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 assert.throws(() => resolveArc1BridgeEnvironment({ ...env, ARC_INTAKE_ARC1_ACK_SECRET: env.ARC_INTAKE_ARC1_EVIDENCE_SECRET }), /distinct/);
 assert.throws(() => resolveArc1BridgeEnvironment({ ...env, ARC_INTAKE_ARC1_ENDPOINT: 'http://example.test/arc1' }), /HTTPS/);
 

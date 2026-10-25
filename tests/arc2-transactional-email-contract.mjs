@@ -93,6 +93,24 @@ assert.equal(arc2TransactionalEmailConfiguration({
   ...env,
   [ARC2_FINAL_DELIVERY_EMAIL_ENABLED_ENV]: 'false',
 }).claim_invitation_enabled, true, 'ARC2 email stages must have independent switches.');
+for (const credentialName of [
+  'ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY',
+  'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET',
+  'ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET',
+  'ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET',
+  'ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET',
+  'ARC_EMAIL_CLAIM_BINDING_SECRET',
+  'ARC_FINAL_DELIVERY_RECEIPT_SECRET',
+]) {
+  assert.equal(arc2TransactionalEmailConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).capsule_producer_enabled, false, `${credentialName} must reject an arbitrary configured alias.`);
+}
+assert.throws(() => resendProviderAccountHmacSha256({
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET,
+}), /not isolated/, 'Provider binding must reject an arbitrary alias before deriving an account HMAC.');
 
 const vault = new FakeStore();
 await sealEmailRecipientCapsule(vault, {
@@ -272,6 +290,11 @@ const deliveredEvent = {
 const receipt = createFinalDeliveryReceiptEvidence(deliveredEvent, finalAuthority, env, {
   clock: () => now,
 });
+assert.throws(() => createFinalDeliveryReceiptEvidence(deliveredEvent, finalAuthority, {
+  ...env,
+  ARC_ROTATED_CREDENTIAL_V2: env.ARC_FINAL_DELIVERY_RECEIPT_SECRET,
+}, { clock: () => now }), /not isolated/,
+'Final delivery receipt signing must reject an arbitrary configured alias.');
 const receiptValue = JSON.parse(receipt.delivery_receipt_evidence);
 assert.equal(receiptValue.provider_account_hmac_sha256, providerAccountHmac);
 assert.equal(receiptValue.outbox_claim_key_hmac_sha256, finalJobKey);

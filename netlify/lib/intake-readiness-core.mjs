@@ -36,6 +36,7 @@ import {
   EMAIL_RECIPIENT_VAULT_HMAC_SECRET_ENV,
   emailRecipientVaultConfiguration,
 } from './email-recipient-vault-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const INTAKE_READINESS_ENV = 'ARC_INTAKE_READINESS_ATTESTATION';
 export const INTAKE_READINESS_SCHEMA = 'arc-intake-readiness-attestation-v1';
@@ -157,7 +158,7 @@ export function intakeArc1RuntimeReady(request, env = process.env, now = new Dat
     const secrets = required.map((name) => env[name]);
     if (!intakeIdempotencyConfigured(env) ||
         secrets.some((value) => typeof value !== 'string' || Buffer.byteLength(value, 'utf8') < 32 || Buffer.byteLength(value, 'utf8') > 256) ||
-        new Set(secrets).size !== secrets.length) return false;
+        !sensitiveCredentialsAreIsolated(env, required)) return false;
     const endpoint = new URL(env.ARC_INTAKE_ARC1_ENDPOINT);
     return endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password && !endpoint.port && endpoint.pathname !== '/' &&
       !endpoint.search && !endpoint.hash && /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(endpoint.hostname) &&

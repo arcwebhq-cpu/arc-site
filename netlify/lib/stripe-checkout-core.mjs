@@ -19,6 +19,7 @@ import {
   verifyStripeAccountBinding,
   verifyStripeEventOwnership,
 } from './stripe-account-verification.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const STRIPE_CHECKOUT_EVENT_SCHEMA = 'arc-stripe-checkout-event-v1';
 export const STRIPE_CHECKOUT_SESSION_SCHEMA = 'arc-stripe-checkout-session-state-v1';
@@ -149,8 +150,9 @@ export function stripeCheckoutConfiguration(env = process.env) {
   const sandboxBypass = !required && env.ARC_RUNTIME_ENVIRONMENT === 'sandbox' &&
     env.ARC_STRIPE_LIVE_MODE_ENABLED === 'false' && env.ARC_ALLOW_TEST_MODE_EVENTS === 'true' &&
     env.ARC_HANDOFF_ENABLED === 'false';
-  const secrets = [env.ARC_STRIPE_WEBHOOK_SIGNING_SECRET, env.ARC_STRIPE_REVERSAL_HMAC_SECRET];
-  const secretsValid = secrets.every(validSecret) && new Set(secrets).size === secrets.length;
+  const secretNames = ['ARC_STRIPE_WEBHOOK_SIGNING_SECRET', 'ARC_STRIPE_REVERSAL_HMAC_SECRET'];
+  const secretsValid = secretNames.every((name) => validSecret(env[name])) &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   const accountVerificationValid = stripeAccountVerificationConfigured(env);
   const expectedAccountValid = HEX_64.test(String(env.ARC_EXPECTED_STRIPE_ACCOUNT_ID_SHA256 || ''));
   const apiVersionValid = env.ARC_STRIPE_WEBHOOK_API_VERSION === STRIPE_WEBHOOK_API_VERSION;

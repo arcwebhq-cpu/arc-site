@@ -68,13 +68,13 @@ redacted evidence digests.
 
 The JSON contract is authoritative for every exact flag. Important invariants:
 
-- sandbox uses `ARC_RUNTIME_ENVIRONMENT=sandbox`, test Stripe keys,
+- sandbox uses `ARC_RUNTIME_ENVIRONMENT=sandbox`, test Stripe restricted keys,
   `ARC_STRIPE_LIVE_MODE_ENABLED=false`, test events allowed, no live handoff,
   and a non-required Checkout ledger;
 - sandbox adult/business/tax/transactional-complete attestations and the
   reversal-required flag remain exact `false`; production requires them exact
   `true`;
-- production uses `ARC_RUNTIME_ENVIRONMENT=production`, live Stripe keys,
+- production uses `ARC_RUNTIME_ENVIRONMENT=production`, live Stripe restricted keys,
   `ARC_STRIPE_LIVE_MODE_ENABLED=true`, test events rejected, live handoff, and
   a required Checkout ledger;
 - the review portal, durable email outbox, internal email API, revision outbox,

@@ -8,17 +8,22 @@ import {
 } from './review-checkout-revocation-core.mjs';
 import {
   STRIPE_CHECKOUT_RECEIPT_SCHEMA,
+  STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA,
   STRIPE_CHECKOUT_SESSION_SCHEMA,
   stripeCheckoutConfiguration,
   stripeCheckoutKeys,
 } from './stripe-checkout-core.mjs';
+import { readStripeReversalHaltEvidence } from './stripe-reversal-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const PAYMENT_ARC2_OUTBOX_STORE = 'arc-payment-arc2-outbox';
-export const PAYMENT_ARC2_OUTBOX_SCHEMA = 'arc-payment-arc2-start-outbox-v2';
+export const PAYMENT_ARC2_OUTBOX_SCHEMA = 'arc-payment-arc2-start-outbox-v3';
+export const PAYMENT_ARC2_LEGACY_OUTBOX_SCHEMA = 'arc-payment-arc2-start-outbox-v2';
 export const PAYMENT_ARC2_IMMUTABLE_SCHEMA = 'arc-payment-arc2-start-binding-v2';
 export const PAYMENT_ARC2_REVIEW_SESSION_BINDING_SCHEMA = 'arc-payment-review-session-binding-v1';
 export const PAYMENT_ARC2_COMPLETION_SCHEMA = 'arc2-start-processing-receipt-v2';
 export const PAYMENT_ARC2_PENDING_INDEX_SCHEMA = 'arc-payment-arc2-pending-index-v1';
+export const PAYMENT_ARC2_MANUAL_REVIEW_INDEX_SCHEMA = 'arc-payment-arc2-manual-review-index-v1';
 export const PAYMENT_ARC2_REVIEW_EVIDENCE_VERSION = 'arc2-review-session-payment-evidence-v1';
 export const PAYMENT_ARC2_REVIEW_EVIDENCE_SCOPE = 'authoritative-approved-review-paid-checkout-session';
 export const PAYMENT_ARC2_REVIEW_EVIDENCE_SIGNATURE_PREFIX = 'arc2-review-session-payment-evidence-signature-v1\n';
@@ -29,6 +34,7 @@ export const PAYMENT_ARC2_SETTLEMENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OUTBOX_KEY_PREFIX = 'payment-arc2-start-outbox/';
 const REVIEW_SESSION_KEY_PREFIX = 'payment-review-session-binding/';
 const PENDING_INDEX_KEY_PREFIX = 'payment-arc2-pending/';
+const MANUAL_REVIEW_INDEX_KEY_PREFIX = 'payment-arc2-manual-review/';
 const OUTBOX_KEY_HMAC_PREFIX = 'arc-payment-arc2-start-outbox-key-v2\n';
 const REVIEW_SESSION_KEY_HMAC_PREFIX = 'arc-payment-review-session-binding-key-v1\n';
 const CLAIM_HMAC_PREFIX = 'arc-payment-arc2-start-claim-v2\n';
@@ -47,7 +53,7 @@ const INTEGRATION_IDENTIFIER = /^arc_review_checkout_[a-z]{8}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_CAS_ATTEMPTS = 8;
 const FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
-const OUTBOX_STATES = new Set(['PENDING', 'CLAIMED', 'COMPLETED']);
+const OUTBOX_STATES = new Set(['PENDING', 'CLAIMED', 'COMPLETED', 'REVIEW_REQUIRED']);
 
 const REVIEW_ARTIFACT_BINDING_FIELDS = Object.freeze([
   'artifact_evidence_sha256', 'artifact_manifest_sha256', 'bundle_fingerprint',
@@ -94,10 +100,15 @@ const OUTBOX_IMMUTABLE_FIELDS = Object.freeze([
   'authorization_expires_at',
 ]);
 
-const OUTBOX_FIELDS = Object.freeze([
+const LEGACY_OUTBOX_FIELDS = Object.freeze([
   'schema', 'record_revision', 'status', 'created_at', 'updated_at', 'immutable', 'immutable_sha256',
   'claim_attempt_count', 'lease_claim_hmac_sha256', 'lease_claimed_at', 'lease_expires_at',
   'completion_claim_hmac_sha256', 'arc2_start_receipt_sha256', 'completion_receipt_sha256', 'completed_at',
+]);
+const OUTBOX_FIELDS = Object.freeze([
+  ...LEGACY_OUTBOX_FIELDS,
+  'manual_review_at', 'manual_review_claim_hmac_sha256', 'manual_review_code', 'manual_review_evidence_sha256',
+  'manual_review_handoff_id',
 ]);
 
 const COMPLETION_FIELDS = Object.freeze([
@@ -212,13 +223,14 @@ export function paymentArc2BridgeConfiguration(env = process.env) {
   );
   const ledger = stripeCheckoutConfiguration(env);
   const revocation = reviewCheckoutRevocationConfiguration(env);
-  const secretSet = [
-    env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET,
-    env.ARC_STRIPE_REVERSAL_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
+  const secretNames = [
+    'ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET',
+    'ARC_STRIPE_REVERSAL_HMAC_SECRET',
+    'ARC_REVIEW_RECORD_HMAC_SECRET',
+    'ARC_REVIEW_DECISION_HMAC_SECRET',
   ];
-  const secretsDistinct = secretSet.every(validSecret) && new Set(secretSet).size === secretSet.length;
+  const secretsDistinct = secretNames.every((name) => validSecret(env[name])) &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   return {
     accountValid,
     bridgeSecretValid,
@@ -668,6 +680,11 @@ function pendingIndexKey(outboxKeyValue) {
   return `${PENDING_INDEX_KEY_PREFIX}${outboxKeyValue.slice(OUTBOX_KEY_PREFIX.length)}`;
 }
 
+function manualReviewIndexKey(outboxKeyValue) {
+  validateOutboxKey(outboxKeyValue);
+  return `${MANUAL_REVIEW_INDEX_KEY_PREFIX}${outboxKeyValue.slice(OUTBOX_KEY_PREFIX.length)}`;
+}
+
 function validatePendingIndex(record, key) {
   exactKeys(record, ['schema', 'outbox_key', 'immutable_binding_sha256', 'created_at'],
     'Payment ARC2 pending index');
@@ -680,11 +697,40 @@ function validatePendingIndex(record, key) {
   return record;
 }
 
+function validateManualReviewIndex(record, key) {
+  exactKeys(record, [
+    'created_at', 'handoff_id', 'immutable_binding_sha256', 'outbox_key',
+    'review_code', 'review_evidence_sha256', 'schema',
+  ], 'Payment ARC2 manual review index');
+  validateOutboxKey(record.outbox_key);
+  if (record.schema !== PAYMENT_ARC2_MANUAL_REVIEW_INDEX_SCHEMA ||
+      key !== manualReviewIndexKey(record.outbox_key) ||
+      record.review_code !== 'ARC_STRIPE_REVERSAL_HALT') {
+    throw new Error('ARC_PAYMENT_ARC2_MANUAL_REVIEW_CORRUPT');
+  }
+  for (const field of ['handoff_id', 'immutable_binding_sha256', 'review_evidence_sha256']) {
+    hex64(record[field], `Payment ARC2 manual review ${field}`);
+  }
+  isoTimestamp(record.created_at, 'Payment ARC2 manual review creation time');
+  return record;
+}
+
 function validateOutboxRecord(record, key, env) {
-  exactKeys(record, OUTBOX_FIELDS, 'Payment ARC2 outbox record');
-  if (record.schema !== PAYMENT_ARC2_OUTBOX_SCHEMA || !OUTBOX_STATES.has(record.status)) {
+  const legacy = record?.schema === PAYMENT_ARC2_LEGACY_OUTBOX_SCHEMA;
+  exactKeys(record, legacy ? LEGACY_OUTBOX_FIELDS : OUTBOX_FIELDS, 'Payment ARC2 outbox record');
+  if ((!legacy && record.schema !== PAYMENT_ARC2_OUTBOX_SCHEMA) ||
+      !OUTBOX_STATES.has(record.status) || legacy && record.status === 'REVIEW_REQUIRED') {
     throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
   }
+  record = legacy ? {
+    ...record,
+    schema: PAYMENT_ARC2_OUTBOX_SCHEMA,
+    manual_review_at: null,
+    manual_review_claim_hmac_sha256: null,
+    manual_review_code: null,
+    manual_review_evidence_sha256: null,
+    manual_review_handoff_id: null,
+  } : record;
   integer(record.record_revision, 'Payment ARC2 outbox revision', 1);
   integer(record.claim_attempt_count, 'Payment ARC2 claim attempts');
   isoTimestamp(record.created_at, 'Payment ARC2 created timestamp');
@@ -698,7 +744,9 @@ function validateOutboxRecord(record, key, env) {
   if (record.status === 'PENDING') {
     if (record.lease_claim_hmac_sha256 !== null || record.lease_claimed_at !== null ||
         record.lease_expires_at !== null || record.completion_claim_hmac_sha256 !== null ||
-        record.arc2_start_receipt_sha256 !== null || record.completion_receipt_sha256 !== null || record.completed_at !== null) {
+        record.arc2_start_receipt_sha256 !== null || record.completion_receipt_sha256 !== null || record.completed_at !== null ||
+        record.manual_review_at !== null || record.manual_review_claim_hmac_sha256 !== null || record.manual_review_code !== null ||
+        record.manual_review_evidence_sha256 !== null || record.manual_review_handoff_id !== null) {
       throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
     }
   } else if (record.status === 'CLAIMED') {
@@ -707,16 +755,34 @@ function validateOutboxRecord(record, key, env) {
     isoTimestamp(record.lease_expires_at, 'Payment ARC2 lease expiration');
     if (record.claim_attempt_count < 1 || record.completion_claim_hmac_sha256 !== null ||
         record.arc2_start_receipt_sha256 !== null || record.completion_receipt_sha256 !== null || record.completed_at !== null ||
+        record.manual_review_at !== null || record.manual_review_claim_hmac_sha256 !== null || record.manual_review_code !== null ||
+        record.manual_review_evidence_sha256 !== null || record.manual_review_handoff_id !== null ||
         Date.parse(record.lease_expires_at) <= Date.parse(record.lease_claimed_at)) {
       throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
     }
-  } else {
+  } else if (record.status === 'COMPLETED') {
     if (record.claim_attempt_count < 1 || record.lease_claim_hmac_sha256 !== null || record.lease_claimed_at !== null ||
-        record.lease_expires_at !== null) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
+        record.lease_expires_at !== null || record.manual_review_at !== null ||
+        record.manual_review_claim_hmac_sha256 !== null || record.manual_review_code !== null ||
+        record.manual_review_evidence_sha256 !== null || record.manual_review_handoff_id !== null) {
+      throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
+    }
     hex64(record.completion_claim_hmac_sha256, 'Payment ARC2 completion claim HMAC');
     hex64(record.arc2_start_receipt_sha256, 'ARC2 start receipt digest');
     hex64(record.completion_receipt_sha256, 'Payment ARC2 completion receipt digest');
     isoTimestamp(record.completed_at, 'Payment ARC2 completion time');
+  } else {
+    if (record.claim_attempt_count < 1 || record.lease_claim_hmac_sha256 !== null ||
+        record.lease_claimed_at !== null || record.lease_expires_at !== null ||
+        record.completion_claim_hmac_sha256 !== null || record.arc2_start_receipt_sha256 !== null ||
+        record.completion_receipt_sha256 !== null || record.completed_at !== null ||
+        record.manual_review_code !== 'ARC_STRIPE_REVERSAL_HALT') {
+      throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CORRUPT');
+    }
+    isoTimestamp(record.manual_review_at, 'Payment ARC2 manual review timestamp');
+    hex64(record.manual_review_claim_hmac_sha256, 'Payment ARC2 manual review claim HMAC');
+    hex64(record.manual_review_evidence_sha256, 'Payment ARC2 manual review evidence');
+    hex64(record.manual_review_handoff_id, 'Payment ARC2 manual review handoff id');
   }
   return record;
 }
@@ -740,7 +806,10 @@ async function removePendingIndex(bridgeStore, outboxKeyValue) {
 async function ensurePendingIndex(bridgeStore, outboxKeyValue, env) {
   const outbox = await readOutbox(bridgeStore, outboxKeyValue, env);
   if (!outbox) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_REQUIRED');
-  if (outbox.record.status === 'COMPLETED') {
+  if (outbox.record.status === 'COMPLETED' || outbox.record.status === 'REVIEW_REQUIRED') {
+    if (outbox.record.status === 'REVIEW_REQUIRED') {
+      await ensureManualReviewIndex(bridgeStore, outboxKeyValue, outbox.record);
+    }
     await removePendingIndex(bridgeStore, outboxKeyValue);
     return false;
   }
@@ -767,6 +836,37 @@ async function ensurePendingIndex(bridgeStore, outboxKeyValue, env) {
   return false;
 }
 
+async function ensureManualReviewIndex(bridgeStore, outboxKeyValue, record) {
+  const key = manualReviewIndexKey(outboxKeyValue);
+  const value = {
+    schema: PAYMENT_ARC2_MANUAL_REVIEW_INDEX_SCHEMA,
+    outbox_key: outboxKeyValue,
+    immutable_binding_sha256: record.immutable_sha256,
+    handoff_id: record.manual_review_handoff_id,
+    review_code: record.manual_review_code,
+    review_evidence_sha256: record.manual_review_evidence_sha256,
+    created_at: record.manual_review_at,
+  };
+  validateManualReviewIndex(value, key);
+  let result;
+  try {
+    result = await bridgeStore.setJSON(key, value, { onlyIfNew: true });
+  } catch (error) {
+    const recovered = await bridgeStore.getWithMetadata(key, {
+      type: 'json', consistency: 'strong',
+    }).catch(() => null);
+    if (!recovered || canonicalJson(validateManualReviewIndex(recovered.data, key)) !== canonicalJson(value)) {
+      throw error;
+    }
+    return;
+  }
+  if (result?.modified) return;
+  const existing = await strongRead(bridgeStore, key, 'ARC_PAYMENT_ARC2_MANUAL_REVIEW_UNAVAILABLE');
+  if (canonicalJson(validateManualReviewIndex(existing.data, key)) !== canonicalJson(value)) {
+    throw new Error('ARC_PAYMENT_ARC2_MANUAL_REVIEW_CONFLICT');
+  }
+}
+
 function publicResult(record, key, idempotentReplay) {
   return {
     outbox_key: key,
@@ -776,6 +876,13 @@ function publicResult(record, key, idempotentReplay) {
     claim_attempt_count: record.claim_attempt_count,
     lease_expires_at: record.lease_expires_at,
     arc2_start_receipt_sha256: record.arc2_start_receipt_sha256,
+    ...(record.status === 'REVIEW_REQUIRED' ? {
+      manual_review_required: true,
+      retry_required: false,
+      review_code: record.manual_review_code,
+      review_evidence_sha256: record.manual_review_evidence_sha256,
+      handoff_id: record.manual_review_handoff_id,
+    } : {}),
   };
 }
 
@@ -800,6 +907,11 @@ async function createOutbox(bridgeStore, immutable, env, now) {
     arc2_start_receipt_sha256: null,
     completion_receipt_sha256: null,
     completed_at: null,
+    manual_review_at: null,
+    manual_review_claim_hmac_sha256: null,
+    manual_review_code: null,
+    manual_review_evidence_sha256: null,
+    manual_review_handoff_id: null,
   };
   validateOutboxRecord(record, key, env);
   let result;
@@ -1111,6 +1223,99 @@ function claimResult(record, key, idempotentReplay) {
   return { ...publicResult(record, key, idempotentReplay), payload: structuredClone(record.immutable) };
 }
 
+async function assertOutboxHandoffBinding(ledgerStore, outbox, handoffId) {
+  const key = `stripe-checkout-handoff/${hex64(handoffId, 'Payment ARC2 manual review handoff id')}`;
+  const entry = await strongRead(ledgerStore, key, 'ARC_PAYMENT_ARC2_HANDOFF_BINDING_REQUIRED');
+  const binding = entry.data;
+  if (!binding || binding.schema !== STRIPE_REVIEW_CHECKOUT_HANDOFF_BINDING_SCHEMA ||
+      binding.handoff_id !== handoffId ||
+      binding.bridge_immutable_binding_sha256 !== outbox.immutable_sha256 ||
+      binding.review_session_binding_sha256 !== outbox.immutable.review_session_binding_sha256 ||
+      binding.checkout_session_id_hmac_sha256 !== outbox.immutable.checkout_session_id_hmac_sha256 ||
+      binding.payment_intent_id_hmac_sha256 !== outbox.immutable.payment_intent_id_hmac_sha256 ||
+      binding.recipient_email_sha256 !== outbox.immutable.recipient_email_sha256 ||
+      binding.payer_email_sha256 !== outbox.immutable.payer_email_sha256 ||
+      binding.stripe_account_id_sha256 !== outbox.immutable.stripe_account_id_sha256 ||
+      binding.livemode !== outbox.immutable.livemode) {
+    throw new Error('ARC_PAYMENT_ARC2_HANDOFF_BINDING_MISMATCH');
+  }
+  return binding;
+}
+
+export async function markPaymentArc2StartOutboxManualReview(stores, key, claimToken,
+  handoffId, env = process.env, adapters = {}) {
+  requireBridge(env);
+  const bridgeStore = storeSet(stores, 'bridge');
+  const ledgerStore = storeSet(stores, 'ledger');
+  validateOutboxKey(key);
+  const tokenHmac = claimHmac(key, claimToken, env.ARC_PAYMENT_ARC2_BRIDGE_HMAC_SECRET);
+  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+    const now = clockDate(adapters);
+    const entry = await readOutbox(bridgeStore, key, env);
+    if (!entry) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_REQUIRED');
+    if (entry.record.status === 'COMPLETED') throw new Error('ARC_PAYMENT_ARC2_COMPLETION_CONFLICT');
+    if (entry.record.status === 'REVIEW_REQUIRED') {
+      if (!safeEqual(entry.record.manual_review_claim_hmac_sha256, tokenHmac) ||
+          entry.record.manual_review_handoff_id !== handoffId) {
+        throw new Error('ARC_PAYMENT_ARC2_CLAIM_MISMATCH');
+      }
+      await assertOutboxHandoffBinding(ledgerStore, entry.record, handoffId);
+      const evidence = await readStripeReversalHaltEvidence(ledgerStore, handoffId, env);
+      if (entry.record.manual_review_evidence_sha256 !== evidence.evidence_sha256) {
+        throw new Error('ARC_PAYMENT_ARC2_MANUAL_REVIEW_CONFLICT');
+      }
+      await ensureManualReviewIndex(bridgeStore, key, entry.record);
+      await removePendingIndex(bridgeStore, key);
+      return publicResult(entry.record, key, true);
+    }
+    if (entry.record.status !== 'CLAIMED' || Date.parse(entry.record.lease_expires_at) <= now.getTime()) {
+      throw new Error('ARC_PAYMENT_ARC2_CLAIM_REQUIRED');
+    }
+    if (!safeEqual(entry.record.lease_claim_hmac_sha256, tokenHmac)) {
+      throw new Error('ARC_PAYMENT_ARC2_CLAIM_MISMATCH');
+    }
+    await assertOutboxHandoffBinding(ledgerStore, entry.record, handoffId);
+    const evidence = await readStripeReversalHaltEvidence(ledgerStore, handoffId, env);
+    const timestamp = now.toISOString();
+    const next = {
+      ...entry.record,
+      schema: PAYMENT_ARC2_OUTBOX_SCHEMA,
+      record_revision: entry.record.record_revision + 1,
+      status: 'REVIEW_REQUIRED',
+      updated_at: timestamp,
+      lease_claim_hmac_sha256: null,
+      lease_claimed_at: null,
+      lease_expires_at: null,
+      manual_review_at: timestamp,
+      manual_review_claim_hmac_sha256: tokenHmac,
+      manual_review_code: evidence.code,
+      manual_review_evidence_sha256: evidence.evidence_sha256,
+      manual_review_handoff_id: handoffId,
+    };
+    validateOutboxRecord(next, key, env);
+    try {
+      const result = await bridgeStore.setJSON(key, next, { onlyIfMatch: entry.etag });
+      if (result?.modified) {
+        await ensureManualReviewIndex(bridgeStore, key, next);
+        await removePendingIndex(bridgeStore, key);
+        return publicResult(next, key, false);
+      }
+    } catch (error) {
+      const recovered = await readOutbox(bridgeStore, key, env).catch(() => null);
+      if (recovered?.record.status === 'REVIEW_REQUIRED' &&
+          safeEqual(recovered.record.manual_review_claim_hmac_sha256, tokenHmac) &&
+          recovered.record.manual_review_handoff_id === handoffId &&
+          recovered.record.manual_review_evidence_sha256 === evidence.evidence_sha256) {
+        await ensureManualReviewIndex(bridgeStore, key, recovered.record);
+        await removePendingIndex(bridgeStore, key);
+        return publicResult(recovered.record, key, true);
+      }
+      throw error;
+    }
+  }
+  throw new Error('ARC_PAYMENT_ARC2_OUTBOX_CONTENTION');
+}
+
 export async function claimPaymentArc2StartOutbox(stores, key, claimToken, env = process.env, adapters = {}) {
   const configuration = requireBridge(env);
   const bridgeStore = storeSet(stores, 'bridge');
@@ -1121,6 +1326,14 @@ export async function claimPaymentArc2StartOutbox(stores, key, claimToken, env =
     const entry = await readOutbox(bridgeStore, key, env);
     if (!entry) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_REQUIRED');
     if (entry.record.status === 'COMPLETED') return claimResult(entry.record, key, true);
+    if (entry.record.status === 'REVIEW_REQUIRED') {
+      if (!safeEqual(entry.record.manual_review_claim_hmac_sha256, tokenHmac)) {
+        throw new Error('ARC_PAYMENT_ARC2_CLAIM_MISMATCH');
+      }
+      await ensureManualReviewIndex(bridgeStore, key, entry.record);
+      await removePendingIndex(bridgeStore, key);
+      return publicResult(entry.record, key, true);
+    }
     await readBindingForOutbox(stores, entry.record, env, configuration, now);
     if (entry.record.status === 'CLAIMED' && Date.parse(entry.record.lease_expires_at) > now.getTime()) {
       if (!safeEqual(entry.record.lease_claim_hmac_sha256, tokenHmac)) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_LEASED');
@@ -1162,6 +1375,14 @@ export async function releasePaymentArc2StartOutbox(stores, key, claimToken, env
     const entry = await readOutbox(bridgeStore, key, env);
     if (!entry) throw new Error('ARC_PAYMENT_ARC2_OUTBOX_REQUIRED');
     if (entry.record.status === 'COMPLETED') return publicResult(entry.record, key, true);
+    if (entry.record.status === 'REVIEW_REQUIRED') {
+      if (!safeEqual(entry.record.manual_review_claim_hmac_sha256, tokenHmac)) {
+        throw new Error('ARC_PAYMENT_ARC2_CLAIM_MISMATCH');
+      }
+      await ensureManualReviewIndex(bridgeStore, key, entry.record);
+      await removePendingIndex(bridgeStore, key);
+      return publicResult(entry.record, key, true);
+    }
     if (entry.record.status === 'PENDING') {
       await ensurePendingIndex(bridgeStore, key, env);
       return publicResult(entry.record, key, true);
@@ -1225,7 +1446,11 @@ export async function claimNextPaymentArc2StartOutbox(stores, claimToken, env = 
         indexedOutbox.record.immutable_sha256,
         pending.immutable_binding_sha256,
       )) throw new Error('ARC_PAYMENT_ARC2_QUEUE_CORRUPT');
-      if (indexedOutbox.record.status === 'COMPLETED') {
+      if (indexedOutbox.record.status === 'COMPLETED' ||
+          indexedOutbox.record.status === 'REVIEW_REQUIRED') {
+        if (indexedOutbox.record.status === 'REVIEW_REQUIRED') {
+          await ensureManualReviewIndex(bridgeStore, pending.outbox_key, indexedOutbox.record);
+        }
         await removePendingIndex(bridgeStore, pending.outbox_key);
         continue;
       }
@@ -1338,6 +1563,14 @@ export async function completePaymentArc2StartOutbox(stores, key, claimToken, co
           !safeEqual(entry.record.arc2_start_receipt_sha256, normalized.arc2StartReceiptSha256)) {
         throw new Error('ARC_PAYMENT_ARC2_COMPLETION_CONFLICT');
       }
+      await removePendingIndex(bridgeStore, key);
+      return publicResult(entry.record, key, true);
+    }
+    if (entry.record.status === 'REVIEW_REQUIRED') {
+      if (!safeEqual(entry.record.manual_review_claim_hmac_sha256, tokenHmac)) {
+        throw new Error('ARC_PAYMENT_ARC2_CLAIM_MISMATCH');
+      }
+      await ensureManualReviewIndex(bridgeStore, key, entry.record);
       await removePendingIndex(bridgeStore, key);
       return publicResult(entry.record, key, true);
     }

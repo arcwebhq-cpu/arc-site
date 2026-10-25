@@ -11,6 +11,7 @@ import {
   readReviewEmailOutbox,
   reviewEmailOutboxConfiguration,
 } from './review-email-outbox-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const REVIEW_REVISION_OUTBOX_STORE = 'arc-preview-review-revision-outbox';
 export const REVIEW_REVISION_OUTBOX_SCHEMA = 'arc-preview-review-revision-work-v2';
@@ -182,23 +183,21 @@ export function reviewRevisionOutboxConfiguration(env = process.env) {
   const portal = reviewPortalConfiguration(env);
   const email = reviewEmailOutboxConfiguration(env);
   const flagValid = exactBoolean(env[REVIEW_REVISION_OUTBOX_ENABLED_ENV]);
-  const outboxSecret = env[REVIEW_REVISION_OUTBOX_SECRET_ENV];
-  const supplySecret = env[REVIEW_REVISION_SUPPLY_CHAIN_SECRET_ENV];
-  const reservationSecret = env[REVIEW_REVISION_INVITE_RESERVATION_SECRET_ENV];
-  const internalAuthSecret = env[REVIEW_REVISION_INTERNAL_AUTH_SECRET_ENV];
-  const allSecrets = [
-    env.ARC_REVIEW_INVITE_HMAC_SECRET,
-    env.ARC_REVIEW_SESSION_HMAC_SECRET,
-    env.ARC_REVIEW_RECORD_HMAC_SECRET,
-    env.ARC_REVIEW_DECISION_HMAC_SECRET,
-    outboxSecret,
-    supplySecret,
-    reservationSecret,
-    internalAuthSecret,
-    env.ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET,
-    env.ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET,
+  const secretNames = [
+    'ARC_REVIEW_INVITE_HMAC_SECRET',
+    'ARC_REVIEW_SESSION_HMAC_SECRET',
+    'ARC_REVIEW_RECORD_HMAC_SECRET',
+    'ARC_REVIEW_DECISION_HMAC_SECRET',
+    REVIEW_REVISION_OUTBOX_SECRET_ENV,
+    REVIEW_REVISION_SUPPLY_CHAIN_SECRET_ENV,
+    REVIEW_REVISION_INVITE_RESERVATION_SECRET_ENV,
+    REVIEW_REVISION_INTERNAL_AUTH_SECRET_ENV,
+    'ARC_REVIEW_EMAIL_OUTBOX_HMAC_SECRET',
+    'ARC_REVIEW_EMAIL_RECEIPT_HMAC_SECRET',
   ];
-  const secretsValid = allSecrets.every(validSecret) && new Set(allSecrets).size === allSecrets.length;
+  const allSecrets = secretNames.map((name) => env[name]);
+  const secretsValid = allSecrets.every(validSecret) && new Set(allSecrets).size === allSecrets.length &&
+    sensitiveCredentialsAreIsolated(env, secretNames);
   return {
     enabled: portal.enabled && email.enabled && flagValid &&
       env[REVIEW_REVISION_OUTBOX_ENABLED_ENV] === 'true' && secretsValid,
@@ -210,10 +209,12 @@ export function reviewRevisionOutboxConfiguration(env = process.env) {
 }
 
 export function reviewRevisionInternalWorkerAdapter(env = process.env) {
-  const expected = env[REVIEW_REVISION_INTERNAL_AUTH_SECRET_ENV];
+  const selectedNames = [REVIEW_REVISION_INTERNAL_AUTH_SECRET_ENV, REVIEW_REVISION_OUTBOX_SECRET_ENV];
+  const isolated = sensitiveCredentialsAreIsolated(env, selectedNames);
+  const expected = isolated ? env[REVIEW_REVISION_INTERNAL_AUTH_SECRET_ENV] : null;
   return async ({ authorization }) => ({
     authorized: validSecret(expected) && typeof authorization === 'string' && safeEqual(authorization, expected),
-    worker_id_sha256: validSecret(expected)
+    worker_id_sha256: isolated && validSecret(expected)
       ? hmacHex(env[REVIEW_REVISION_OUTBOX_SECRET_ENV], INTERNAL_WORKER_ID_PREFIX + expected)
       : '0'.repeat(64),
   });

@@ -1,0 +1,42 @@
+{
+  "schema": "arc-launch-day-stage-plan-v1",
+  "version": 1,
+  "prepared_on": "2026-08-30",
+  "state": "SAFE_OFF",
+  "activation_allowed": false,
+  "automatic_activation": false,
+  "site": {
+    "branch": "codex/arc-v11-site-final-pair-20260830",
+    "netlify_site_id": "e2b737ab-70e1-48d2-9d99-a6718c04fa86",
+    "sandbox_origin": "https://arc2-sandbox.netlify.app"
+  },
+  "previews": {
+    "branch": "codex/arc-v11-previews-final-pair-20260830",
+    "remote_commit_sha": "795df3e6352ffe1725dcec876259c63933aa2e7a",
+    "pin_state": "VERIFIED_REMOTE_SHA",
+    "pin_rule": "The preview pin must equal the exact 40-character commit SHA independently read back from the reviewed remote branch."
+  },
+  "stages": [
+    { "name": "SAFE_OFF", "state": "VERIFIED", "mutation_allowed": false },
+    { "name": "EMAIL_SANDBOX", "state": "BLOCKED", "mutation_allowed": false },
+    { "name": "CLAIM_SANDBOX", "state": "BLOCKED", "mutation_allowed": false },
+    { "name": "LIVE_CHECKOUT", "state": "BLOCKED", "mutation_allowed": false },
+    { "name": "PUBLIC_INTAKE", "state": "BLOCKED", "mutation_allowed": false },
+    { "name": "PILOT", "state": "BLOCKED", "mutation_allowed": false },
+    { "name": "OUTREACH", "state": "BLOCKED", "mutation_allowed": false }
+  ],
+  "blockers": [
+    "STRIPE_WEBHOOK_NOT_CREATED",
+    "STRIPE_WORKBENCH_SUPPORTED_ROLE_REQUIRED",
+    "NETLIFY_DEPLOY_CREDITS_PAUSED_UNTIL_2026-09-16",
+    "PROVIDER_E2E_NOT_RUN",
+    "ZAPIER_REVERSAL_SOURCE_VALIDATION_PENDING"
+  ],
+  "launch_rules": {
+    "one_stage_at_a_time": true,
+    "signed_evidence_required": true,
+    "provider_readback_required": true,
+    "rollback_to_safe_off_on_any_failure": true,
+    "charges_emails_intake_and_outreach_remain_disabled": true
+  }
+}

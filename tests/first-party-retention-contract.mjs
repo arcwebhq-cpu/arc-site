@@ -81,9 +81,19 @@ const env = {
 };
 assert.equal(firstPartyRetentionConfiguration({}).enabled, false);
 assert.equal(firstPartyRetentionConfiguration(env).enabled, true);
+assert.equal(firstPartyRetentionContract.phases.some((phase) =>
+  phase.store === 'payment' && phase.kind === 'payment-child' &&
+  phase.prefix === 'payment-arc2-manual-review/'), true,
+'Retention inventory must explicitly account for durable payment manual-review indexes.');
 assert.equal(firstPartyRetentionConfiguration({ ...env,
   ARC_FIRST_PARTY_RETENTION_HMAC_SECRET: env.ARC_HANDOFF_STATE_SECRET }).enabled, false,
 'Retention evidence must use a key that is distinct from every source-state key.');
+for (const credentialName of secretNames) {
+  assert.equal(firstPartyRetentionConfiguration({
+    ...env,
+    ARC_ROTATED_CREDENTIAL_V2: env[credentialName],
+  }).enabled, false, `An arbitrary alias must not reuse ${credentialName}.`);
+}
 
 const hmac = (secret, value) => createHmac('sha256', secret).update(value).digest('hex');
 const signSource = (value, secret, domain) => ({

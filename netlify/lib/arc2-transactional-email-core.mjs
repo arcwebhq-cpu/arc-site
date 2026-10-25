@@ -22,6 +22,7 @@ import {
   assertArc2EmailNegativeStateAllows,
 } from './arc2-negative-email-state-core.mjs';
 import { readReviewInviteForEmail } from './review-flow-core.mjs';
+import { sensitiveCredentialsAreIsolated } from './sensitive-credential-isolation.mjs';
 
 export const ARC2_CLAIM_INVITATION_EMAIL_ENABLED_ENV =
   'ARC_ARC2_CLAIM_INVITATION_EMAIL_ENABLED';
@@ -99,8 +100,19 @@ export function arc2TransactionalEmailConfiguration(env = process.env) {
   const requested = claimRequested || finalRequested;
   const vault = emailRecipientVaultConfiguration(env);
   const negativeState = arc2NegativeEmailStateConfiguration(env);
+  const selectedCredentialNames = requested ? [
+    'ARC_EMAIL_RECIPIENT_VAULT_ENCRYPTION_KEY',
+    'ARC_EMAIL_RECIPIENT_VAULT_HMAC_SECRET',
+    'ARC_ARC2_EMAIL_NEGATIVE_STATE_HMAC_SECRET',
+    'ARC_RESEND_PROVIDER_BINDING_HMAC_SECRET',
+    'ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET',
+    ...(claimRequested ? ['ARC_EMAIL_CLAIM_BINDING_SECRET'] : []),
+    ...(finalRequested ? ['ARC_FINAL_DELIVERY_RECEIPT_SECRET'] : []),
+  ] : [];
+  const credentialsIsolated = !requested ||
+    sensitiveCredentialsAreIsolated(env, selectedCredentialNames);
   const commonEnabled = env.ARC_TRANSACTIONAL_EMAIL_ENABLED === 'true' && vault.enabled &&
-    (!requested || negativeState.enabled);
+    (!requested || negativeState.enabled) && credentialsIsolated;
   return Object.freeze({
     flags_valid: claimFlagValid && finalFlagValid,
     requested,
@@ -135,6 +147,9 @@ export function resendProviderAccountHmacSha256(env = process.env) {
   }
   const bindingSecret = secret(env[RESEND_PROVIDER_BINDING_HMAC_SECRET_ENV],
     RESEND_PROVIDER_BINDING_HMAC_SECRET_ENV);
+  if (!sensitiveCredentialsAreIsolated(env, [RESEND_PROVIDER_BINDING_HMAC_SECRET_ENV])) {
+    throw new TypeError('Resend provider binding credential is not isolated.');
+  }
   const related = [
     env.ARC_FINAL_DELIVERY_RECEIPT_SECRET,
     env.ARC_TRANSACTIONAL_EMAIL_ATTEMPT_HMAC_SECRET,
@@ -567,6 +582,9 @@ export function createFinalDeliveryReceiptEvidence(deliveredEvent, authority,
   }
   const receiptSecret = secret(env.ARC_FINAL_DELIVERY_RECEIPT_SECRET,
     'ARC_FINAL_DELIVERY_RECEIPT_SECRET');
+  if (!sensitiveCredentialsAreIsolated(env, ['ARC_FINAL_DELIVERY_RECEIPT_SECRET'])) {
+    throw new TypeError('Final delivery receipt credential is not isolated.');
+  }
   const value = {
     version: FINAL_DELIVERY_RECEIPT_VERSION,
     scope: FINAL_DELIVERY_RECEIPT_SCOPE,
