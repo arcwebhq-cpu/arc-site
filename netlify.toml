@@ -1,5 +1,5 @@
 [build]
-  command = "node scripts/arc-live-binding-probe.mjs --expected-parent-sha 2d7c527765cac3b614f81cbd384a69ef71942e5e --expected-account-sha b78b0dcc86f0d8445c3099a8ac8baf0d694141ba7b52afab5733c7602b019437"
+  command = "npm run build"
   publish = "dist"
 
 [functions]
